@@ -1,0 +1,5 @@
+bucket         = "<account-id>-tfstate"
+profile        = "<aws-profile>"
+dynamodb_table = "terraform-locks"
+region         = "us-east-1"
+key            = "forecast-sinca-aws/infra.tfstate"

@@ -1,0 +1,40 @@
+# Credenciales - regla fija de AGENTS.md/WORKFLOW.md, nunca en texto plano.
+.env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+!*.hcl.example
+crash.log
+override.tf
+override.tf.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Notebooks - outputs y checkpoints de exploración
+.ipynb_checkpoints/
+*.ipynb
+
+# MLflow / artefactos locales de entrenamiento
+mlruns/
+artifacts/
+runs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

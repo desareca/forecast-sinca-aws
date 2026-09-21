@@ -1,0 +1,78 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git add*": "allow",
+      "git commit*": "allow",
+      "git remote*": "allow",
+      "git branch*": "allow",
+      "terraform init*": "allow",
+      "terraform validate*": "allow",
+      "terraform plan*": "allow",
+      "terraform fmt*": "allow",
+      "docker build*": "allow",
+      "docker images*": "allow",
+      "docker ps*": "allow",
+      "aws sts get-caller-identity*": "allow",
+      "aws ec2 describe-*": "allow",
+      "aws ec2 list-*": "allow",
+      "aws ecr describe-*": "allow",
+      "aws ecr list-*": "allow",
+      "aws s3 ls*": "allow",
+      "aws s3api get-*": "allow",
+      "aws s3api list-*": "allow",
+      "aws secretsmanager describe-secret*": "allow",
+      "aws secretsmanager list-secrets*": "allow",
+      "aws logs describe-*": "allow",
+      "aws logs tail*": "allow",
+      "aws logs get-log-events*": "allow",
+      "aws iam get-*": "allow",
+      "aws iam list-*": "allow",
+      "aws lambda get-*": "allow",
+      "aws lambda list-*": "allow",
+      "aws sagemaker describe-*": "allow",
+      "aws sagemaker list-*": "allow",
+      "aws sagemaker get-*": "allow",
+      "aws sns list-*": "allow",
+      "aws sns get-*": "allow",
+      "aws events list-*": "allow",
+      "aws events describe-*": "allow",
+      "aws scheduler get-*": "allow",
+      "aws scheduler list-*": "allow",
+      "aws ssm start-session*": "allow",
+      "ssh *": "allow",
+      "openspec status*": "allow",
+      "openspec list*": "allow",
+      "openspec validate*": "allow",
+      "openspec show*": "allow",
+      "terraform apply*": "deny",
+      "terraform destroy*": "deny",
+      "aws * delete*": "deny",
+      "aws * rm*": "deny",
+      "aws s3 rm*": "deny",
+      "git push --force*": "deny",
+      "git reset --hard*": "deny"
+    }
+  },
+  "agent": {
+    "plan": {
+      "description": "Arquitecto — piensa, explora, redacta proposal/design/tasks.md via /opsx/propose. No implementa codigo.",
+      "model": "opencode/deepseek-v4-pro",
+      "permission": {
+        "edit": "ask",
+        "bash": "ask"
+      }
+    },
+    "build": {
+      "description": "Implementador — ejecuta tareas de tasks.md via /opsx/apply, cierra changes via /opsx/archive. No redacta arquitectura.",
+      "model": "opencode/deepseek-v4-flash-free",
+      "permission": {
+        "edit": "allow"
+      }
+    }
+  }
+}
