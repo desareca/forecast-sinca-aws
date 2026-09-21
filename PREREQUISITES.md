@@ -13,11 +13,20 @@ explícito en la configuración local de AWS (`~/.aws/config` y
 
 > **Valores sensibles fuera del repo.** El nombre real del profile, el Account
 > ID y el usuario IAM son datos privados de la cuenta y **no se versionan acá**.
-> En este documento y en el código se usan placeholders: `AWS_PROFILE` (el
-> profile de la cuenta personal), `AWS_ACCOUNT_ID` (el Account ID de la cuenta
-> personal) e `IAM_ADMIN_USER` (el usuario IAM de trabajo). Los valores reales
-> viven solo en tu configuración local (`~/.aws/`, `terraform.tfvars`,
-> `backend.hcl`) y nunca se commitean.
+> En este documento, en las specs y en el código se usan placeholders fijos:
+>
+> | Placeholder | Reemplaza a | Vive realmente en |
+> |---|---|---|
+> | `AWS_PROFILE` | nombre del named profile de la cuenta personal | `~/.aws/`, `terraform.tfvars`, `backend.hcl` |
+> | `AWS_ACCOUNT_ID` | Account ID (12 dígitos) de la cuenta personal | `terraform.tfvars`, `backend.hcl` |
+> | `IAM_ADMIN_USER` | usuario IAM de trabajo de la cuenta personal | `~/.aws/` |
+> | *(otra cuenta)* | nombre de la cuenta de empresa/terceros (jamás se usa acá) | — |
+>
+> **Regla fija:** ninguna spec, comando, `.tf` ni `.md` vuelve a escribir estos
+> valores reales. Si llegan a aparecer (p. ej. un nombre de cuenta ajeno, una
+> ruta local con tu usuario de Windows, o un username personal), se reemplazan
+> por su placeholder antes de commitear. Los valores reales solo existen en la
+> configuración local y nunca se commitean.
 
 | Profile | Cuenta | Uso en estos proyectos |
 |---|---|---|
@@ -49,21 +58,34 @@ El `Account` devuelto DEBE ser el ID de la cuenta personal (`AWS_ACCOUNT_ID`),
 `IAM_ADMIN_USER`). Verificado con `aws sts get-caller-identity --profile
 $AWS_PROFILE`.
 
-### Configuración local de Terraform (no versionada)
+### Bootstrap local (una sola vez por clon, no versionado)
 
-Los valores sensibles se setean localmente, nunca en el repo:
+El repo **no** trae los valores reales (son privados). Al clonar en una máquina
+nueva, crear los dos archivos locales a partir de sus `.example` y completarlos
+con los valores de la cuenta:
 
-- `infra/terraform.tfvars` (gitignored) — ejemplo en
-  `infra/terraform.tfvars.example`: define `aws_profile`.
-- `infra/backend.hcl` (gitignored) — ejemplo en
-  `infra/backend.hcl.example`: define `bucket`, `profile`, `dynamodb_table`,
-  `region` y `key` del backend S3.
+```powershell
+# 1. Profile del provider AWS (variable var.aws_profile)
+Copy-Item infra\terraform.tfvars.example infra\terraform.tfvars
+#   -> aws_profile = "<nombre-real-del-profile>"
+
+# 2. Backend S3 (bucket, profile, dynamodb_table, región, key)
+Copy-Item infra\backend.hcl.example infra\backend.hcl
+#   -> bucket  = "<account-id>-tfstate"
+#   -> profile = "<nombre-real-del-profile>"
+```
+
+Ambos quedan cubiertos por `.gitignore` (`*.tfvars` y `backend.hcl`): **nunca
+se commitean**. Los `.example` sí se versionan como referencia.
 
 Inicializar el backend remoto con:
 
 ```
 terraform -chdir=infra init -backend-config=backend.hcl
 ```
+
+El resto de los comandos de AWS (`aws`, `boto3`, etc.) usa el profile real vía
+`$AWS_PROFILE`, como se documenta más arriba.
 
 ## Qué provisionar en la cuenta personal (una sola vez, no por proyecto)
 
