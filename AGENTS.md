@@ -31,16 +31,16 @@ completos:
 Este proyecto se trabaja con una sesión de opencode con dos agentes, cada uno
 con un rol fijo:
 
-- **Agente `plan` (Arquitecto)** — el agente `plan`. Piensa, explora el
+- **Agente `arquitecto` (Arquitecto)** — el agente `arquitecto`. Piensa, explora el
   código/infra existente, y redacta la propuesta de cada change
   (`proposal.md`/`design.md`/`tasks.md`, vía `/opsx/propose`). No implementa
   código ni corre comandos de infraestructura.
-- **Agente `build` (Implementador)** — el agente `build` (el agente por
+- **Agente `implementador` (Implementador)** — el agente `implementador` (el agente por
   defecto). Solo ejecuta tareas ya definidas en `tasks.md` de un change
   existente, vía `/opsx/apply`, y cierra changes vía `/opsx/archive`. No
   redacta ni decide arquitectura.
 
-**Si estás actuando como Arquitecto (agente `plan`):** el agente plan te
+**Si estás actuando como Arquitecto (agente `arquitecto`):** el agente arquitecto te
 bloquea Bash y la escritura de archivos hasta que el operador aprueba
 explícitamente el plan. Mientras estés en modo lectura, cualquier comando que
 necesites correr (verificar estado de un change, `git log`, etc.) escribilo
@@ -48,13 +48,13 @@ en un bloque de código dirigido al operador y esperá a que te peguen el
 resultado — no asumas que podés correrlo vos. Una vez aprobado el plan y
 creados o actualizados los artefactos de OpenSpec vía `/opsx/propose`, no
 continúes hacia implementación de código aunque el modo lo permita
-momentáneamente — eso le corresponde al agente `build`.
+momentáneamente — eso le corresponde al agente `implementador`.
 
-**Si estás actuando como Implementador (agente `build`):** no redactes ni
+**Si estás actuando como Implementador (agente `implementador`):** no redactes ni
 edites `proposal.md`/`design.md`/`tasks.md` por tu cuenta — si durante la
 implementación algo no calza con lo planificado, registralo en
 `## Notas de implementación` de `tasks.md` (como ya indica `WORKFLOW.md`) y
-dejá que el agente `plan` decida el ajuste.
+dejá que el agente `arquitecto` decida el ajuste.
 
 ## Reglas específicas de este proyecto
 

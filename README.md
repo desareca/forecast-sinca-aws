@@ -40,5 +40,5 @@ Cuenta personal (Account ID `AWS_ACCOUNT_ID`), profile `AWS_PROFILE` (nunca
 
 ## Flujo de trabajo
 
-Coordinación entre los agentes `plan` (Arquitecto) y `build` (Implementador)
+Coordinación entre los agentes `arquitecto` (Arquitecto) y `implementador` (Implementador)
 con el operador humano. Ver `WORKFLOW.md` y `AGENTS.md`.

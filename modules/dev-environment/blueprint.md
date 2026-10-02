@@ -78,8 +78,8 @@ mantener la experiencia local de VS Code (config, extensiones, atajos):
 ### 5. Dos terminales para los agentes
 
 Dos terminales **locales** (paneles de VS Code) conectadas al Space remoto,
-una para el agente **Arquitecto** (`plan`) y otra para el agente
-**Implementador** (`build`) — ver `WORKFLOW.md` y "Rol de esta ventana" en
+una para el agente **Arquitecto** (`arquitecto`) y otra para el agente
+**Implementador** (`implementador`) — ver `WORKFLOW.md` y "Rol de esta ventana" en
 `AGENTS.md`. Los agentes corren dentro del Space, con el código/contexto en
 EFS.
 

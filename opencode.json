@@ -59,17 +59,17 @@
     }
   },
   "agent": {
-    "plan": {
-      "description": "Arquitecto — piensa, explora, redacta proposal/design/tasks.md via /opsx/propose. No implementa codigo.",
+    "arquitecto": {
+      "system": "Arquitecto — piensa, explora, redacta proposal/design/tasks.md via /opsx/propose. No implementa codigo.",
       "model": "opencode/deepseek-v4-pro",
       "permission": {
         "edit": "ask",
         "bash": "ask"
       }
     },
-    "build": {
-      "description": "Implementador — ejecuta tareas de tasks.md via /opsx/apply, cierra changes via /opsx/archive. No redacta arquitectura.",
-      "model": "opencode/deepseek-v4-flash-free",
+    "implementador": {
+      "system": "Implementador — ejecuta tareas de tasks.md via /opsx/apply, cierra changes via /opsx/archive. No redacta arquitectura.",
+      "model": "opencode/deepseek-v4.1-flash",
       "permission": {
         "edit": "allow"
       }

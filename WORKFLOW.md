@@ -9,28 +9,28 @@ sueltas y documentar como "hecho" algo que nunca se verificó.
 
 ## Roles
 
-- **Agente `plan` (Arquitecto)** — pensar, decidir, y escribir los artefactos
+- **Agente `arquitecto` (Arquitecto)** — pensar, decidir, y escribir los artefactos
   de OpenSpec (`proposal.md`, `design.md`, `tasks.md`, vía `/opsx/propose`) y
   documentos de referencia. En modo plan no puede ejecutar Bash ni escribir
   hasta que el operador aprueba explícitamente — cualquier comando que
   necesite lo indica en texto para que el operador lo corra y le pegue el
   resultado.
-- **Agente `build` (Implementador)** — únicamente implementación:
+- **Agente `implementador` (Implementador)** — únicamente implementación:
   `/opsx/apply` sobre un change ya definido, y `/opsx/archive` para cerrarlo.
   No se le piden cambios sueltos fuera de `tasks.md`.
-- **Operador (terminal)** — ejecuta los comandos que el agente `plan` o el
-  agente `build` indiquen (CLI de `openspec`, AWS CLI, git, etc.) y pega el
+- **Operador (terminal)** — ejecuta los comandos que el agente `arquitecto` o el
+  agente `implementador` indiquen (CLI de `openspec`, AWS CLI, git, etc.) y pega el
   resultado de vuelta. Ningún comando destructivo o de creación de recursos
   se da por ejecutado sin ver el output real. Alterna entre los agentes
-  `plan` y `build` según la fase del bucle de trabajo.
+  `arquitecto` y `implementador` según la fase del bucle de trabajo.
 
 ## Regla de oro
 
 **Ninguna tarea que no esté en `tasks.md` se le pide directamente al agente
-`build` (Implementador).** Si durante la implementación surge algo nuevo (un
+`implementador` (Implementador).** Si durante la implementación surge algo nuevo (un
 paso que faltaba, un ajuste de alcance, algo que se descubre haciendo el
-trabajo), el agente `build` no lo ejecuta por su cuenta ni lo toma como
-instrucción suelta — la pregunta vuelve al agente `plan` (Arquitecto, mismo
+trabajo), el agente `implementador` no lo ejecuta por su cuenta ni lo toma como
+instrucción suelta — la pregunta vuelve al agente `arquitecto` (Arquitecto, mismo
 mecanismo que "Bloqueos", paso 5 de "Paso a paso por change"). Ahí se
 decide, caso por caso, si corresponde:
 
@@ -38,20 +38,20 @@ decide, caso por caso, si corresponde:
   mismo alcance ya aprobado en `proposal.md`/`design.md`), o
 - **generar un change nuevo** (si es un alcance distinto o lo suficientemente
   grande como para merecer su propia planificación) — vía el ciclo completo
-  de exploración/propuesta/aprobación del agente `plan`, no scaffoldeado a
+  de exploración/propuesta/aprobación del agente `arquitecto`, no scaffoldeado a
   mano.
 
 Recién ahí, con la tarea ya escrita en el `tasks.md` correspondiente, el
-agente `build` la retoma.
+agente `implementador` la retoma.
 
 ## Regla de oro — ciclo de vida de un change
 
-**El agente `plan` no crea, mueve, ni archiva carpetas de change a mano con
+**El agente `arquitecto` no crea, mueve, ni archiva carpetas de change a mano con
 herramientas de filesystem.** El ciclo de vida de un change (scaffold
 inicial, archivado) se ejecuta exclusivamente vía comandos `openspec`
-(`openspec new change` corrido por `/opsx/propose` en el agente `plan` tras
-aprobación, `openspec archive` corrido por el agente `build` vía
-`/opsx/archive`). El rol del agente `plan` en OpenSpec es a nivel macro:
+(`openspec new change` corrido por `/opsx/propose` en el agente `arquitecto` tras
+aprobación, `openspec archive` corrido por el agente `implementador` vía
+`/opsx/archive`). El rol del agente `arquitecto` en OpenSpec es a nivel macro:
 redactar y revisar el *contenido* de `proposal.md` / `design.md` /
 `tasks.md`, actuar como experta y revisora del diseño, y detectar cuándo
 algo debería ser un change nuevo — pero siempre a través del CLI, nunca
@@ -73,7 +73,7 @@ hacerlo — nunca actuar y avisar después.
       plantilla, no este proyecto) **por un README específico del proyecto
       nuevo** — qué datos entran, qué hace el pipeline o el modelo, qué
       entrega, estructura del repo, estado actual.
-2. Abrir opencode en la carpeta del proyecto y arrancar con el agente `plan`
+2. Abrir opencode en la carpeta del proyecto y arrancar con el agente `arquitecto`
    (Arquitecto). `AGENTS.md` ya obliga a leer `project-decisions.md`,
    `PREREQUISITES.md` y `WORKFLOW.md` al inicio — no depende de ningún estado
    guardado porque la información real vive en disco y la sesión la relee
@@ -87,7 +87,7 @@ hacerlo — nunca actuar y avisar después.
 3. Leer `PREREQUISITES.md` y confirmar que la cuenta AWS y el profile
    (`AWS_PROFILE`) están activos y apuntan a la cuenta correcta, no a la de
    terceros.
-4. Conversar con el agente `plan` para llenar `project-decisions.md`,
+4. Conversar con el agente `arquitecto` para llenar `project-decisions.md`,
    incluyendo qué blueprints de `modules/` aplican.
 5. Recién ahí empieza el bucle de trabajo normal (abajo), un change por
    blueprint seleccionado (o agrupando blueprints relacionados en un mismo
@@ -98,7 +98,7 @@ hacerlo — nunca actuar y avisar después.
 ```
 ┌──────────────┐  comandos openspec    ┌──────────────┐
 │  Arquitecto   │ ───────────────────▶  │   Operador    │
-│ (agente plan) │ ◀───────────────────  │  (terminal)   │
+│ (agente arquitecto) │ ◀─────────────  │  (terminal)   │
 └──────┬────────┘   resultado/output     └──────┬────────┘
        │ aprobado → /opsx/propose                │
        ▼                                         │
@@ -107,16 +107,16 @@ hacerlo — nunca actuar y avisar después.
        │              /opsx/apply                ▼
        └───────────────────────────▶  ┌──────────────┐
                                         │ Implementador │
-                                        │ (agente build)│
+                                        │ (agente implementador)│
                                         └──────┬────────┘
                                                │ se traba / duda
                                                ▼
-                                     vuelve al agente plan
+                                     vuelve al agente arquitecto
 ```
 
 ## Paso a paso por change
 
-1. **Exploración + Planificación** (agente `plan`): arranca con
+1. **Exploración + Planificación** (agente `arquitecto`): arranca con
    `/opsx/explore` para pensar en voz alta el change — investigar el
    código/infra existente, comparar opciones, aclarar el problema — sin
    presión de llegar a un artefacto formal todavía. Cuando el diseño
@@ -126,15 +126,15 @@ hacerlo — nunca actuar y avisar después.
    ajustes ahí mismo, las veces que haga falta, antes de aprobar nada.
 2. **Aprobación y escritura**: cuando el contenido queda conforme, el
    operador aprueba el plan (el agente sale del modo lectura para esa acción
-   puntual) y el agente `plan` corre `/opsx/propose "<nombre>"`, que crea el
+   puntual) y el agente `arquitecto` corre `/opsx/propose "<nombre>"`, que crea el
    change vía CLI (`openspec new change`) y escribe los 3 artefactos en un
    solo paso. Al terminar, la sesión vuelve a quedar en modo plan — no
    continúa hacia implementación de código aunque técnicamente pudiera.
-3. **Validación** (agente `plan` o terminal): correr
+3. **Validación** (agente `arquitecto` o terminal): correr
    `openspec status --change "<nombre>" --json` para confirmar que todo
-   quedó `ready`/`done` según corresponda, antes de pasar al agente `build`.
-4. **Implementación** (agente `build`): se corre `/opsx/apply "<nombre>"`.
-   El agente `build` ejecuta las tareas de `tasks.md` una por una,
+   quedó `ready`/`done` según corresponda, antes de pasar al agente `implementador`.
+4. **Implementación** (agente `implementador`): se corre `/opsx/apply "<nombre>"`.
+   El agente `implementador` ejecuta las tareas de `tasks.md` una por una,
    distinguiendo dos tipos de tarea:
    - **Escritura de código/archivos**: no requiere acceso a AWS.
    - **Ejecución real** (terraform apply, disparar un Training Job, correr el
@@ -149,7 +149,7 @@ hacerlo — nunca actuar y avisar después.
      con output real (una query con resultados, un log de ejecución exitosa),
      no dar el change por terminado solo porque el código se desplegó sin
      errores de build/apply.
-   - Si durante una tarea el agente `build` encuentra algo que no calza con
+   - Si durante una tarea el agente `implementador` encuentra algo que no calza con
      el blueprint del dominio (un supuesto incorrecto, un caso no cubierto,
      algo que tuvo que hacer distinto) pero **no es un bloqueo** — no
      necesita una decisión para seguir —, lo registra como una línea en una
@@ -157,21 +157,21 @@ hacerlo — nunca actuar y avisar después.
      tarea, qué encontró, y qué hizo. Esto no cuenta como salirse de la
      tarea ni edita `modules/` directamente — esa evaluación queda para el
      Cierre.
-5. **Bloqueos**: si el agente `build` se detiene (ambigüedad, error, decisión
+5. **Bloqueos**: si el agente `implementador` se detiene (ambigüedad, error, decisión
    de diseño) —sea porque se trabó solo o porque el operador le pidió
-   frenar—, esa pregunta vuelve al agente `plan` (Arquitecto). Ahí se decide
+   frenar—, esa pregunta vuelve al agente `arquitecto` (Arquitecto). Ahí se decide
    y se actualiza `design.md`/`tasks.md` (siguiendo el mismo patrón de
    aprobación del paso 2: plan → aprobación → escritura).
-6. **Cierre**: `/opsx/sync` y `/opsx/archive`, desde el agente `build`. El
+6. **Cierre**: `/opsx/sync` y `/opsx/archive`, desde el agente `implementador`. El
    archivado **siempre** se hace con `openspec archive` (CLI real) — nunca
-   moviendo la carpeta del change a mano. Antes de archivar, el agente `plan`
+   moviendo la carpeta del change a mano. Antes de archivar, el agente `arquitecto`
    revisa la sección `## Notas de implementación` de `tasks.md` y cualquier
-   hallazgo que el agente `build` haya registrado. De ahí, evalúa cuáles
+   hallazgo que el agente `implementador` haya registrado. De ahí, evalúa cuáles
    valen la pena preservar sobre el blueprint usado, y lo que corresponda lo
    agrega como nota al final de la copia **local** de
    `modules/<dominio>/blueprint.md` (sección `## Notas de este proyecto`,
    sin tocar el cuerpo original). **Como parte del mismo Cierre, el agente
-   `plan` actualiza el `README.md` del proyecto** para reflejar lo que este
+   `arquitecto` actualiza el `README.md` del proyecto** para reflejar lo que este
    change agregó o cambió (nueva infra, cambio de estado de "en progreso" a
    "en producción", etc.) — el README no se actualiza solo al final del
    proyecto completo, sino en cada Cierre.
@@ -179,21 +179,21 @@ hacerlo — nunca actuar y avisar después.
 ## Revisión en el Cierre
 
 El flujo no tiene hooks automáticos: la revisión del trabajo del agente
-`build` es responsabilidad del agente `plan` en el Cierre de cada change. El
-agente `build` registra en `## Notas de implementación` de `tasks.md`
+`implementador` es responsabilidad del agente `arquitecto` en el Cierre de cada change. El
+agente `implementador` registra en `## Notas de implementación` de `tasks.md`
 cualquier cosa que no calce con el blueprint del dominio o con lo planificado
 (permiso IAM de más, valor hardcodeado, supuesto incorrecto, caso no
-cubierto). En el Cierre, el agente `plan` revisa esas notas:
+cubierto). En el Cierre, el agente `arquitecto` revisa esas notas:
 
 - Para la mayoría de los changes (riesgo bajo/medio) basta con esa revisión
   de notas.
 - Para changes de **riesgo alto** (IAM nuevo, cambios de red, acceso a datos
-  sensibles, cualquier cosa que toque producción), el agente `plan` hace
+  sensibles, cualquier cosa que toque producción), el agente `arquitecto` hace
   además una revisión manual explícita releyendo el change completo, no solo
   las notas.
 
 La coordinación entre roles es manual: el operador alterna entre el agente
-`plan` y el agente `build` según la fase (planificación → implementación →
+`arquitecto` y el agente `implementador` según la fase (planificación → implementación →
 cierre). No hay aviso automático de coordinación — el operador decide cuándo
 pasar de un rol al otro y qué tan a fondo revisar.
 
@@ -207,7 +207,7 @@ pasar de un rol al otro y qué tan a fondo revisar.
   cada change (ver paso 6 de "Paso a paso por change").
 - **Credenciales**: nunca en texto plano en ningún archivo, ni en bloques de
   "testing local". Siempre `.env` (gitignored) o Secrets Manager.
-- **Comandos que mutan infraestructura o datos reales**: el agente `plan` los
+- **Comandos que mutan infraestructura o datos reales**: el agente `arquitecto` los
   entrega en bloques explícitos, el operador los corre, y **siempre se pide
   el output real antes de asumir que algo se creó/borró/ejecutó correctamente**
   — no se da nada por hecho solo porque la documentación lo dice. Que una
@@ -226,7 +226,7 @@ pasar de un rol al otro y qué tan a fondo revisar.
 
 Durante el proyecto, la copia **local** de `modules/` (dentro de la carpeta
 de este proyecto) puede acumular ajustes: cuando un change revela algo que
-el blueprint genérico no cubre bien, el agente `plan` lo agrega como una
+el blueprint genérico no cubre bien, el agente `arquitecto` lo agrega como una
 sección `## Notas de este proyecto` al final del `blueprint.md` local
 correspondiente — sin editar el cuerpo original del patrón. Esto permite
 dejar constancia de la lección en el momento, sin arriesgar contaminar la
