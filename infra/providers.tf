@@ -10,7 +10,9 @@ terraform {
 }
 
 provider "aws" {
-  profile = var.aws_profile
+  # `null` cuando no se pasa profile (ej. GitHub Actions con credenciales OIDC
+  # por variables de entorno). Localmente siempre se pasa el named profile real.
+  profile = var.aws_profile != "" ? var.aws_profile : null
   region  = "us-east-1"
 }
 

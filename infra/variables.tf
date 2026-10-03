@@ -38,3 +38,21 @@ variable "space_instance_type" {
   type        = string
   default     = "ml.t3.large"
 }
+
+variable "mlflow_allowed_cidr" {
+  description = "CIDR autorizado a acceder a la UI de MLflow (puerto 5000). Restringir a la IP del operador."
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "mlflow_task_cpu" {
+  description = "CPU de la task Fargate de MLflow (unidades de 1/1024 vCPU)"
+  type        = string
+  default     = "1024"
+}
+
+variable "mlflow_task_memory" {
+  description = "Memoria (MiB) de la task Fargate de MLflow"
+  type        = string
+  default     = "2048"
+}

@@ -187,3 +187,24 @@ steps:
   verificación fina del límite entre roles (prefijos S3 acotados) no se puede
   probar con `aws sts` desde la terminal; queda diferida a cuando un app de
   Studio / Training Job asuma cada rol (Fases 2+).
+- **`providers.tf` con profile condicional para OIDC**: usar
+  `profile = var.aws_profile != "" ? var.aws_profile : null`. Con `profile`
+  seteado, el provider ignora las credenciales por variables de entorno que
+  inyecta `configure-aws-credentials` en CI. En CI se pasa `-var="aws_profile="`;
+  localmente el `terraform.tfvars` sigue exigiendo el named profile.
+- **Backend config en CI**: `backend.hcl` está gitignored, así que el workflow
+  reconstruye el `-backend-config` con variables del repo (bucket de state, ARNs
+  de roles). Requiere configurarlas en Settings → Variables.
+- **Política del rol de infra amplia-pero-explícita**: para `plan`/`apply` de
+  todos los recursos se listan acciones explícitas por servicio (sin
+  `Action: "*"` ni managed policies `*FullAccess`). Varios servicios (IAM,
+  SageMaker, ECS) usan `Resource: "*"` porque sus acciones no admiten
+  restricción por recurso; `iam:PassRole` con condición `iam:PassedToService`
+  acotada a ECS/SageMaker.
+- **Archivos locales gitignored deben estar completos**: `terraform.tfvars` y
+  `backend.hcl` son locales y gitignored. Si se recrean desde los `.example`,
+  hay que completar **todos** los valores ya seteados (no solo los del
+  `.example`): un valor faltante (ej. `user_profile_name`) hace que el plan
+  proponga **destruir y recrear** recursos existentes. Verificar con
+  `terraform plan` antes de aplicar, y leer el valor real del state
+  (`terraform state show`) si hace falta.

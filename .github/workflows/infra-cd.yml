@@ -1,0 +1,51 @@
+name: infra-cd
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-cd.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-cd.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: terraform plan/apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      # El backend.hcl local está gitignored; en CI se reconstruye con vars del repo.
+      - name: terraform init
+        run: |
+          terraform -chdir=infra init \
+            -backend-config="bucket=${{ vars.TFSTATE_BUCKET }}" \
+            -backend-config="key=forecast-sinca-aws/infra.tfstate" \
+            -backend-config="region=us-east-1" \
+            -backend-config="dynamodb_table=terraform-locks" \
+            -backend-config="encrypt=true"
+
+      # En CI no hay profile named: las credenciales vienen de OIDC (env vars).
+      - name: terraform plan
+        run: terraform -chdir=infra plan -input=false -var="aws_profile="
+
+      - name: terraform apply
+        if: github.ref == 'refs/heads/main'
+        run: terraform -chdir=infra apply -input=false -auto-approve -var="aws_profile="

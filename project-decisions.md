@@ -85,7 +85,10 @@ EventBridge Schedule (horario a definir); inferencia diaria a 24h en Fase 6.
 ## 9. Decisiones cerradas
 
 - Región `us-east-1`; cuenta `AWS_ACCOUNT_ID`; profile `AWS_PROFILE`.
-- Repo `desareca/forecast-sinca-aws`; OIDC `sub` restringido a `refs/heads/main`.
+- Repo `desareca/forecast-sinca-aws`; OIDC con `sub` acotado al repo:
+  `sinca-github-infra-role` permite cualquier ref (el `plan` corre en PRs; el
+  `apply` queda gateado por `if: github.ref == 'refs/heads/main'`), y
+  `sinca-github-pipeline-role` restringido a `refs/heads/main`.
 - Ramas: feature branches por change (PR + plan/apply).
 - Tracking y Model Registry: MLflow self-hosted (SQLite+S3); reabrir Registry en Fase 6.
 - Space `ml.t3.large`, EFS, SSH over SSM.

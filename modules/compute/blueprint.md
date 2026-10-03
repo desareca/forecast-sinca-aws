@@ -97,3 +97,14 @@ el almacenamiento intermedio (S3) y la orquestación (ver `cicd/blueprint.md`).
 - Framework y familia de instancia, y el criterio para escalarla.
 - Nombre del repo ECR (si aplica) y estrategia de versionado de imagen.
 - Prefijos S3 exactos a los que cada rol tiene acceso.
+
+## Notas de este proyecto
+
+- **Fargate exige dos roles**: un *rol de ejecución* (pull de ECR + logs) y un
+  *rol de task* (lo que usa el contenedor, ej. S3). El rol de ejecución no se
+  expone al contenedor y el task role no puede hacer pull de ECR; son dos roles
+  separados, no uno.
+- **Fargate necesita piezas de red/observabilidad**: además de la task
+  definition, hacen falta un cluster ECS, un log group de CloudWatch, y un
+  security group que habilite el puerto de la app (sin él `run-task` no tiene
+  red y la UI no es alcanzable).

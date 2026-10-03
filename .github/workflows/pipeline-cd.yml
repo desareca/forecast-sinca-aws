@@ -1,0 +1,32 @@
+name: pipeline-cd
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "pipeline/**"
+      - ".github/workflows/pipeline-cd.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  update-pipeline:
+    name: actualizar definición del pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PIPELINE_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # Skeleton: `pipeline/` todavía no existe (Fase 2). Este workflow
+      # actualizará la definición del pipeline SageMaker cuando se agregue,
+      # sin ejecutarla (la corrida la dispara EventBridge, ver blueprint cicd).
+      - name: Skeleton (Fase 2)
+        run: |
+          echo "pipeline/ todavía no existe — no-op por ahora."

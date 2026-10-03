@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt -check
+        run: terraform -chdir=infra fmt -check -recursive
+
+      - name: terraform init (sin backend)
+        run: terraform -chdir=infra init -backend=false
+
+      - name: terraform validate
+        run: terraform -chdir=infra validate

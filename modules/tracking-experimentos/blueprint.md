@@ -89,3 +89,20 @@ parámetros y artefactos; el registro decide dónde se versiona el modelo.
 - Decisión de registro: SageMaker Registry vs MLflow self-hosted.
 - Qué se loguea además de métricas de modelo: ver `data-quality/blueprint.md`
   (métricas de calidad de datos por corrida).
+
+## Notas de este proyecto
+
+- **La imagen oficial no trae `boto3`**: `ghcr.io/mlflow/mlflow` no incluye
+  `boto3`, y el entrypoint que descarga/sube el `.sqlite` de S3 lo necesita.
+  Agregar `RUN python -m pip install --no-cache-dir boto3` al Dockerfile.
+- **MLflow 3.x valida el header `Host` (HTTP 403)**: el security middleware
+  nuevo rechaza requests con `Host` no-local. Para un servidor expuesto por IP
+  (Fargate), pasar `--allowed-hosts "*"` (con `*` no se agrega el middleware; el
+  acceso se restringe por security group, no por Host).
+- **Backend SQLite con ruta absoluta**: usar `sqlite:////mlflow.sqlite` (4
+  slashes = `/mlflow.sqlite` absoluto), no `sqlite:///mlflow.sqlite` (relativo
+  al cwd), para que el archivo descargado/subido sea siempre el mismo.
+- **Memoria mínima del servidor**: la UI de `mlflow server` necesita ≥ 1 vCPU /
+  2 GiB en Fargate; con 1024 MiB la task muere por OOM (exit 137).
+- **Sin auth por defecto**: la UI de MLflow no tiene autenticación; restringir
+  el security group (puerto 5000) a la IP del operador, no `0.0.0.0/0`.
