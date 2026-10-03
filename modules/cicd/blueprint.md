@@ -174,3 +174,16 @@ steps:
   (cuando se llegue a él).
 - Nombre del repo en el `sub` de OIDC y los ARN de los dos roles.
 - Región, bucket de terraform state, y tabla DynamoDB.
+
+## Notas de este proyecto
+
+- **Backend deprecation (Terraform 1.15)**: `dynamodb_table` en el backend S3
+  está deprecado a favor de `use_lockfile`. En `forecast-sinca-aws` se mantuvo
+  `dynamodb_table` por coherencia con la tabla `terraform-locks` ya creada;
+  evaluar migrar a `use_lockfile` en un change posterior.
+- **Verificación IAM fina diferida**: los roles de ejecución de SageMaker
+  (`sinca-dev-role`, `sinca-training-role`) solo son asumibles por
+  `sagemaker.amazonaws.com`, no por un usuario humano vía STS. Por eso la
+  verificación fina del límite entre roles (prefijos S3 acotados) no se puede
+  probar con `aws sts` desde la terminal; queda diferida a cuando un app de
+  Studio / Training Job asuma cada rol (Fases 2+).

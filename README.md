@@ -28,10 +28,12 @@ openspec/     # changes activos y specs consolidadas
 
 ## Estado actual
 
-**Fase 1 — Setup (en progreso).** Se está provisionando la infraestructura
-base: buckets S3 (`sinca-data`, `sinca-mlflow`), entorno de desarrollo remoto
-(SageMaker Studio Space), y roles IAM de base. Aún sin pipeline de datos ni
-modelos.
+**Fase 1 — Setup (en progreso).** Infraestructura base **completada**
+(`setup-infra-base`): buckets S3 (`sinca-data`, `sinca-mlflow`), entorno de
+desarrollo remoto (SageMaker Studio Space sobre EFS), y roles IAM de base
+(`sinca-dev-role`, `sinca-training-role`). Próximo paso: `setup-mlflow-ci-cd`
+(MLflow self-hosted + OIDC + workflows de GitHub Actions). Aún sin pipeline de
+datos ni modelos.
 
 ## Cuenta y credenciales
 

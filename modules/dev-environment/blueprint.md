@@ -107,3 +107,23 @@ y versionado, y no hay "quick setup" que cree recursos de red sin avisar (ver
 - Qué instala/configura el `~/.on_start` además de Node + Open Code CLI.
 - Repo(s) de GitHub a clonar y su estrategia de acceso.
 - Si se habilita SSH sobre SSM (default: sí, para VS Code remoto).
+
+## Notas de este proyecto
+
+- **VPC obligatoria en SageMaker Studio**: `aws_sagemaker_domain` exige
+  `vpc_id` + `subnet_ids` (no es opcional, aun con
+  `app_network_access_type = "PublicInternetOnly"`). En `forecast-sinca-aws` se
+  reutilizó el default VPC de la cuenta (sin NAT gateway, sin recursos de red
+  nuevos) para preservar la intención de bajo costo. El blueprint original
+  asumía "sin VPC"; corregir: un VPC es requerido, la decisión real es *cuál*
+  VPC (default vs propia).
+- **`space_settings.app_type` obligatorio en Spaces privados**: un Space
+  privado exige declarar `app_type` explícito (ej. `"JupyterLab"`); no se
+  infiere de `jupyter_lab_app_settings`. Sin él, `terraform apply` falla con
+  `AppType [null] is not supported for private spaces`.
+- **SSH sobre SSM no es un recurso Terraform directo**: el remote access
+  (SSM) de Studio se configura sobre el Space al momento de conectarse (VS
+  Code + AWS Toolkit), no como recurso Terraform. No requiere una EC2: el
+  Space es el cómputo y SSM es solo el túnel de conexión. El rol de dev no
+  necesita permisos `ssm` explícitos: el SSH-over-SSM lo gestiona el backend
+  de SageMaker.
