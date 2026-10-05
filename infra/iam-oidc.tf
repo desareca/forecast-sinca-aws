@@ -303,6 +303,29 @@ data "aws_iam_policy_document" "github_infra_policy" {
   }
 
   statement {
+    sid    = "Scheduler"
+    effect = "Allow"
+    actions = [
+      "scheduler:GetSchedule",
+      "scheduler:CreateSchedule",
+      "scheduler:UpdateSchedule",
+      "scheduler:DeleteSchedule",
+      "scheduler:TagResource",
+      "scheduler:UntagResource",
+    ]
+    resources = [
+      "arn:aws:scheduler:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:schedule/default/sinca-scraper-daily",
+    ]
+  }
+
+  statement {
+    sid       = "SchedulerList"
+    effect    = "Allow"
+    actions   = ["scheduler:ListSchedules"]
+    resources = ["*"]
+  }
+
+  statement {
     sid       = "StsIdentity"
     effect    = "Allow"
     actions   = ["sts:GetCallerIdentity"]
