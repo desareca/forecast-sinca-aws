@@ -44,8 +44,16 @@ jobs:
 
       # En CI no hay profile named: las credenciales vienen de OIDC (env vars).
       - name: terraform plan
-        run: terraform -chdir=infra plan -input=false -var="aws_profile="
+        run: |
+          terraform -chdir=infra plan -input=false \
+            -var="aws_profile=" \
+            -var="user_profile_name=${{ vars.USER_PROFILE_NAME }}" \
+            -var="mlflow_allowed_cidr=${{ vars.MLFLOW_ALLOWED_CIDR }}"
 
       - name: terraform apply
         if: github.ref == 'refs/heads/main'
-        run: terraform -chdir=infra apply -input=false -auto-approve -var="aws_profile="
+        run: |
+          terraform -chdir=infra apply -input=false -auto-approve \
+            -var="aws_profile=" \
+            -var="user_profile_name=${{ vars.USER_PROFILE_NAME }}" \
+            -var="mlflow_allowed_cidr=${{ vars.MLFLOW_ALLOWED_CIDR }}"

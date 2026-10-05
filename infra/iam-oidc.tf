@@ -1,5 +1,5 @@
 locals {
-  github_repo = "desareca/forecast-sinca-aws"
+  github_repo = "desareca@43764566/forecast-sinca-aws@1380017292"
   oidc_host   = "token.actions.githubusercontent.com"
 }
 
@@ -266,9 +266,9 @@ data "aws_iam_policy_document" "github_infra_policy" {
       "logs:DescribeLogGroups",
       "logs:PutRetentionPolicy",
       "logs:DeleteRetentionPolicy",
-      "logs:TagLogGroup",
-      "logs:UntagLogGroup",
-      "logs:ListTagsLogGroup",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "logs:ListTagsForResource",
       "logs:PutSubscriptionFilter",
       "logs:DeleteSubscriptionFilter",
       "logs:DescribeSubscriptionFilters",
