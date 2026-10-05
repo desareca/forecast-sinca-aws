@@ -84,12 +84,12 @@
   `terraform.tfvars`.
 - **6.1/6.2 — archivos locales faltaban**: `infra/terraform.tfvars` y
   `infra/backend.hcl` (ambos gitignored) no existían en la máquina. Se recrearon
-  desde los `.example` con los valores reales (profile `desareca_dev`, bucket de
-  state `549024266383-tfstate`, tabla `terraform-locks`). En la primera pasada el
+  desde los `.example` con los valores reales (profile `AWS_PROFILE`, bucket de
+  state `<account-id>-tfstate`, tabla `terraform-locks`). En la primera pasada el
   `terraform.tfvars` recreado omitía `user_profile_name`, y el plan proponía
-  **reemplazar** el user profile SageMaker (`desareca-admin` → `sinca-dev-user`,
+  **reemplazar** el user profile SageMaker (`<user-profile>` → `sinca-dev-user`,
   default) y cambiar el owner del Space. Se restauró
-  `user_profile_name = "desareca-admin"` (valor real leído del state con
+  `user_profile_name = "<user-profile>"` (valor real leído del state con
   `terraform state show`); el plan quedó en 14 add / 1 change / 0 destroy.
 - **6.2 — drift preexistente en el dominio SageMaker**: el plan incluye un
   update in-place de `aws_sagemaker_domain.studio` que remueve
@@ -114,5 +114,5 @@
 - **Entorno (no repo) — CA bundle de WSL**: el `~/.aws/config` de WSL tenía
   `ca_bundle` apuntando a un path de Windows (`C:\...\.claude-ca-bundle\...`),
   inválido dentro de WSL (fallaba el SSL de `aws`). Se creó un bundle dedicado
-  para esta cuenta (`~/.aws/desareca-ca-bundle.pem`, copia del store del
-  sistema) y se apuntó solo el profile `desareca_dev` a él. No afecta al repo.
+  para esta cuenta (`~/.aws/<ca-bundle>.pem`, copia del store del
+  sistema) y se apuntó solo el profile `AWS_PROFILE` a él. No afecta al repo.
