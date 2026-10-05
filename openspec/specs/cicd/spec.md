@@ -13,7 +13,7 @@ El sistema SHALL configurar un Identity Provider OIDC de AWS apuntando a `token.
 
 ### Requirement: Roles OIDC de mínimo privilegio
 
-El sistema SHALL definir dos roles OIDC separados: uno de infraestructura (Terraform plan/apply) y uno de pipeline (actualizar definición y escribir artefactos), ambos con trust policy restringida al repo `desareca/forecast-sinca-aws` y sin policies `*FullAccess` ni `AdministratorAccess`.
+El sistema SHALL definir dos roles OIDC separados: uno de infraestructura (Terraform plan/apply) y uno de pipeline (actualizar definición y escribir artefactos), ambos con trust policy restringida al repo `desareca/forecast-sinca-aws` mediante el formato inmutable del `sub` (`repo:desareca@43764566/forecast-sinca-aws@1380017292:*`), y sin policies `*FullAccess` ni `AdministratorAccess`.
 
 #### Scenario: Trust restringida al repo
 - **WHEN** un workflow de un repo distinto a `desareca/forecast-sinca-aws` intenta asumir un rol OIDC
@@ -38,3 +38,7 @@ El sistema SHALL definir tres workflows de GitHub Actions: `ci.yml` (lint/valida
 #### Scenario: Plan en PR y apply en main
 - **WHEN** se abre un PR con cambios en `infra/`
 - **THEN** `infra-cd.yml` ejecuta `terraform plan`, y solo al mergear a `main` ejecuta `terraform apply`
+
+#### Scenario: Variables reales en el plan
+- **WHEN** `infra-cd.yml` ejecuta `terraform plan`/`apply`
+- **THEN** pasa los valores reales de las variables que difieren de los defaults (`user_profile_name`, `mlflow_allowed_cidr`) vía variables de repo, para que el plan no proponga cambios destructivos
