@@ -2,7 +2,7 @@
 
 ### Requirement: Ingesta de las 3 estaciones SINCA
 
-El sistema SHALL ingerir datos horarios de calidad del aire y meteorología de las 3 estaciones activas de la zona saturada (Padre Las Casas II ID 263, Ñielol, Las Encinas) mediante scraping del endpoint SINCA, parametrizado por ID de estación.
+El sistema SHALL ingerir datos horarios de calidad del aire y meteorología de las 3 estaciones activas de la zona saturada (Padre Las Casas II ID 263, Ñielol, Las Encinas) mediante scraping del endpoint CSV de SINCA (`apub.tsindico2.cgi`, con `macropath`/`macro` descubierto desde la página de la estación), parametrizado por ID de estación.
 
 #### Scenario: Ingesta parametrizada por estación
 - **WHEN** el scraper se ejecuta con los IDs de las 3 estaciones
@@ -14,7 +14,7 @@ El sistema SHALL ingerir datos horarios de calidad del aire y meteorología de l
 
 ### Requirement: Ingesta de variables auxiliares
 
-El sistema SHALL ingerir la altura de capa límite desde Open-Meteo (JSON, horaria) y los feriados desde `apis.digital.gob.cl/fl/feriados` (una vez por corrida), y SHALL calcular el día de semana y la ventana GEC (1 abr–15 sep) sin fuente externa.
+El sistema SHALL ingerir la altura de capa límite desde Open-Meteo (JSON, horaria) y los feriados desde Nager.Date API (`date.nager.at/api/v3/PublicHolidays/{year}/CL`, una vez por corrida, filtrando feriados regionales por el campo `counties`), y SHALL calcular el día de semana y la ventana GEC (1 abr–15 sep) sin fuente externa.
 
 #### Scenario: Variables auxiliares disponibles
 - **WHEN** se ejecuta una corrida del pipeline
@@ -22,7 +22,7 @@ El sistema SHALL ingerir la altura de capa límite desde Open-Meteo (JSON, horar
 
 ### Requirement: Cálculo de ICAP
 
-El sistema SHALL calcular el ICAP por estación aplicando la fórmula oficial piecewise-lineal del D.S. 12/2011 (y su equivalente MP2.5) al promedio móvil de 24h de MP10/MP2.5, y SHALL derivar el `ICAP_zona` en post-proceso como el máximo entre las 3 estaciones y el peor contaminante.
+El sistema SHALL calcular el ICAP por estación aplicando la fórmula oficial piecewise-lineal del D.S. 12/2011 (y su equivalente MP2.5) al promedio móvil de 24h de MP10/MP2.5, con 3 anclas por contaminante (MP10: 0→0, 100→150, 500→330 µg/m³; MP2.5: 0→0, 100→50, 500→170 µg/m³) e interpolación lineal entre anclas, y SHALL derivar el `ICAP_zona` en post-proceso como el máximo entre las 3 estaciones y el peor contaminante.
 
 #### Scenario: ICAP por estación
 - **WHEN** se dispone de las series horarias de MP2.5/MP10 de una estación

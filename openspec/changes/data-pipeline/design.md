@@ -58,11 +58,11 @@ Lo que aprueba pasa a `validated/`; lo que falla va a `quarantine/` con el motiv
 pipeline/
 ├── entrypoint.py        # orquestador: scraper → icap → validate → persist
 ├── scraper/
-│   ├── sinca.py         # scraping HTML de apub.htmlindico2.cgi (3 estaciones)
+│   ├── sinca.py         # scraping CSV de apub.tsindico2.cgi (3 estaciones, macropath/macro descubierto desde la página de la estación)
 │   ├── open_meteo.py    # altura de capa límite (JSON)
-│   └── feriados.py      # apis.digital.gob.cl/fl/feriados
+│   └── feriados.py      # Nager.Date API (date.nager.at/api/v3/PublicHolidays/{year}/CL)
 ├── icap/
-│   └── icap.py          # fórmula piecewise-linear D.S. 12/2011
+│   └── icap.py          # fórmula piecewise-linear D.S. 12/2011 (3 anclas)
 ├── validate/
 │   └── schemas.py       # pandera DataFrameSchema/SchemaModel
 └── persist/
@@ -71,7 +71,14 @@ pipeline/
 
 ### 6. Cálculo de ICAP
 
-El ICAP se calcula con la fórmula oficial piecewise-lineal del D.S. 12/2011 (y su equivalente MP2.5), aplicada al promedio móvil de 24h de MP10/MP2.5. Los breakpoints exactos se toman del decreto (no se hardcodean de memoria; el implementador los verifica contra la fuente oficial). El `ICAP_zona` se deriva siempre en post-proceso como `max` entre las 3 estaciones y el peor contaminante (no se persiste como serie, se calcula al consumir).
+El ICAP se calcula con la fórmula oficial del D.S. 12/2011 (y su equivalente MP2.5), aplicada al promedio móvil de 24h de MP10/MP2.5. La fórmula es piecewise-lineal con **3 anclas por contaminante** (interpolación lineal entre anclas consecutivas), verificadas contra la fuente oficial (SESMA/MMA):
+
+| Contaminante | ICAP 0 | ICAP 100 | ICAP 500 |
+|---|---|---|---|
+| MP10 | 0 µg/m³ | 150 µg/m³ | 330 µg/m³ |
+| MP2.5 | 0 µg/m³ | 50 µg/m³ | 170 µg/m³ |
+
+Los niveles intermedios (alerta/preemergencia) caen exactamente sobre la recta 100→500 (MP10: ICAP 200→195, ICAP 300→240; MP2.5: ICAP 200→80, ICAP 300→110), por lo que 3 anclas bastan y son equivalentes a la tabla completa de 5 tramos. El `ICAP_zona` se deriva siempre en post-proceso como `max` entre las 3 estaciones y el peor contaminante (no se persiste como serie, se calcula al consumir).
 
 ### 7. Modelo de datos y particionado
 
@@ -84,7 +91,7 @@ Rol de ejecución de la task Fargate (`sinca-scraper-task-role`): S3 `sinca-data
 
 ## Risks / Trade-offs
 
-- **Scraping frágil (HTML sin API)** → mitigación: el scraper se parametriza por ID de estación; si SINCA cambia el HTML, el cambio se detecta en la validación (oportunidad/completitud) y se corrige como change nuevo.
+- **Scraping frágil (sin API estable)** → mitigación: el scraper se parametriza por ID de estación y descarga el CSV (`apub.tsindico2.cgi`) descubriendo `macropath`/`macro` desde la página de la estación; si SINCA cambia la estructura, el cambio se detecta en la validación (oportunidad/completitud) y se corrige como change nuevo.
 - **Backfill de 5 años puede tardar** → mitigación: Fargate sin límite de 15 min; si excede la memoria, se sube CPU/memoria (variables).
 - **Datos operacionalmente no validados por el SINCA** (los registros "pueden variar una vez validados") → mitigación: el modo incremental re-ingiere una ventana solapada (últimas 48h) para corregir retroactivamente.
 - **Schedule dispara corridas que fallan silenciosamente** → mitigación: CloudWatch Alarms sobre fallos de la task (Fase 3+, según `project-decisions.md` §6); por ahora el smoke test manual y los logs de la task.

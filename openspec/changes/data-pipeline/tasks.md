@@ -1,14 +1,14 @@
 ## 0. Pre-work (operador)
 
-- [ ] 0.1 Verificar identidad: `aws sts get-caller-identity --profile $AWS_PROFILE` y confirmar `Account = AWS_ACCOUNT_ID`
-- [ ] 0.2 Confirmar acceso a las fuentes: SINCA (`sinca.mma.gob.cl`), Open-Meteo, y `apis.digital.gob.cl/fl/feriados` (HTTP público, sin key)
+- [x] 0.1 Verificar identidad: `aws sts get-caller-identity --profile $AWS_PROFILE` y confirmar `Account = AWS_ACCOUNT_ID`
+- [ ] 0.2 Confirmar acceso a las fuentes: SINCA (`sinca.mma.gob.cl`), Open-Meteo, y Nager.Date (`date.nager.at`) (HTTP público, sin key)
 
 ## 1. Escritura del pipeline (`pipeline/`)
 
-- [ ] 1.1 Crear `pipeline/scraper/sinca.py` — scraping HTML de `apub.htmlindico2.cgi` parametrizado por ID de estación (263, Ñielol, Las Encinas), extrayendo MP2.5/MP10/gases/meteorología horarios
+- [ ] 1.1 Crear `pipeline/scraper/sinca.py` — scraping CSV de `apub.tsindico2.cgi` parametrizado por ID de estación (263, Ñielol, Las Encinas), descubriendo `macropath`/`macro` desde la página de la estación, extrayendo MP2.5/MP10/gases/meteorología horarios
 - [ ] 1.2 Crear `pipeline/scraper/open_meteo.py` — altura de capa límite horaria desde Open-Meteo (JSON)
-- [ ] 1.3 Crear `pipeline/scraper/feriados.py` — feriados desde `apis.digital.gob.cl/fl/feriados` (1 vez por corrida)
-- [ ] 1.4 Crear `pipeline/icap/icap.py` — fórmula piecewise-linear del D.S. 12/2011 (MP10 y equivalente MP2.5) sobre promedio móvil 24h; breakpoints verificados contra la fuente oficial
+- [ ] 1.3 Crear `pipeline/scraper/feriados.py` — feriados desde Nager.Date API (`date.nager.at/api/v3/PublicHolidays/{year}/CL`, 1 vez por corrida), filtrando feriados regionales por el campo `counties` (nacionales + La Araucanía)
+- [ ] 1.4 Crear `pipeline/icap/icap.py` — fórmula piecewise-linear del D.S. 12/2011 con 3 anclas por contaminante (MP10: 0→0, 100→150, 500→330; MP2.5: 0→0, 100→50, 500→170) sobre promedio móvil 24h
 - [ ] 1.5 Crear `pipeline/validate/schemas.py` — pandera `DataFrameSchema`/`SchemaModel` con las 5 dimensiones (validez, completitud, unicidad, oportunidad, consistencia)
 - [ ] 1.6 Crear `pipeline/persist/s3.py` — escritura Parquet a `sinca-data/{raw,validated,quarantine}/` con particionado por dataset/estación y año/mes, y motivo de rechazo adjunto en cuarentena
 - [ ] 1.7 Crear `pipeline/entrypoint.py` — orquestador: scraper → icap → validate → persist, con modo backfill (rango de fechas) e incremental (últimas 48h)
