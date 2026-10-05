@@ -1,5 +1,6 @@
 # Credenciales - regla fija de AGENTS.md/WORKFLOW.md, nunca en texto plano.
 .env
+!.env.example
 
 # Terraform
 .terraform/

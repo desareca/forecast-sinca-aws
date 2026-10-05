@@ -56,3 +56,27 @@ variable "mlflow_task_memory" {
   type        = string
   default     = "2048"
 }
+
+variable "scraper_task_cpu" {
+  description = "CPU de la task Fargate del scraper (unidades de 1/1024 vCPU)"
+  type        = string
+  default     = "512"
+}
+
+variable "scraper_task_memory" {
+  description = "Memoria (MiB) de la task Fargate del scraper"
+  type        = string
+  default     = "1024"
+}
+
+variable "scraper_schedule_expression" {
+  description = "Expresión cron de EventBridge Scheduler para el scraper (hora local de scraper_schedule_timezone)"
+  type        = string
+  default     = "cron(0 1 * * ? *)"
+}
+
+variable "scraper_schedule_timezone" {
+  description = "Zona horaria del schedule del scraper"
+  type        = string
+  default     = "America/Santiago"
+}

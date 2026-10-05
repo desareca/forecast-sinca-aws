@@ -32,17 +32,17 @@
 
 ## 5. Ejecución real (operador corre y pega output)
 
-- [ ] 5.1 Build de la imagen (sin push todavía): `docker build -f docker/scraper.Dockerfile -t sinca-scraper .`
-- [ ] 5.2 `terraform init` (si hace falta) y `terraform plan` — revisar el plan con el operador antes de aplicar
-- [ ] 5.3 `terraform apply` (crea ECR, task Fargate, IAM, schedule)
-- [ ] 5.4 Push de la imagen a ECR (el repo recién existe tras el apply)
-- [ ] 5.5 Backfill manual de 5 años (2021-01-01 → hoy) ejecutando la task con el rango de fechas
+- [x] 5.1 Build de la imagen (sin push todavía): `docker build -f docker/scraper.Dockerfile -t sinca-scraper .`
+- [x] 5.2 `terraform init` (si hace falta) y `terraform plan` — revisar el plan con el operador antes de aplicar
+- [x] 5.3 `terraform apply` (crea ECR, task Fargate, IAM, schedule)
+- [x] 5.4 Push de la imagen a ECR (el repo recién existe tras el apply)
+- [x] 5.5 Backfill manual de 5 años (2021-01-01 → hoy) ejecutando la task con el rango de fechas
 
 ## 6. Verificación funcional
 
-- [ ] 6.1 Smoke test manual: correr el pipeline de punta a punta (incremental) y confirmar que los datos validados aparecen en `sinca-data/validated/` (listar con `aws s3 ls`)
-- [ ] 6.2 Confirmar que los datos rechazados (si los hay) caen en `quarantine/` con motivo de rechazo
-- [ ] 6.3 Activar el schedule y confirmar la primera corrida automática (o verificar que la regla existe y dispara la task)
+- [x] 6.1 Smoke test manual: correr el pipeline de punta a punta (incremental) y confirmar que los datos validados aparecen en `sinca-data/validated/` (listar con `aws s3 ls`)
+- [x] 6.2 Confirmar que los datos rechazados (si los hay) caen en `quarantine/` con motivo de rechazo
+- [x] 6.3 Activar el schedule y confirmar la primera corrida automática (o verificar que la regla existe y dispara la task)
 
 ## Notas de implementación
 
@@ -55,3 +55,10 @@
 - **Verificación local**: se corrió el pipeline en modo `--dry-run` (incremental y backfill 2021) con las dependencias reales — las 3 estaciones validan 0 rechazadas, ICAP verificado contra los valores intermedios del design (MP10 195→200/240→300; MP2.5 80→200/110→300), y la escritura S3 se probó con un cliente fake (particiones, Parquet y `reason.json`). `terraform fmt`/`validate` OK.
 - **Orden de las tareas 5.x (resuelto)**: el push a ECR requiere que el repo exista, y el repo lo crea `terraform apply`. Se reordenó: 5.1 build (sin push) → 5.2 plan → 5.3 apply (crea ECR) → 5.4 push → 5.5 backfill. Alternativa descartada: `terraform apply -target=aws_ecr_repository.scraper` antes del push (rompe el flujo plan→apply completo).
 - **Build context**: se agregó `.dockerignore` en la raíz para que el build del scraper (contexto = raíz del repo) no envíe `.venv/`, `.git/`, `infra/.terraform/`, etc.
+- **`.env` / variables de entorno**: se agregó `.env.example` en la raíz (gitignored `.env`, versionado `.env.example`) y `load_dotenv()` en `entrypoint.py` (stdlib, no sobreescribe variables ya seteadas; no-op en Fargate). El flag `--bucket` ahora toma default de `DATA_BUCKET` para honrar la env que setea la task definition.
+- **5.5 (backfill real)**: task Fargate exit 0, ~166s para 2021-01-01→2026-10-04. Resultado: PLC II 48.805 válidas / 1.660 rechazadas (3.3%); Ñielol 50.049 / 416 (0.8%); Las Encinas 50.463 / 2 (0.0%). S3: `raw/`=286, `validated/`=286, `quarantine/`=154 objetos. El scraper trae los ~50k registros por estación/parámetro en una sola request (4s por parámetro).
+- **5.5 (motivos de rechazo observados)**: `rhum` y `pres` fuera de rango son la mayoría de los rechazos. `rhum` aparece con valores fuera de 0-100 (además de la fracción 0-1 ya anotada): probablemente valores atípicos del sensor (p. ej. >100% o negativos). `pres` con valores fuera de 900-1100 hPa. Son datos basura plausibles, bien cuarentenados. **A revisar en Fase 3** si el rango de `pres` debe ampliarse o si esos registros son ruido genuino; con la tasa de cuarentena <20% por estación, el pipeline no se detiene.
+- **6.1 (incremental real)**: task Fargate exit 0. Las 3 estaciones: 71 filas válidas / 0 rechazadas. Datos recientes presentes en `validated/`.
+- **6.2 (cuarentena)**: confirmado `reason.json` adjunto a cada Parquet rechazado, con el motivo (dimensión + regla). Ejemplos: `["pm10: in_range(0.0, 1000.0)","pm25: in_range(0.0, 1000.0)"]` y `["pres: in_range(900.0, 1100.0)","rhum: in_range(0.0, 100.0)"]`.
+- **6.3 (schedule)**: `sinca-scraper-daily` creado, `state=ENABLED`, `cron(0 1 * * ? *)` America/Santiago, target el cluster `sinca-scraper` con el rol `sinca-scraper-scheduler-role`. La primera corrida automática queda programada para ~01:00 local del día siguiente; no se forzó una ejecución del schedule (las tareas 5.5/6.1 ya validaron la task).
+- **Perfil AWS (trampa operativa)**: el shell trae `AWS_PROFILE` apuntando a **otra cuenta** (una cuenta de terceros, no la del proyecto). El profile del proyecto es el de la cuenta personal (`AWS_ACCOUNT_ID`, según `terraform.tfvars`). Todos los comandos de ejecución real (push a ECR, `ecs run-task`, `s3 ls`, `scheduler get-schedule`) se corrieron con el profile del proyecto explícito. Nunca usar el `AWS_PROFILE` del entorno sin verificar la cuenta con `sts get-caller-identity`.

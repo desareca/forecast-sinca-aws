@@ -32,7 +32,7 @@ Dev environment remoto según `modules/dev-environment/blueprint.md`.
 
 | Blueprint | ¿Aplica? | Parámetros de este proyecto |
 |---|---|---|
-| `compute` | Sí | Entrenamiento en SageMaker Training Job (CPU `ml.m5.large` tabular / GPU `ml.g4dn.xlarge` AE+DMD). Cómputo del scraper **pendiente** (decidir en Fase 2 tras analizar páginas SINCA). |
+| `compute` | Sí | Entrenamiento en SageMaker Training Job (CPU `ml.m5.large` tabular / GPU `ml.g4dn.xlarge` AE+DMD). Cómputo del scraper: **Fargate on-demand** (decidido en Fase 2; imagen ECR `sinca-scraper`, task Fargate sin service). |
 | `dev-environment` | Sí | SageMaker Studio Space `ml.t3.large`, EFS persistente, SSH over SSM, lifecycle config reinstala Node+OpenCode+aws+terraform+repo. |
 | `data-quality` | Sí | pandera; convención `raw/`/`validated/`/`quarantine/`; dimensiones y umbrales se definen en Fase 2. |
 | `tracking-experimentos` | Sí | MLflow self-hosted (SQLite+S3), prefijo `sinca-mlflow/_mlflow/`; logging directo sin servidor como modo principal. |
@@ -70,7 +70,8 @@ Nunca policies `*FullAccess` ni `AdministratorAccess`. Roles OIDC en Fase 1b.
 ## 7. Ejecución y schedule
 
 Nada automático en Fase 1. A partir de Fase 2: pipeline de datos disparado por
-EventBridge Schedule (horario a definir); inferencia diaria a 24h en Fase 6.
+EventBridge Schedule diario a las **~01:00 hora local (America/Santiago)**,
+para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 
 ## 8. Estructura OpenSpec
 

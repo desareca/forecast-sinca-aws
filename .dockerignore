@@ -1,0 +1,13 @@
+# Contexto de build del scraper (docker build -f docker/scraper.Dockerfile .)
+.git
+.gitignore
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+infra/.terraform/
+infra/*.tfstate*
+openspec/
+notebooks/
+*.ipynb
+.env
