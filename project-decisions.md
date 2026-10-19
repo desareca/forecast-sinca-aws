@@ -32,7 +32,7 @@ Dev environment remoto según `modules/dev-environment/blueprint.md`.
 
 | Blueprint | ¿Aplica? | Parámetros de este proyecto |
 |---|---|---|
-| `compute` | Sí | Entrenamiento en SageMaker Training Job (CPU `ml.m5.large` tabular / GPU `ml.g4dn.xlarge` AE+DMD). Cómputo del scraper: **Fargate on-demand** (decidido en Fase 2; imagen ECR `sinca-scraper`, task Fargate sin service). |
+| `compute` | Sí | Entrenamiento en SageMaker Training Job (CPU `ml.m5.large` tabular / GPU `ml.g4dn.xlarge` AE+DMD). **Cómputo de training confirmado (Fase 3):** Training Job on-demand, CPU `ml.m5.large`, imagen ECR `sinca-train` (solo runtime; el código viaja por `source_dir`/`entry_point` desde `pipeline/`), disparo manual. Cómputo del scraper: **Fargate on-demand** (decidido en Fase 2; imagen ECR `sinca-scraper`, task Fargate sin service). |
 | `dev-environment` | Sí | SageMaker Studio Space `ml.t3.large`, EFS persistente, SSH over SSM, lifecycle config reinstala Node+OpenCode+aws+terraform+repo. |
 | `data-quality` | Sí | pandera; convención `raw/`/`validated/`/`quarantine/`; dimensiones y umbrales se definen en Fase 2. |
 | `tracking-experimentos` | Sí | MLflow self-hosted (SQLite+S3), prefijo `sinca-mlflow/_mlflow/`; logging directo sin servidor como modo principal. |
@@ -75,10 +75,10 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 
 ## 8. Estructura OpenSpec
 
-1. `setup-infra-base` — buckets, SageMaker Studio Space, IAM base, remote state. **(activo)**
-2. `setup-mlflow-ci-cd` — MLflow self-hosted (Fargate), OIDC + 3 workflows.
-3. `data-pipeline` (Fase 2) — scraper SINCA/Open-Meteo/feriados + ICAP + pandera.
-4. `baseline` (Fase 3) — persistencia + modelo simple (LightGBM lags).
+1. `setup-infra-base` — buckets, SageMaker Studio Space, IAM base, remote state. **(completado)**
+2. `setup-mlflow-ci-cd` — MLflow self-hosted (Fargate), OIDC + 3 workflows. **(completado)**
+3. `data-pipeline` (Fase 2) — scraper SINCA/Open-Meteo/feriados + ICAP + pandera. **(completado)**
+4. `baseline` (Fase 3) — persistencia + modelo simple (LightGBM lags). **(activo)**
 5. `experimentos-avanzados` (Fase 4) — autoencoder + DMD/Koopman.
 6. `evaluacion` (Fase 5) — comparar baseline + referencia pública.
 7. `productivizacion` (Fase 6) — reentrenamiento semanal + inferencia diaria.

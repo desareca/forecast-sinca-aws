@@ -18,10 +18,10 @@ Araucanía), con horizonte de **24 horas**.
 ## Estructura del repo
 
 ```
-infra/        # Terraform (IAM, SageMaker Studio, buckets, red, ECR/ECS, OIDC, scraper)
+infra/        # Terraform (IAM, SageMaker Studio, buckets, red, ECR/ECS, OIDC, scraper, training)
 infra/scripts/# scripts de operación (on_start.sh del Space, mlflow-server.sh)
-docker/       # Dockerfile (MLflow) + scraper.Dockerfile (pipeline de datos)
-pipeline/     # pipeline de datos (scraper SINCA/Open-Meteo/feriados, ICAP, validación, persistencia)
+docker/       # Dockerfile (MLflow) + scraper.Dockerfile (datos) + train.Dockerfile (entrenamiento)
+pipeline/     # datos (scraper/ICAP/validación/persistencia) + modelado (features/baseline/train/evaluate)
 tests/        # unit + integration (futuro)
 notebooks/    # solo exploración (futuro)
 modules/      # blueprints de decisión por dominio (guías, no specs)
@@ -38,11 +38,18 @@ buckets S3 (`sinca-data`, `sinca-mlflow`), entorno de desarrollo remoto
 MLflow self-hosted on-demand (Fargate + SQLite en S3, imagen en ECR), OIDC de
 GitHub Actions con dos roles de mínimo privilegio, y los 3 workflows.
 
-**Fase 2 — Pipeline de datos (en progreso).** Change `data-pipeline`: código del
-pipeline (`pipeline/`) + imagen (`docker/scraper.Dockerfile`) + infra Terraform
-(ECR, task Fargate, IAM, schedule). Pendiente: build/push de la imagen,
-`terraform apply`, backfill de 5 años y smoke test (tareas 5.x/6.x). Aún sin
-modelos.
+**Fase 2 — Pipeline de datos (completada).** Change `data-pipeline`: código del
+pipeline (`pipeline/`), imagen (`docker/scraper.Dockerfile`), infra Terraform
+(ECR, task Fargate, IAM, schedule), backfill de 5 años y smoke test. Las 6
+series horarias validadas viven en `s3://sinca-data/validated/`.
+
+**Fase 3 — Baseline (en progreso).** Change `baseline`: feature engineering
+(`pipeline/features/`), baseline de persistencia (`pipeline/baseline/`),
+entrenamiento LightGBM con random search (`pipeline/train/`), evaluación
+(`pipeline/evaluate/`), imagen de entrenamiento (`docker/train.Dockerfile`) e
+infra Terraform (ECR `sinca-train` + rol de training finalizado). Pendiente:
+build/push de la imagen, `terraform apply` y el Training Job completo
+(tareas 8.x/9.x). Ver [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
 
 ## Servidor MLflow (on-demand)
 
@@ -145,6 +152,75 @@ aws ecs run-task --cluster sinca-scraper --task-definition sinca-scraper --launc
 
 Los IDs de subnet y security group salen de los outputs de Terraform
 (`scraper_security_group_id`) y del default VPC.
+
+## Baseline (Fase 3)
+
+Primer modelo del proyecto: **persistencia (naive) + LightGBM**. Predice, por
+serie (MP2.5/MP10 × 3 estaciones), el **promedio móvil de 24h a t+24h**
+(`mean(MP(t+1 … t+24h))`), que es lo que consume la fórmula oficial del ICAP.
+El `ICAP_zona` se deriva siempre en post-proceso.
+
+```
+pipeline/
+├── features/build.py      # features + target + partición (ventana deslizante + test held-out)
+├── baseline/persistence.py# baseline naive (último promedio móvil 24h observado)
+├── train/train.py         # 6 modelos LightGBM (RMSE ponderado) + random search + MLflow
+├── train/mlflow_log.py    # logging directo a MLflow + sync de estado con S3
+├── train/launch.py        # lanzador del SageMaker Training Job (manual)
+└── evaluate/evaluate.py   # métricas: RMSE ponderado, ICAP oficial, percentiles propios
+```
+
+- **Features**: lags propios (1h/24h/48h/72h/168h), meteorología con lag 24h,
+  altura de capa límite (valor + lag 24h), feriados, día de semana cyclic,
+  ventana GEC y Fourier (diaria/semanal/anual).
+- **Loss**: RMSE ponderado `w_i = 1 + α·max(0, y_i − umbral_regular)`
+  (`α=1`, `umbral_regular` = ancla ICAP 100: MP10 150 / MP2.5 50).
+- **Partición**: ventana deslizante (train 2 años / valid 1 mes / step 1 mes)
+  + test final held-out `2026-07-01 → 2026-10-04`.
+- **Tracking**: MLflow en modo **logging directo** (sin servidor): SQLite local
+  + `mlruns/`, subidos al terminar a `s3://sinca-mlflow/_mlflow/`. Convención de
+  run `sinca-{estacion}-{modelo}-v{n}`. Modelos también en
+  `s3://sinca-mlflow/model-artifacts/`.
+
+### Correr local (sin AWS, sin escribir)
+
+```powershell
+# Requiere los datos validados en disco (mismo layout que validated/ en S3).
+python pipeline/train/train.py --local-validated-dir <dir>/validated --no-upload `
+  --search-trials 2 --search-windows 1 --stations "Nielol" --pollutants pm25
+```
+
+### Build + push de la imagen de entrenamiento
+
+```powershell
+$env:AWS_PROFILE="<profile>"
+docker build -f docker/train.Dockerfile -t sinca-train .
+$acct = aws sts get-caller-identity --query Account --output text
+aws ecr get-login-password | docker login --username AWS --password-stdin $acct.dkr.ecr.us-east-1.amazonaws.com
+docker tag sinca-train:latest $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
+docker push $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
+```
+
+### Lanzar el Training Job (manual)
+
+La imagen lleva solo el runtime; el código viaja por `source_dir`/`entry_point`
+desde `pipeline/`. Requiere el SDK de SageMaker en el entorno local
+(`pip install sagemaker`). Los ARNs salen de los outputs de Terraform:
+
+```powershell
+$env:AWS_PROFILE="<profile>"
+$role = terraform -chdir=infra output -raw training_role_arn
+$image = "$(terraform -chdir=infra output -raw train_ecr_repository_url):latest"
+python pipeline/train/launch.py --role-arn $role --image-uri $image --wait
+```
+
+### Ver las métricas
+
+```powershell
+# Listar el tracking subido a S3 (sqlite + artefactos por run).
+aws s3 ls s3://sinca-mlflow/_mlflow/ --recursive
+# O levantar la UI de MLflow (ver sección "Servidor MLflow").
+```
 
 ## CI/CD (GitHub Actions)
 

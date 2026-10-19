@@ -93,3 +93,11 @@ output "scraper_execution_role_arn" {
 output "scraper_schedule_arn" {
   value = aws_scheduler_schedule.scraper_daily.arn
 }
+
+output "train_ecr_repository_url" {
+  value = aws_ecr_repository.train.repository_url
+}
+
+output "train_ecr_repository_arn" {
+  value = aws_ecr_repository.train.arn
+}
