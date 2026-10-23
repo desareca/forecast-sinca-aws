@@ -106,4 +106,17 @@
   **Decisión pendiente del arquitecto/operador**: pedir el aumento de cuota (no
   tiene costo) o cambiar el cómputo del training (cualquier alternativa hoy
   también está en 0).**
+- **8.4 (desbloqueo en curso — cuota solicitada)**: el operador optó por pedir
+  el aumento de cuota. Solicitado vía `aws service-quotas
+  request-service-quota-increase` (perfil `desareca_dev`, `us-east-1`):
+  `L-611FA074` (`ml.m5.large for training job usage`), desired value `1`, nivel
+  ACCOUNT. Request id `706043b57a55493a833c634c9a152f9eIbHaA0ds`. El pedido pasó
+  de `PENDING` a `CASE_OPENED` (AWS abrió el caso de soporte `179276467000517`
+  el 2026-10-23 11:11) → **requiere revisión manual, ya no se auto-aprueba**
+  (esperable en cuenta nueva; 1–2 días hábiles). `get-service-quota` sigue
+  devolviendo `Value: 0.0`, así que 8.4 sigue bloqueado hasta que el estado pase
+  a `APPROVED`.
+  Seguimiento:
+  `aws service-quotas get-requested-service-quota-change --request-id 706043b57a55493a833c634c9a152f9eIbHaA0ds --region us-east-1 --profile desareca_dev`
+  (o `... list-requested-service-quota-change-history-by-quota --service-code sagemaker --quota-code L-611FA074 ...`).
 
