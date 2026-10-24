@@ -108,3 +108,22 @@ el almacenamiento intermedio (S3) y la orquestación (ver `cicd/blueprint.md`).
   definition, hacen falta un cluster ECS, un log group de CloudWatch, y un
   security group que habilite el puerto de la app (sin él `run-task` no tiene
   red y la UI no es alcanzable).
+- **El SDK de SageMaker (Python) v3 rompe la API v2**: la línea 3.x elimina
+  `Estimator`/`Model`/`Predictor`. Pinear el lanzador local a `sagemaker>=2,<3`
+  (en un `requirements-dev.txt` del repo, fuera del `source_dir`). La imagen de
+  training no se ve afectada: usa `sagemaker-training` (toolkit), paquete distinto.
+- **`source_dir` instala el `requirements.txt` del código fuente**: el toolkit
+  `sagemaker-training` pip-instala el `requirements.txt` que encuentre en el
+  `source_dir` dentro del contenedor (arrastra deps ajenas al training y alarga
+  el arranque). Mantener las deps no-training fuera del `source_dir`.
+- **Cuota de Training en cuenta nueva arranca en 0**: `ml.* for training job
+  usage` viene en 0 y hay que pedir el increase (Service Quotas). En cuenta nueva
+  el pedido pasa a revisión manual (CASE_OPENED, 1-2 días hábiles) y puede
+  concederse por encima de lo solicitado (20 vs 1).
+- **`code_location`/`output_path` del Estimator**: fijarlos a buckets/prefijos que
+  el rol de training ya puede leer/escribir, no el bucket default de SageMaker
+  (`sagemaker-<region>-<account>`), para no ampliar permisos.
+- **stdout cp1252 en Windows**: al correr `fit(wait=True, logs=True)` se streamea
+  CloudWatch y un `print` puede reventar con `UnicodeEncodeError`; reconfigurar
+  stdout a UTF-8 (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`)
+  al arrancar el launcher. El job sigue corriendo aunque el cliente muera.
