@@ -7,6 +7,11 @@ código viaja por `source_dir`/`entry_point` desde `pipeline/` (el SDK empaqueta
 
 Disparo **manual** (Fase 3): no hay pipeline automatizado todavía.
 
+Requiere **SageMaker Python SDK v2** (`sagemaker>=2,<3`): la v3 (3.x) eliminó
+`Estimator`/`Model`/`Predictor`. Las deps del ambiente local están en
+`requirements-dev.txt` (raíz del repo, fuera de `pipeline/` para que el toolkit
+`sagemaker-training` no las instale en el contenedor).
+
 Uso:
 
     python pipeline/train/launch.py \
@@ -51,6 +56,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # En Windows el stdout suele ser cp1252 y el streaming de logs de CloudWatch
+    # incluye caracteres no representables -> UnicodeEncodeError. Forzamos UTF-8
+    # para que el launcher no muera mientras el job sigue corriendo.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args(argv)
     if not args.role_arn:
         raise SystemExit("Falta --role-arn (o la env TRAINING_ROLE_ARN).")

@@ -8,7 +8,7 @@
 - [x] 1.1 Crear `pipeline/features/build.py` — leer `validated/`, construir features (lags 1h/24h/48h/72h/168h, meteorología con lag 24h, altura de capa límite, feriados, día de semana cyclic, ventana GEC, Fourier diaria/semanal/anual)
 - [x] 1.2 Calcular target — promedio móvil 24h a t+24h por serie (`mean(MP(t+1 … t+24h))`)
 - [x] 1.3 Implementar split — ventana deslizante (train 2 años / valid 1 mes / step 1 mes) + test final 3 meses held-out
-- [ ] 1.4 Ajustar `MET_COLUMNS` y `_station_base` en `pipeline/features/build.py` — decisión del arquitecto (post-mortem 1er run): quitar `wdir` (ninguna estación la publica) y rellenar con `NaN` las columnas met ausentes por estación (`glob` en Las Encinas) antes del lag, para no perder radiación en Nielol/PLC y mantener `FEATURE_COLUMNS` estable.
+- [x] 1.4 Ajustar `MET_COLUMNS` y `_station_base` en `pipeline/features/build.py` — decisión del arquitecto (post-mortem 1er run): quitar `wdir` (ninguna estación la publica) y rellenar con `NaN` las columnas met ausentes por estación (`glob` en Las Encinas) antes del lag, para no perder radiación en Nielol/PLC y mantener `FEATURE_COLUMNS` estable.
 
 ## 2. Persistencia baseline
 
@@ -41,8 +41,8 @@
 
 ## 7b. Ajustes de tooling (post-mortem del 1er run)
 
-- [ ] 7b.1 Crear `requirements-dev.txt` (raíz) con `sagemaker>=2,<3` y `boto3>=1.34,<2` para el ambiente de lanzamiento local (el `.venv` ya cumple con `sagemaker==2.257.7`); vive **fuera de `pipeline/`** para que el toolkit `sagemaker-training` no lo instale en el contenedor. Documentar en el docstring de `pipeline/train/launch.py` que requiere SDK v2.
-- [ ] 7b.2 `pipeline/train/launch.py`: reconfigurar stdout a UTF-8 al arrancar (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`) para que el streaming de logs no reviente con `UnicodeEncodeError` en Windows cp1252.
+- [x] 7b.1 Crear `requirements-dev.txt` (raíz) con `sagemaker>=2,<3` y `boto3>=1.34,<2` para el ambiente de lanzamiento local (el `.venv` ya cumple con `sagemaker==2.257.7`); vive **fuera de `pipeline/`** para que el toolkit `sagemaker-training` no lo instale en el contenedor. Documentar en el docstring de `pipeline/train/launch.py` que requiere SDK v2.
+- [x] 7b.2 `pipeline/train/launch.py`: reconfigurar stdout a UTF-8 al arrancar (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`) para que el streaming de logs no reviente con `UnicodeEncodeError` en Windows cp1252.
 
 ## 8. Ejecución real (operador corre y pega output)
 
@@ -177,6 +177,19 @@
   - **C**: traer viento/radiación desde Open-Meteo → cambio en el pipeline de
     datos (Fase 2) + backfill; mayor alcance.
   Bloquea 8.4/8.5/9.1 hasta resolver.
+- **1.4 (implementado y validado local contra S3)**: `MET_COLUMNS` quedó en
+  `("temp", "rhum", "pres", "wspd", "glob")` y `_station_base` crea como `NaN`
+  las met vars ausentes por estación antes del lag. Prueba local de
+  `build_features` sobre `s3://sinca-data/validated/`: `(257942, 27)`, 6 series,
+  `met_wdir_lag24` ausente, `FEATURE_COLUMNS` completo, `target` 100% no-nulo.
+  **Observación de calidad de dato**: `met_glob_lag24` es muy dispersa
+  (NaN: Las Encinas 100%, PLC 99.8%, Nielol 74.4%) — la radiación casi no está
+  en la fuente; no bloquea, pero probablemente aporte poco al modelo (anotado
+  como hipótesis para Fase 4).
+- **7b.1/7b.2 (implementado)**: `requirements-dev.txt` en la raíz con
+  `sagemaker>=2,<3` + `boto3>=1.34,<2` (fuera de `pipeline/` para que no lo
+  instale el toolkit), docstring de `launch.py` actualizado, y `main()`
+  reconfigura `sys.stdout` a UTF-8 (`errors="replace"`).
 - **8.4 (RESOLUCIÓN — decisión del arquitecto)**: opción **A, sin `wdir`**. `wdir`
   se quita de `MET_COLUMNS` (ninguna estación la publica: dejarla como columna
   `NaN` perpetua sería una feature fantasma sin señal y ensuciaría el feature

@@ -8,8 +8,10 @@ tamaño fijo + test final held-out) descrito en `design.md` §2/§3.
 Features por serie:
 
 - Lags de la serie propia: `t-1h`, `t-24h`, `t-48h`, `t-72h`, `t-168h`.
-- Meteorología (misma estación) con lag `t-24h`: temp, humedad, presión, viento
-  (dir/vel) y radiación.
+- Meteorología (misma estación) con lag `t-24h`: temp, humedad, presión,
+  velocidad de viento y radiación. La dirección de viento (`wdir`) queda fuera
+  (ninguna de las 3 estaciones la publica); las met vars ausentes por estación
+  (p. ej. `glob` en Las Encinas) se rellenan con `NaN` antes del lag.
 - Altura de capa límite (Open-Meteo): valor actual + lag `t-24h`.
 - Feriados (flag binario), día de semana cyclic (sin/cos), ventana GEC (flag).
 - Fourier (una armónica sin/cos por periodicidad): diaria (24h), semanal
@@ -46,8 +48,11 @@ _TZ = ZoneInfo(TIMEZONE)
 LAGS_HOURS: tuple[int, ...] = (1, 24, 48, 72, 168)
 
 # Meteorología (misma estación) con lag 24h.
+# `wdir` no se incluye: ninguna de las 3 estaciones la publica en SINCA (design §2).
+# Las columnas que falten en una estación concreta (p. ej. `glob` en Las Encinas)
+# se rellenan con `NaN` en `_station_base` para mantener el set uniforme.
 MET_LAG_HOURS = 24
-MET_COLUMNS: tuple[str, ...] = ("temp", "rhum", "pres", "wdir", "wspd", "glob")
+MET_COLUMNS: tuple[str, ...] = ("temp", "rhum", "pres", "wspd", "glob")
 
 # Altura de capa límite: valor actual + lag 24h.
 BLH_LAG_HOURS = 24
@@ -188,7 +193,19 @@ def _station_base(
     holiday_dates: set,
 ) -> pd.DataFrame:
     """Features independientes del contaminante, indexado por timestamp horario."""
-    work = station_df[["timestamp", *MET_COLUMNS]].copy()
+    # Las variables met disponibles difieren por estación: se crean como `NaN`
+    # las que falten (p. ej. `glob` en Las Encinas) para no romper la selección
+    # y mantener `FEATURE_COLUMNS` uniforme. LightGBM tolera los `NaN`.
+    missing = [column for column in MET_COLUMNS if column not in station_df.columns]
+    if missing:
+        log.info(
+            "Variables met ausentes en la estación; se rellenan con NaN: %s",
+            ", ".join(missing),
+        )
+    work = station_df[["timestamp"]].copy()
+    for column in MET_COLUMNS:
+        work[column] = station_df[column].astype(float) if column in station_df.columns else np.nan
+    work = work[["timestamp", *MET_COLUMNS]]
     work = work.dropna(subset=["timestamp"]).drop_duplicates("timestamp")
     work = work.sort_values("timestamp").set_index("timestamp")
 

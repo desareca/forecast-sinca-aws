@@ -1,0 +1,12 @@
+# Dependencias del ambiente de lanzamiento LOCAL (no se instalan en el
+# contenedor de training). Viven fuera de `pipeline/` a propósito: el toolkit
+# `sagemaker-training` detecta un `requirements.txt` dentro del `source_dir` y lo
+# instala en el contenedor, cosa que no queremos para estas deps.
+#
+# `sagemaker` debe quedar en la línea v2: la v3 (3.x) eliminó `Estimator`,
+# `Model` y `Predictor`, que es lo que usa `pipeline/train/launch.py`.
+#
+# Instalar con:
+#   python -m pip install -r requirements-dev.txt
+sagemaker>=2,<3
+boto3>=1.34,<2
