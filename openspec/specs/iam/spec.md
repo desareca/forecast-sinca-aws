@@ -15,17 +15,21 @@ El sistema SHALL definir un rol IAM para el entorno de desarrollo (`sinca-dev-ro
 - **WHEN** se inspecciona la política del rol de desarrollo
 - **THEN** no contiene permisos IAM ni managed policies `*FullAccess` / `AdministratorAccess`
 
-### Requirement: Rol de training (skeleton)
+### Requirement: Rol de training
 
-El sistema SHALL definir un rol IAM para entrenamiento (`sinca-training-role`) con acceso de solo lectura a los datos validados y escritura de artefactos a un prefijo acotado de tracking, sin más permisos.
+El sistema SHALL definir un rol IAM para entrenamiento (`sinca-training-role`) con acceso de solo lectura a los datos validados, escritura de artefactos de modelo y de tracking, sin más permisos.
 
 #### Scenario: Lectura de datos validados
 - **WHEN** el rol de training lee datos de entrada
 - **THEN** puede leer desde `sinca-data/validated/*` únicamente
 
-#### Scenario: Escritura de artefactos acotada
+#### Scenario: Escritura de artefactos de modelo
 - **WHEN** el rol de training escribe artefactos de modelo
 - **THEN** solo puede escribir en `sinca-mlflow/model-artifacts/*`
+
+#### Scenario: Escritura de tracking
+- **WHEN** el rol de training loguea métricas y artefactos de tracking
+- **THEN** puede leer/escribir en `sinca-mlflow/_mlflow/*`
 
 ### Requirement: Verificación de identidad de cuenta
 
