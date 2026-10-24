@@ -8,6 +8,7 @@
 - [x] 1.1 Crear `pipeline/features/build.py` — leer `validated/`, construir features (lags 1h/24h/48h/72h/168h, meteorología con lag 24h, altura de capa límite, feriados, día de semana cyclic, ventana GEC, Fourier diaria/semanal/anual)
 - [x] 1.2 Calcular target — promedio móvil 24h a t+24h por serie (`mean(MP(t+1 … t+24h))`)
 - [x] 1.3 Implementar split — ventana deslizante (train 2 años / valid 1 mes / step 1 mes) + test final 3 meses held-out
+- [ ] 1.4 Ajustar `MET_COLUMNS` y `_station_base` en `pipeline/features/build.py` — decisión del arquitecto (post-mortem 1er run): quitar `wdir` (ninguna estación la publica) y rellenar con `NaN` las columnas met ausentes por estación (`glob` en Las Encinas) antes del lag, para no perder radiación en Nielol/PLC y mantener `FEATURE_COLUMNS` estable.
 
 ## 2. Persistencia baseline
 
@@ -171,4 +172,16 @@
   - **C**: traer viento/radiación desde Open-Meteo → cambio en el pipeline de
     datos (Fase 2) + backfill; mayor alcance.
   Bloquea 8.4/8.5/9.1 hasta resolver.
+- **8.4 (RESOLUCIÓN — decisión del arquitecto)**: opción **A, sin `wdir`**. `wdir`
+  se quita de `MET_COLUMNS` (ninguna estación la publica: dejarla como columna
+  `NaN` perpetua sería una feature fantasma sin señal y ensuciaría el feature
+  importance). Las demás columnas met ausentes por estación (`glob` en Las
+  Encinas) se rellenan con `NaN` antes del lag, preservando radiación donde sí
+  existe (Nielol/PLC). `FEATURE_COLUMNS` queda estable salvo que `met_wdir_lag24`
+  desaparece (consistente entre `build.py` y `train.py`). `rain` **NO** se agrega
+  como feature (disponible en las 3 estaciones pero fuera del scope del design
+  §2; queda como hipótesis para Fase 4). Tooling: pin `sagemaker>=2,<3` vía
+  `requirements-dev.txt` (tareas 7b.1/7b.2); el `requirements.txt` de
+  `pipeline/` se deja donde está (no rompe; reevaluar en Fase 4 si pesa el
+  arranque).
 
