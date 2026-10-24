@@ -79,3 +79,16 @@ de los datos bajó esa corrida".
 - Umbral de detención del pipeline y dimensiones críticas.
 - Estructura exacta de `raw/`/`validated/`/`quarantine/` y formato del motivo
   de rechazo.
+
+## Notas de este proyecto
+
+- **La fuente externa puede no exponer el mismo set de parámetros en todos sus
+  puntos de medición**: en SINCA, la meteorología difiere por estación (dirección
+  de viento ausente en todas, radiación ausente/parcial). Con pandera
+  `strict=False`/`required=False` las columnas ausentes simplemente no se
+  generan: el consumidor aguas abajo (feature engineering) debe tolerar columnas
+  ausentes (rellenando `NaN` por estación), no asumir el set completo.
+- **Disponibilidad real ≠ presencia del parámetro**: la radiación (`glob`) es
+  extremadamente dispersa (74–100% nulos) incluso donde la estación "la publica".
+  Verificar la tasa de nulos por columna antes de confiar en una variable como
+  feature.
