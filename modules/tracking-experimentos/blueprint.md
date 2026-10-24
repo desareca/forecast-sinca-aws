@@ -106,3 +106,12 @@ parámetros y artefactos; el registro decide dónde se versiona el modelo.
   2 GiB en Fargate; con 1024 MiB la task muere por OOM (exit 137).
 - **Sin auth por defecto**: la UI de MLflow no tiene autenticación; restringir
   el security group (puerto 5000) a la IP del operador, no `0.0.0.0/0`.
+- **Logging directo deja `artifact_uri` `file://`**: al loguear sin servidor con
+  SQLite local, los runs nuevos quedan con URI `file://`; en la UI del servidor
+  (que usa `--artifacts-destination` a S3) se ven métricas/params pero el
+  artefacto por run puede no resolverse. Es el trade-off de "sube `mlruns/`" vs
+  `artifact_location` directo a S3.
+- **Colisión de `run_name` entre contaminantes**: la convención
+  `{estacion}-{modelo}-v{n}` no distingue contaminantes; dos series de la misma
+  estación (ej. pm25/pm10) comparten nombre. Distinguirlas con un tag/param extra
+  (ej. `pollutant`).
