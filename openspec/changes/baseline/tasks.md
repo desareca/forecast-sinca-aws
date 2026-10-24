@@ -39,6 +39,11 @@
 - [x] 7.2 Actualizar `project-decisions.md` §3 (cómputo training confirmado) y §8 (baseline activo)
 - [x] 7.3 Crear `EXPERIMENT-LOG.md` (convención prompt §6)
 
+## 7b. Ajustes de tooling (post-mortem del 1er run)
+
+- [ ] 7b.1 Crear `requirements-dev.txt` (raíz) con `sagemaker>=2,<3` y `boto3>=1.34,<2` para el ambiente de lanzamiento local (el `.venv` ya cumple con `sagemaker==2.257.7`); vive **fuera de `pipeline/`** para que el toolkit `sagemaker-training` no lo instale en el contenedor. Documentar en el docstring de `pipeline/train/launch.py` que requiere SDK v2.
+- [ ] 7b.2 `pipeline/train/launch.py`: reconfigurar stdout a UTF-8 al arrancar (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`) para que el streaming de logs no reviente con `UnicodeEncodeError` en Windows cp1252.
+
 ## 8. Ejecución real (operador corre y pega output)
 
 - [x] 8.1 Build de la imagen (sin push todavía): `docker build -f docker/train.Dockerfile -t sinca-train .`
