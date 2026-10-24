@@ -28,6 +28,7 @@ htmlcov/
 # Notebooks - outputs y checkpoints de exploración
 .ipynb_checkpoints/
 *.ipynb
+!notebooks/analisis_baseline.ipynb
 
 # MLflow / artefactos locales de entrenamiento
 mlruns/
