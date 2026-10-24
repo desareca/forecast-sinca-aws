@@ -49,12 +49,12 @@
 - [x] 8.1 Build de la imagen (sin push todavía): `docker build -f docker/train.Dockerfile -t sinca-train .`
 - [x] 8.2 `terraform plan` y `terraform apply` (crea ECR + finaliza IAM)
 - [x] 8.3 Push de la imagen a ECR (el repo recién existe tras el apply)
-- [ ] 8.4 Correr Training Job manual (baseline completo: persistencia + LightGBM)
-- [ ] 8.5 Verificar métricas en MLflow (UI o listar `sinca-mlflow/_mlflow/mlruns/`)
+- [x] 8.4 Correr Training Job manual (baseline completo: persistencia + LightGBM)
+- [x] 8.5 Verificar métricas en MLflow (UI o listar `sinca-mlflow/_mlflow/mlruns/`)
 
 ## 9. Verificación funcional
 
-- [ ] 9.1 Smoke test: baseline de punta a punta, confirmar métricas (persistencia + LightGBM) en MLflow con output real
+- [x] 9.1 Smoke test: baseline de punta a punta, confirmar métricas (persistencia + LightGBM) en MLflow con output real
 
 ## Notas de implementación
 
@@ -202,4 +202,36 @@
   `requirements-dev.txt` (tareas 7b.1/7b.2); el `requirements.txt` de
   `pipeline/` se deja donde está (no rompe; reevaluar en Fase 4 si pesa el
   arranque).
+- **8.4/8.5/9.1 (rerun OK — baseline completo)**:
+  - Job `sinca-baseline-train-2026-10-24-18-33-19-397` → **Completed**.
+    `Billable 2292 s` (~38 min, ~USD 0.07 en `ml.m5.large`). 6 series LightGBM +
+    persistencia, sin errores. El fix de 1.4 y el de encoding de 7b.2 funcionaron.
+  - MLflow: estado en `s3://sinca-mlflow/_mlflow/` (17 objetos; `mlflow.sqlite`
+    + `mlruns/`). `mlflow.sqlite`: `integrity_check=ok`, **7 runs FINISHED** en
+    el experimento `sinca-baseline` (6 LightGBM + 1 persistencia), **234**
+    `latest_metrics`, params completos. Nota: los dos runs de una misma estación
+    (pm10/pm25) comparten nombre `sinca-{estacion}-lightgbm-v1` por la convención
+    de 3.3; se distinguen por el param `pollutant`.
+  - **Resultado test (3 meses held-out, RMSE)** LightGBM vs persistencia:
+    | serie | LightGBM | persistencia |
+    |---|---|---|
+    | Las Encinas pm10 | 19.665 | 24.031 |
+    | Las Encinas pm25 | 19.453 | 22.082 |
+    | Nielol pm10 | 17.665 | 20.307 |
+    | Nielol pm25 | 16.596 | 18.523 |
+    | PLC pm10 | 28.751 | 26.056 |
+    | PLC pm25 | 27.748 | 23.205 |
+    LightGBM mejora en 4/6 series (Las Encinas y Nielol) pero **empeora en PLC
+    (pm10 y pm25)**. No es un error de pipeline: es un resultado real del baseline.
+    Hipótesis para el arquitecto/Fase 4: PLC es la serie de mayor variabilidad y
+    `glob` está casi toda `NaN` ahí (99.8%), así que el modelo puede estar
+    sobreajustando o faltándole señal; evaluar features adicionales
+    (`rain`, viento de Open-Meteo) o un baseline por estación.
+  - `test_weighted_rmse` difiere de `test_rmse` en las series pm25 (p. ej. Nielol
+    pm25: 42.37 vs 16.60) por el peso ICAP (`α=1`, `umbral_regular` 50/150):
+    es esperado, no un bug.
+  - Incidente menor de verificación (no del job): al consultar el `mlflow.sqlite`
+    local, reusar el mismo cursor de `sqlite3` dentro de un loop cortaba la
+    iteración y mostraba 1 run en vez de 7. El objeto en S3 está correcto
+    (MD5 = ETag, `integrity_check=ok`).
 
