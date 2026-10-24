@@ -43,13 +43,13 @@ pipeline (`pipeline/`), imagen (`docker/scraper.Dockerfile`), infra Terraform
 (ECR, task Fargate, IAM, schedule), backfill de 5 años y smoke test. Las 6
 series horarias validadas viven en `s3://sinca-data/validated/`.
 
-**Fase 3 — Baseline (en progreso).** Change `baseline`: feature engineering
+**Fase 3 — Baseline (completada).** Change `baseline`: feature engineering
 (`pipeline/features/`), baseline de persistencia (`pipeline/baseline/`),
 entrenamiento LightGBM con random search (`pipeline/train/`), evaluación
 (`pipeline/evaluate/`), imagen de entrenamiento (`docker/train.Dockerfile`) e
-infra Terraform (ECR `sinca-train` + rol de training finalizado). Pendiente:
-build/push de la imagen, `terraform apply` y el Training Job completo
-(tareas 8.x/9.x). Ver [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
+infra Terraform (ECR `sinca-train` + rol de training finalizado). Training Job
+completado y verificado en MLflow (7 runs: 6 LightGBM + persistencia). Ver
+["Baseline (Fase 3)"](#baseline-fase-3) y [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
 
 ## Servidor MLflow (on-demand)
 
@@ -170,9 +170,10 @@ pipeline/
 └── evaluate/evaluate.py   # métricas: RMSE ponderado, ICAP oficial, percentiles propios
 ```
 
-- **Features**: lags propios (1h/24h/48h/72h/168h), meteorología con lag 24h,
-  altura de capa límite (valor + lag 24h), feriados, día de semana cyclic,
-  ventana GEC y Fourier (diaria/semanal/anual).
+- **Features**: lags propios (1h/24h/48h/72h/168h), meteorología con lag 24h
+  (temp, humedad, presión, velocidad de viento; radiación solo donde la estación
+  la publica), altura de capa límite (valor + lag 24h), feriados, día de semana
+  cyclic, ventana GEC y Fourier (diaria/semanal/anual).
 - **Loss**: RMSE ponderado `w_i = 1 + α·max(0, y_i − umbral_regular)`
   (`α=1`, `umbral_regular` = ancla ICAP 100: MP10 150 / MP2.5 50).
 - **Partición**: ventana deslizante (train 2 años / valid 1 mes / step 1 mes)
@@ -181,6 +182,11 @@ pipeline/
   + `mlruns/`, subidos al terminar a `s3://sinca-mlflow/_mlflow/`. Convención de
   run `sinca-{estacion}-{modelo}-v{n}`. Modelos también en
   `s3://sinca-mlflow/model-artifacts/`.
+- **Resultado (test 3 meses held-out, RMSE)**: LightGBM mejora vs persistencia
+  en Las Encinas y Nielol (4/6 series, −10% a −18%); empeora en Padre Las Casas
+  II (pm10/pm25). Supervisar en Fase 4: PLC es la serie de mayor variabilidad y
+  ahí la radiación es casi toda nula → evaluar features extra (`rain`, viento de
+  Open-Meteo) o un baseline por estación.
 
 ### Correr local (sin AWS, sin escribir)
 
@@ -204,8 +210,9 @@ docker push $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
 ### Lanzar el Training Job (manual)
 
 La imagen lleva solo el runtime; el código viaja por `source_dir`/`entry_point`
-desde `pipeline/`. Requiere el SDK de SageMaker en el entorno local
-(`pip install sagemaker`). Los ARNs salen de los outputs de Terraform:
+desde `pipeline/`. Requiere el SDK de SageMaker **v2** en el entorno local
+(ver `requirements-dev.txt`: `pip install "sagemaker>=2,<3"` — la línea v3
+elimina la API `Estimator`). Los ARNs salen de los outputs de Terraform:
 
 ```powershell
 $env:AWS_PROFILE="<profile>"
