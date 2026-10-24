@@ -23,7 +23,7 @@ infra/scripts/# scripts de operación (on_start.sh del Space, mlflow-server.sh)
 docker/       # Dockerfile (MLflow) + scraper.Dockerfile (datos) + train.Dockerfile (entrenamiento)
 pipeline/     # datos (scraper/ICAP/validación/persistencia) + modelado (features/baseline/train/evaluate)
 tests/        # unit + integration (futuro)
-notebooks/    # solo exploración (futuro)
+notebooks/    # notebook base de análisis (puntuales en .gitignore)
 modules/      # blueprints de decisión por dominio (guías, no specs)
 openspec/     # changes activos y specs consolidadas
 .github/      # workflows de GitHub Actions (ci, infra-cd, pipeline-cd)
@@ -50,6 +50,33 @@ entrenamiento LightGBM con random search (`pipeline/train/`), evaluación
 infra Terraform (ECR `sinca-train` + rol de training finalizado). Training Job
 completado y verificado en MLflow (7 runs: 6 LightGBM + persistencia). Ver
 ["Baseline (Fase 3)"](#baseline-fase-3) y [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
+
+## Entorno de desarrollo (Space + VS Code local)
+
+El trabajo diario se hace **en local con VS Code**, conectado por **SSH sobre
+SSM** al Space `sinca-dev` de SageMaker Studio (dominio `sinca-studio`,
+`ml.t3.large` + EBS 5 GB). El VS Code local es solo la ventana: el código, el
+venv, el `git` y el acceso a S3 corren en el Space (rol `sinca-dev-role`, sin
+claves ni credenciales en el repo).
+
+- **Conectar**: VS Code → panel **AWS Toolkit** → SageMaker → Space `sinca-dev`
+  → **Start and connect** (extensiones AWS Toolkit + Remote-SSH). El Space
+  queda `InService` y factura (~USD 0.05–0.08/h).
+- **Apagar**: SageMaker Console → Studio → Spaces → `sinca-dev` → **Stop**
+  (el EBS de 5 GB persiste; solo el cómputo deja de cobrar).
+- **Git local ↔ Space**: son dos clones. Commit/push en uno y `git pull` en el
+  otro para sincronizar.
+
+## Análisis (dashboard y notebooks)
+
+- **Dashboard Streamlit** (change `analisis-modelos`, on-demand): se correrá en
+  el Space — `streamlit run pipeline/analysis/streamlit_app.py --server.port 8501`
+  — y se ve por port-forward del 8501 en VS Code. Para iterar los gráficos sin
+  AWS: contenedor local (`docker/analysis.Dockerfile`).
+- **Notebook base**: `notebooks/analisis_baseline.ipynb` (plantilla versionada)
+  para análisis puntuales en JupyterLab del Space. Encender = Space `sinca-dev`
+  → Open Studio; apagar = Spaces → `sinca-dev` → Stop. Los notebooks puntuales
+  están en `.gitignore`; versioná el que quieras conservar con `git add -f`.
 
 ## Servidor MLflow (on-demand)
 
