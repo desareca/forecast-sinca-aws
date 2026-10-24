@@ -31,7 +31,7 @@ Cada modelo predice `mean(MP(t+1 … t+24h))` de su serie. El ICAP se deriva en 
 ### 2. Features
 
 - **Lags de la serie propia**: `t-1h`, `t-24h`, `t-48h`, `t-72h`, `t-168h`.
-- **Meteorología** (misma estación, lag `t-24h`): temp, humedad, presión, viento (dir/vel), radiación.
+- **Meteorología** (misma estación, lag `t-24h`): temp, humedad, presión, velocidad de viento, radiación. La dirección de viento (`wdir`) queda **fuera**: ninguna de las 3 estaciones la publica en SINCA. La radiación (`glob`) falta en Las Encinas; ahí la feature se rellena con `NaN` (LightGBM lo tolera) para mantener el set de features uniforme entre estaciones.
 - **Altura de capa límite** (Open-Meteo): valor + lag `t-24h`.
 - **Feriados**: flag binario (nacional + regional La Araucanía).
 - **Día de semana**: cyclic (sin/cos).
