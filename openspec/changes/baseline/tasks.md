@@ -119,4 +119,56 @@
   Seguimiento:
   `aws service-quotas get-requested-service-quota-change --request-id 706043b57a55493a833c634c9a152f9eIbHaA0ds --region us-east-1 --profile desareca_dev`
   (o `... list-requested-service-quota-change-history-by-quota --service-code sagemaker --quota-code L-611FA074 ...`).
+- **8.4 (desbloqueado — cuota concedida)**: el 2026-10-24 la cuota efectiva ya
+  figura en `Value: 20.0` (`get-service-quota`), aunque el objeto del request
+  siguió mostrando `CASE_OPENED`. AWS concedió 20 en vez del 1 pedido. Con eso se
+  lanzó el Training Job `sinca-baseline-train-2026-10-24-18-04-19-349`
+  (`ml.m5.large`, `InProgress` → `Training`), sin `ResourceLimitExceeded`.
+- **8.4 (SDK de SageMaker: v3 rompe `launch.py`)**: el 2026-10-21 salió la línea
+  **SageMaker Python SDK v3** (3.27.0), que **elimina** `Estimator`, `Model` y
+  `Predictor` (`pip install sagemaker` sin pin instala v3). `pipeline/train/launch.py`
+  usa la API v2 (`sagemaker.estimator.Estimator`, `sagemaker.session.Session`), así
+  que **no se debe actualizar el SDK**. El `.venv` del repo ya tiene
+  `sagemaker==2.257.7` (v2) + `sagemaker_core 1.0.78` + `boto3 1.43.108`, que es lo
+  correcto. La **imagen Docker no se ve afectada**: instala `sagemaker-training`
+  (toolkit de script-mode del contenedor), paquete distinto del SDK.
+  **Riesgo latente para el arquitecto**: no hay pin de versión del SDK en el repo
+  (no existe `requirements.txt` de dev) — conviene agregar `sagemaker>=2,<3` y, si
+  se quiere migrar a v3, es un cambio de código (`ModelTrainer` + `SourceCode`).
+- **8.4 (crash del launcher por encoding en Windows, no del job)**: con `--wait`,
+  `estimator.fit` streamea logs de CloudWatch y el `print` de `sagemaker.logs`
+  revienta con `UnicodeEncodeError: 'charmap' codec` (stdout cp1252 de Windows).
+  El proceso cliente muere **después** de crear el job, que sigue corriendo en
+  SageMaker. Workaround para futuras corridas: setear `PYTHONIOENCODING=utf-8` o
+  `PYTHONUTF8=1` antes de invocar `launch.py` (o usar `--no-logs`). No se cambió
+  el código todavía: queda a criterio del arquitecto si se fija en `launch.py`.
+- **8.4 (`requirements.txt` del `pipeline/` se instala en el contenedor)**: al usar
+  `source_dir=str(PIPELINE_DIR)`, el toolkit `sagemaker-training` detecta el
+  `pipeline/requirements.txt` y lo instala en runtime (baja `pandera`,
+  `beautifulsoup4`, etc. — deps del scraper, ajenas al training). No rompe, pero
+  agrega tiempo de arranque y peso. Si molesta, el arquitecto puede decidir mover
+  el `requirements.txt` del scraper fuera del `source_dir` del training.
+- **8.4 (1er run FALLÓ — esquema meteorológico no uniforme entre estaciones)**:
+  job `sinca-baseline-train-2026-10-24-18-04-19-349` → `Failed` (`Billable 79s`).
+  Traceback real: `KeyError: "['wdir'] not in index"` en
+  `features/build.py:191` (`_station_base`), que hace
+  `station_df[["timestamp", *MET_COLUMNS]]`. Causa raíz: `MET_COLUMNS` es una
+  constante global (`temp, rhum, pres, wdir, wspd, glob`) pero **las variables
+  meteorológicas disponibles difieren por estación** en `validated/sinca`:
+  - `padre_las_casas_ii`: temp, rhum, pres, rain, wspd, **glob** (sin wdir)
+  - `nielol`: temp, rhum, pres, rain, wspd, **glob** (sin wdir)
+  - `las_encinas`: temp, rhum, pres, rain, wspd (**sin glob, sin wdir**)
+  **Ninguna estación publica `wdir`** (el scraper solo descubre lo que expone la
+  página SINCA; el pandera es `strict=False`/`required=False`, así que no descarta
+  nada). El design §2 pide "viento (dir/vel) y radiación", pero la fuente no
+  entrega dirección de viento.
+  **Opciones (decisión del arquitecto/operador)**:
+  - **A (recomendada)**: por estación, crear como `NaN` las `MET_COLUMNS` que
+    falten antes del lag (LightGBM tolera NaN) → mantiene el set de features del
+    design y deja `FEATURE_COLUMNS` estable. Es un cambio chico en `build.py`.
+  - **B**: recortar `MET_COLUMNS` a la intersección (`temp, rhum, pres, wspd`) →
+    pierde radiación donde sí existe (Nielol/PLC) y dirección de viento.
+  - **C**: traer viento/radiación desde Open-Meteo → cambio en el pipeline de
+    datos (Fase 2) + backfill; mayor alcance.
+  Bloquea 8.4/8.5/9.1 hasta resolver.
 
