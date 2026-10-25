@@ -35,7 +35,12 @@ from train import mlflow_log  # noqa: E402
 log = logging.getLogger(__name__)
 
 EXPERIMENT_NAME = mlflow_log.EXPERIMENT_NAME
-DIAGNOSTIC_FILES = ("predictions.parquet", "feature_importance.parquet", "zone_icap.parquet")
+DIAGNOSTIC_FILES = (
+    "predictions.parquet",
+    "feature_importance.parquet",
+    "zone_icap.parquet",
+    "rolling_scores.parquet",
+)
 
 
 # --- Estado local ------------------------------------------------------------
@@ -114,6 +119,9 @@ def list_runs(state_dir: str, experiment_name: str | None = EXPERIMENT_NAME) -> 
                     "select key, value from latest_metrics where run_uuid = ?", (run_id,)
                 ).fetchall()
             }
+            tags = dict(
+                con.execute("select key, value from tags where run_uuid = ?", (run_id,)).fetchall()
+            )
             runs.append(
                 {
                     "run_id": run_id,
@@ -122,6 +130,7 @@ def list_runs(state_dir: str, experiment_name: str | None = EXPERIMENT_NAME) -> 
                     "experiment_id": experiment_id,
                     "params": params,
                     "metrics": metrics,
+                    "tags": tags,
                 }
             )
         return runs
@@ -187,6 +196,136 @@ def zone_icap_from_runs(state_dir: str, runs: list[dict], split: str = "test") -
     return zone_icap(pd.concat(frames, ignore_index=True))
 
 
+def model_family(run: dict) -> str:
+    """Familia del modelo (`lightgbm`, `dmd`, ...) desde params/tags/run_name."""
+    params = run.get("params", {})
+    tags = run.get("tags", {})
+    for source in (params, tags):
+        for key in ("modelo", "model"):
+            if source.get(key):
+                return str(source[key])
+    name = str(run.get("run_name", ""))
+    if "-v" in name:
+        name = name.rsplit("-v", 1)[0]
+    return name.rsplit("-", 1)[-1] if name else "?"
+
+
+def available_model_versions(runs: list[dict]) -> list[tuple[str, int]]:
+    """Pares `(modelo, version)` presentes en los runs de entrenamiento."""
+    pairs: set[tuple[str, int]] = set()
+    for run in runs:
+        params = run["params"]
+        if params.get("tipo") == "persistencia":
+            continue
+        version = params.get("version")
+        if version is None:
+            continue
+        try:
+            pairs.add((model_family(run), int(version)))
+        except (TypeError, ValueError):
+            continue
+    return sorted(pairs)
+
+
+def zone_icap_by_model_version(
+    state_dir: str, runs: list[dict], split: str = "test"
+) -> dict[str, pd.DataFrame]:
+    """`ICAP_zona` por `(modelo, versión)`: agrega las 6 series de cada par.
+
+    Devuelve `{"<modelo> vN": DataFrame[timestamp, icap_true, icap_pred]}`. Cada
+    par se calcula por separado para no mezclar familias/versiones distintas.
+    """
+    out: dict[str, pd.DataFrame] = {}
+    for model, version in available_model_versions(runs):
+        subset = [
+            run
+            for run in runs
+            if run["params"].get("tipo") != "persistencia"
+            and model_family(run) == model
+            and str(run["params"].get("version")) == str(version)
+        ]
+        zone = zone_icap_from_runs(state_dir, subset, split)
+        if not zone.empty:
+            out[f"{model} v{version}"] = zone
+    return out
+
+
+def rmse_by_model(
+    state_dir: str,
+    runs: list[dict],
+    station: str,
+    pollutant: str,
+    selected_labels: set[str] | None = None,
+) -> list[dict]:
+    """RMSE test y valid (media/min/max por ventana) por modelo de una serie.
+
+    Devuelve una fila para la persistencia (si tiene test) y una por cada modelo
+    seleccionado de la serie. `valid_*` sale de `rolling_scores.parquet`; si no
+    existe, cae a `rolling_weighted_rmse_mean ± std`.
+    """
+    slug = mlflow_log.station_slug(station)
+    key = f"{slug}_{pollutant}"
+    persistence = next(
+        (run for run in runs if run["params"].get("tipo") == "persistencia"), None
+    )
+
+    rows: list[dict] = []
+    if persistence is not None:
+        persist_test = persistence["metrics"].get(f"test_rmse_{key}")
+        if persist_test is not None:
+            rows.append(
+                {
+                    "label": "persistencia",
+                    "test_rmse": persist_test,
+                    "valid_mean": None,
+                    "valid_sd": None,
+                    "valid_min": None,
+                    "valid_max": None,
+                }
+            )
+
+    for run in runs:
+        params = run["params"]
+        if params.get("tipo") == "persistencia":
+            continue
+        if params.get("estacion") != station or params.get("pollutant") != pollutant:
+            continue
+        label = f"{model_family(run)} v{params.get('version')}"
+        if selected_labels is not None and label not in selected_labels:
+            continue
+
+        valid_mean = valid_min = valid_max = valid_sd = None
+        scores = load_artifacts(state_dir, run["run_id"])["rolling_scores.parquet"]
+        if scores is not None and not scores.empty and "rmse" in scores.columns:
+            values = scores["rmse"].dropna()
+            if not values.empty:
+                valid_mean = float(values.mean())
+                valid_sd = float(values.std(ddof=0))
+                valid_min = float(values.min())
+                valid_max = float(values.max())
+        if valid_mean is None:
+            mean = run["metrics"].get("rolling_weighted_rmse_mean")
+            std = run["metrics"].get("rolling_weighted_rmse_std")
+            if mean is not None:
+                valid_mean = mean
+                valid_sd = std
+                if std is not None:
+                    valid_min = mean - std
+                    valid_max = mean + std
+
+        rows.append(
+            {
+                "label": label,
+                "test_rmse": run["metrics"].get("test_rmse"),
+                "valid_mean": valid_mean,
+                "valid_sd": valid_sd,
+                "valid_min": valid_min,
+                "valid_max": valid_max,
+            }
+        )
+    return rows
+
+
 def rmse_summary(runs: list[dict]) -> pd.DataFrame:
     """RMSE de test por serie: LightGBM vs persistencia (solo métricas, sin parquet)."""
     persistence = next((run for run in runs if run["params"].get("tipo") == "persistencia"), None)
@@ -203,13 +342,17 @@ def rmse_summary(runs: list[dict]) -> pd.DataFrame:
             continue
         slug = mlflow_log.station_slug(station)
         key = f"{slug}_{pollutant}"
+        model = model_family(run)
+        version = params.get("version")
         rows.append(
             {
                 "estacion": station,
                 "pollutant": pollutant,
-                "serie": f"{station} / {pollutant}",
-                "rmse_lightgbm": run["metrics"].get("test_rmse"),
-                "wrmse_lightgbm": run["metrics"].get("test_weighted_rmse"),
+                "modelo": model,
+                "version": version,
+                "serie": f"{station} / {pollutant} / {model} v{version}",
+                "rmse_model": run["metrics"].get("test_rmse"),
+                "wrmse_model": run["metrics"].get("test_weighted_rmse"),
                 "rmse_persistence": persistence_metrics.get(f"test_rmse_{key}"),
                 "wrmse_persistence": persistence_metrics.get(f"test_weighted_rmse_{key}"),
             }

@@ -36,7 +36,7 @@ VALID_HOURS = 24 * 14
 TZ = "America/Santiago"
 
 
-def _synthetic(station: str, pollutant: str, start: str, hours: int, rng) -> pd.DataFrame:
+def _synthetic(station: str, pollutant: str, start: str, hours: int, rng, noise_scale: float = 8.0) -> pd.DataFrame:
     ts = pd.date_range(start, periods=hours, freq="h", tz=TZ)
     index = np.arange(hours)
     base = 60.0 if pollutant == "pm10" else 24.0
@@ -45,7 +45,7 @@ def _synthetic(station: str, pollutant: str, start: str, hours: int, rng) -> pd.
     seasonal = 8.0 * np.sin(2 * np.pi * index / (24 * 365))
     noise = rng.normal(0.0, 6.0, hours)
     y_true = np.clip(base + daily + weekly + seasonal + noise, 1.0, None)
-    y_pred = np.clip(y_true + rng.normal(0.0, 8.0, hours) + 2.0, 1.0, None)
+    y_pred = np.clip(y_true + rng.normal(0.0, noise_scale, hours) + 2.0, 1.0, None)
     return pd.DataFrame(
         {
             "timestamp": ts,
@@ -95,40 +95,57 @@ def main() -> int:
     persistence_metrics: dict[str, float] = {}
     for station in STATIONS:
         for pollutant in ("pm10", "pm25"):
-            test = _synthetic(station, pollutant, TEST_START, TEST_HOURS, rng)
-            valid = _synthetic(station, pollutant, VALID_START, VALID_HOURS, rng)
-            test["split"] = "test"
-            valid["split"] = "valid"
-            predictions = pd.concat([valid, test], ignore_index=True)
+            # Varias familias/versiones por serie para poder comparar en el dashboard.
+            for model, version, noise_scale in (
+                ("lightgbm", 1, 8.0),
+                ("lightgbm", 2, 5.0),
+                ("dmd", 1, 11.0),
+            ):
+                test = _synthetic(station, pollutant, TEST_START, TEST_HOURS, rng, noise_scale)
+                valid = _synthetic(station, pollutant, VALID_START, VALID_HOURS, rng, noise_scale)
+                test["split"] = "test"
+                valid["split"] = "valid"
+                predictions = pd.concat([valid, test], ignore_index=True)
 
-            metrics = {f"test_{key}": value for key, value in evaluate_predictions(test).items()}
-            metrics["train_loss"] = float(rng.uniform(1.0, 8.0))
-            metrics["rolling_weighted_rmse_mean"] = float(rng.uniform(10.0, 22.0))
+                metrics = {f"test_{key}": value for key, value in evaluate_predictions(test).items()}
+                metrics["train_loss"] = float(rng.uniform(1.0, 8.0))
+                rolling_scores = np.clip(rng.normal(18.0, 5.0, 42), 1.0, None)
+                metrics["rolling_weighted_rmse_mean"] = float(rolling_scores.mean())
+                metrics["rolling_weighted_rmse_std"] = float(rolling_scores.std())
 
-            _log_run(
-                mlflow_log.run_name(station, "lightgbm", 1),
-                {
-                    "estacion": station,
-                    "pollutant": pollutant,
-                    "modelo": "lightgbm",
-                    "version": 1,
-                    "tipo": "entrenamiento",
-                    "learning_rate": 0.1,
-                    "num_leaves": 63,
-                },
-                metrics,
-                {
-                    "predictions.parquet": predictions,
-                    "feature_importance.parquet": _importance(station, pollutant, rng),
-                    "zone_icap.parquet": zone_icap(test),
-                },
-            )
+                _log_run(
+                    mlflow_log.run_name(station, model, version),
+                    {
+                        "estacion": station,
+                        "pollutant": pollutant,
+                        "modelo": model,
+                        "version": version,
+                        "tipo": "entrenamiento",
+                        "learning_rate": 0.1 if version == 1 else 0.05,
+                        "num_leaves": 63,
+                    },
+                    metrics,
+                    {
+                        "predictions.parquet": predictions,
+                        "feature_importance.parquet": _importance(station, pollutant, rng),
+                        "zone_icap.parquet": zone_icap(test),
+                        "rolling_scores.parquet": pd.DataFrame(
+                            {
+                                "window_index": np.arange(len(rolling_scores)),
+                                "rmse": rolling_scores,
+                            }
+                        ),
+                    },
+                )
 
-            # Persistencia señuelo: predicción = y_true desplazado 1h (peor RMSE).
-            persist = test.copy()
-            persist["y_pred"] = persist["y_true"].shift(1).bfill() + rng.normal(0.0, 3.0, len(persist))
-            for key, value in evaluate_predictions(persist).items():
-                persistence_metrics[f"test_{key}"] = value
+                if model == "lightgbm" and version == 1:
+                    # Persistencia señuelo: predicción = y_true desplazado 1h (peor RMSE).
+                    persist = test.copy()
+                    persist["y_pred"] = persist["y_true"].shift(1).bfill() + rng.normal(
+                        0.0, 3.0, len(persist)
+                    )
+                    for key, value in evaluate_predictions(persist).items():
+                        persistence_metrics[f"test_{key}"] = value
 
     _log_run(
         "sinca-persistence-baseline",

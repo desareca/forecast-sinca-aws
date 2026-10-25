@@ -24,7 +24,7 @@
 
 ## 4. Pruebas locales de gráficos (iteración, sin AWS)
 
-- [ ] 4.1 Construir la imagen y correr el dashboard en contenedor contra el fixture (montando el código como volumen); afinar la definición de gráficos junto al operador hasta cerrarla
+- [x] 4.1 Construir la imagen y correr el dashboard en contenedor contra el fixture (montando el código como volumen); afinar la definición de gráficos junto al operador hasta cerrarla
 
 ## 5. Documentación
 
@@ -78,3 +78,33 @@
 - **5.4 (estado)**: el flujo encender/trabajar/apagar del notebook quedó
   documentado en `README.md`; falta que el operador confirme que
   `notebooks/analisis_baseline.ipynb` abre en el Space.
+- **4.1 (UX cerrada por ahora, iterativa)**: se afinó el dashboard con el
+  operador. Cambios respecto del diseño inicial:
+  - Flujo **serie primero** + selector único **"Modelos (comparar)"** por
+    `(familia, versión)` (p. ej. `lightgbm v1`, `lightgbm v2`, `dmd v1`), que
+    alimenta **series e ICAP**. La familia se lee de param/tag `modelo` (o se
+    parsea del `run_name`); `train.py` ya setea el tag `modelo`.
+  - **ICAP_zona** se agrupa por `(modelo, versión)` (`zone_icap_by_model_version`),
+    nunca mezcla familias/versiones. Respeta el **split** (test/valid).
+  - **RMSE vs persistencia**: dos gráficos **lado a lado** (test y valid) para la
+    **serie seleccionada**, filtrados por el selector de modelos. El de valid
+    muestra **media por ventana con barras de error min–max** y tooltip con
+    `media/sd/min/max`; la tabla agrega `valid_sd`.
+  - El **fixture** se amplió a 19 runs (lightgbm v1/v2 + dmd v1 × 6 series +
+    persistencia) para poder comparar familias.
+  - El operador aclara que la revisión de gráficos es **continua**; se cierra
+    4.1 por ahora y se seguirá iterando.
+- **4.1 (4º diagnóstico `rolling_scores.parquet`)**: para el rango min–max del
+  CV hacía falta el RMSE por ventana (antes solo media/std). `train.py` ahora
+  persiste `rolling_scores.parquet` (`window_index, rmse`) junto a los otros 3
+  diagnósticos. Es un agregado respecto de los 3 artefactos que listaba 1.1;
+  validado con un run local (se generan los 4 parquet).
+- **Feature importance — PENDIENTE Fase 4 (stand by)**: el **gráfico** es
+  agnóstico (lee `feature_importance.parquet` con esquema
+  `estacion, pollutant, feature, gain`; si falta, el run se omite sin romper).
+  El **cálculo** es específico del modelo: LightGBM usa `feature_importance("gain")`;
+  para DMD/autoencoder (Fase 4) hay que definir el método (recomendado:
+  permutation importance sobre validación, agnóstico) y persistir el mismo
+  esquema. Evaluar además renombrar `gain` → `importance` para no atar la
+  columna a terminología de árboles. **Decisión del arquitecto**; reabrir al
+  encarar Fase 4.

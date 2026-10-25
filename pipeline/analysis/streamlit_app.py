@@ -3,6 +3,9 @@
 Uso local (contenedor o venv):
     streamlit run pipeline/analysis/streamlit_app.py --server.port 8501
 
+Flujo: se elige **primero la serie** (estación/contaminante) y luego **uno o
+varios runs** de esa serie (multi-select) para graficarlos/compararlos.
+
 Fuente de datos:
 - **S3 (real)**: descarga `s3://sinca-mlflow/_mlflow/` (necesita credenciales).
 - **Fixture local**: `pipeline/analysis/fixtures/state/` (sin AWS), para iterar.
@@ -46,30 +49,50 @@ def _artifacts(state_dir: str, run_id: str) -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def _zone_icap(state_dir: str, runs: list[dict]) -> pd.DataFrame:
-    return load.zone_icap_from_runs(state_dir, runs)
+def _zone_icap_by_model_version(state_dir: str, runs: list[dict], split: str) -> dict:
+    return load.zone_icap_by_model_version(state_dir, runs, split)
+
+
+@st.cache_data(show_spinner=False)
+def _rmse_by_model(state_dir: str, runs: list[dict], station: str, pollutant: str, selected: tuple[str, ...]) -> list[dict]:
+    return load.rmse_by_model(state_dir, runs, station, pollutant, set(selected))
 
 
 def _source_selector() -> str | None:
     options = ["S3 (real)"]
     if FIXTURE_STATE.is_dir():
         options.append("Fixture local")
-    choice = st.sidebar.radio("Fuente de datos", options, index=len(options) - 1 if len(options) > 1 else 0)
-    if choice == "Fixture local":
-        return str(FIXTURE_STATE)
-    return None
+    choice = st.sidebar.radio(
+        "Fuente de datos", options, index=len(options) - 1 if len(options) > 1 else 0
+    )
+    return str(FIXTURE_STATE) if choice == "Fixture local" else None
 
 
 def _run_label(run: dict) -> str:
-    params = run["params"]
-    if params.get("tipo") == "persistencia":
-        return "persistencia (referencia)"
-    return f"{run['run_name']} | {params.get('estacion', '?')} / {params.get('pollutant', '?')}"
+    return f"{run['run_name']} · {run['run_id'][:8]}"
+
+
+def _metrics_table(runs: list[dict]) -> pd.DataFrame:
+    rows = []
+    for run in runs:
+        metrics = run["metrics"]
+        rows.append(
+            {
+                "run": run["run_name"],
+                "run_id": run["run_id"][:8],
+                "test_rmse": metrics.get("test_rmse"),
+                "test_weighted_rmse": metrics.get("test_weighted_rmse"),
+                "rolling_weighted_rmse_mean": metrics.get("rolling_weighted_rmse_mean"),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def main() -> None:
     st.title("SINCA — Análisis de modelos")
-    st.caption("Baseline Fase 3 · series real vs predicho, ICAP_zona, feature importance y RMSE vs persistencia")
+    st.caption(
+        "Baseline Fase 3 · series real vs predicho, ICAP_zona, feature importance y RMSE vs persistencia"
+    )
 
     data_dir = _source_selector()
     try:
@@ -88,78 +111,130 @@ def main() -> None:
         st.warning("No hay runs de entrenamiento (solo persistencia).")
         st.stop()
 
-    # --- Sidebar: run y serie ------------------------------------------------
-    labels = {_run_label(run): run for run in training_runs}
-    selected_label = st.sidebar.selectbox("Run", list(labels.keys()))
-    selected_run = labels[selected_label]
-
+    # --- 1) Serie primero ----------------------------------------------------
     series = load.series_options(training_runs)
     series_labels = [f"{station} / {pollutant}" for station, pollutant in series]
     selected_series = st.sidebar.selectbox("Serie", series_labels)
     station, pollutant = series[series_labels.index(selected_series)]
 
-    split = st.sidebar.radio("Split (series)", ["test", "valid"], horizontal=True)
-
-    st.sidebar.markdown("---")
-    metrics = selected_run["metrics"]
-    st.sidebar.metric("test RMSE", f"{metrics.get('test_rmse', float('nan')):.2f}")
-    st.sidebar.metric("test weighted RMSE", f"{metrics.get('test_weighted_rmse', float('nan')):.2f}")
-    st.sidebar.metric(
-        "rolling weighted RMSE (mean)",
-        f"{metrics.get('rolling_weighted_rmse_mean', float('nan')):.2f}",
+    # --- 2) Modelos (selector único: alimenta series e ICAP) ----------------
+    # La unidad es `(familia, versión)`: agrupa los runs de las 6 series de esa
+    # generación. Así se distingue `lightgbm v1` de `dmd v1`, y el mismo selector
+    # maneja ambas pestañas.
+    model_versions = load.available_model_versions(training_runs)
+    model_version_labels = [f"{model} v{version}" for model, version in model_versions]
+    selected_models = st.sidebar.multiselect(
+        "Modelos (comparar)", model_version_labels, default=model_version_labels
     )
+    if not selected_models:
+        st.warning("Seleccioná al menos un modelo/versión.")
+        st.stop()
+    selected_model_keys = set(selected_models)
 
-    artifacts = _artifacts(state_dir, selected_run["run_id"])
-    predictions = artifacts["predictions.parquet"]
+    split = st.sidebar.radio("Split", ["test", "valid"], horizontal=True)
+
+    # Runs de la serie elegida para los modelos seleccionados.
+    series_runs = [
+        run
+        for run in training_runs
+        if run["params"].get("estacion") == station
+        and run["params"].get("pollutant") == pollutant
+        and f"{load.model_family(run)} v{run['params'].get('version')}" in selected_model_keys
+    ]
+    if not series_runs:
+        st.warning("No hay runs de esta serie para los modelos seleccionados.")
+        st.stop()
+
+    # --- Diagnósticos de los runs seleccionados -----------------------------
+    prediction_frames: dict[str, pd.DataFrame] = {}
+    importance_frames: dict[str, pd.DataFrame] = {}
+    missing: list[str] = []
+    for run in series_runs:
+        artifacts = _artifacts(state_dir, run["run_id"])
+        label = _run_label(run)
+        predictions = artifacts["predictions.parquet"]
+        importance = artifacts["feature_importance.parquet"]
+        if predictions is None or predictions.empty:
+            missing.append(run["run_name"])
+        else:
+            prediction_frames[label] = predictions
+        if importance is not None and not importance.empty:
+            importance_frames[label] = importance
 
     tab_series, tab_zone, tab_importance, tab_rmse = st.tabs(
         ["Series real vs pred", "ICAP zona", "Feature importance", "RMSE vs persistencia"]
     )
 
     with tab_series:
-        if predictions is None or predictions.empty:
+        if not prediction_frames:
             st.warning(
-                "Este run no tiene `predictions.parquet` persistido (corrida previa al change "
-                "`analisis-modelos`). Se muestran solo las métricas."
+                "Los runs seleccionados no tienen `predictions.parquet` persistido "
+                "(corridas previas al change `analisis-modelos`). Se muestran solo las métricas."
             )
-            st.dataframe(
-                pd.DataFrame(
-                    [{"métrica": key, "valor": value} for key, value in sorted(metrics.items())]
-                ),
-                hide_index=True,
-                width="stretch",
-            )
+            st.dataframe(_metrics_table(series_runs), hide_index=True, width="stretch")
         else:
-            st.plotly_chart(
-                plots.series_figure(predictions, station, pollutant, split),
-                width="stretch",
-            )
+            if missing:
+                st.info(
+                    "Sin diagnósticos persistidos para: " + ", ".join(sorted(set(missing)))
+                )
+            if len(prediction_frames) == 1:
+                only = next(iter(prediction_frames.values()))
+                figure = plots.series_figure(only, station, pollutant, split)
+            else:
+                figure = plots.series_comparison_figure(
+                    prediction_frames, station, pollutant, split
+                )
+            st.plotly_chart(figure, width="stretch")
 
     with tab_zone:
-        zone = _zone_icap(state_dir, training_runs)
-        if zone.empty:
-            st.info("No hay predicciones persistidas para derivar el ICAP_zona.")
+        zones = _zone_icap_by_model_version(state_dir, training_runs, split)
+        zones = {label: zones[label] for label in selected_models if label in zones}
+        if not zones:
+            st.info("No hay predicciones para los modelos seleccionados en este split.")
         else:
-            st.plotly_chart(plots.zone_icap_figure(zone), width="stretch")
-
-    with tab_importance:
-        importance = artifacts["feature_importance.parquet"]
-        if importance is None or importance.empty:
-            st.info("Este run no tiene `feature_importance.parquet` persistido.")
-        else:
-            top_n = st.slider("Top N features", 5, 30, 15)
             st.plotly_chart(
-                plots.feature_importance_figure(importance, station, pollutant, top_n=top_n),
-                width="stretch",
+                plots.zone_icap_comparison_figure(zones, split), width="stretch"
             )
 
-    with tab_rmse:
-        summary = load.rmse_summary(runs)
-        if summary.empty:
-            st.info("No hay métricas de RMSE para comparar.")
+    with tab_importance:
+        if not importance_frames:
+            st.info("Los runs seleccionados no tienen `feature_importance.parquet` persistido.")
         else:
-            st.plotly_chart(plots.rmse_comparison_figure(summary), width="stretch")
-            st.dataframe(summary, hide_index=True, width="stretch")
+            top_n = st.slider("Top N features", 5, 30, 15)
+            if len(importance_frames) == 1:
+                only = next(iter(importance_frames.values()))
+                figure = plots.feature_importance_figure(
+                    only, station, pollutant, top_n=top_n
+                )
+            else:
+                figure = plots.feature_importance_comparison_figure(
+                    importance_frames, top_n=top_n
+                )
+            st.plotly_chart(figure, width="stretch")
+
+    with tab_rmse:
+        rows = _rmse_by_model(
+            state_dir, runs, station, pollutant, tuple(sorted(selected_models))
+        )
+        col_test, col_valid = st.columns(2)
+        with col_test:
+            st.subheader(f"Test — {station} / {pollutant}")
+            if not any(row["test_rmse"] is not None for row in rows):
+                st.info("Sin métricas de test para esta serie.")
+            else:
+                st.plotly_chart(plots.rmse_test_figure(rows), width="stretch")
+        with col_valid:
+            st.subheader(f"Valid (CV) — {station} / {pollutant}")
+            if not any(row["valid_mean"] is not None for row in rows):
+                st.info("Sin métricas de validación (ventana deslizante).")
+            else:
+                st.plotly_chart(plots.rmse_valid_figure(rows), width="stretch")
+
+        if any(row["valid_mean"] is not None for row in rows):
+            st.caption(
+                "La persistencia no se evalúa en la ventana deslizante (solo en test)."
+            )
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 
 if __name__ == "__main__":

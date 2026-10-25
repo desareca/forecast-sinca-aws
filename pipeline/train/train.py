@@ -281,12 +281,14 @@ def log_diagnostics(
     booster,
     station: str,
     pollutant: str,
+    rolling_scores: list[float] | None = None,
 ) -> dict[str, str]:
     """Loguea como artefactos MLflow los diagnósticos del run.
 
-    Escribe `predictions.parquet`, `feature_importance.parquet` y
-    `zone_icap.parquet` en un dir temporal con los nombres canónicos y los
-    loguea al directorio de artefactos del run (`mlruns/<exp>/<run>/artifacts/`),
+    Escribe `predictions.parquet`, `feature_importance.parquet`,
+    `zone_icap.parquet` y `rolling_scores.parquet` (RMSE ponderado por ventana,
+    para el rango min–max del CV) en un dir temporal con los nombres canónicos y
+    los loguea al directorio de artefactos del run (`mlruns/<exp>/<run>/artifacts/`),
     no a `model-artifacts/` (que `sinca-dev-role` no lee).
     """
     import mlflow
@@ -306,10 +308,15 @@ def log_diagnostics(
     paths["zone_icap"] = os.path.join(diag_dir, "zone_icap.parquet")
     zone.to_parquet(paths["zone_icap"], index=False)
 
+    scores = list(rolling_scores or [])
+    scores_frame = pd.DataFrame({"window_index": range(len(scores)), "rmse": scores})
+    paths["rolling_scores"] = os.path.join(diag_dir, "rolling_scores.parquet")
+    scores_frame.to_parquet(paths["rolling_scores"], index=False)
+
     mlflow.log_artifacts(diag_dir)
     log.info(
-        "Diagnósticos logueados (%s/%s): predictions=%d, features=%d, zone_icap=%d",
-        station, pollutant, len(predictions), len(importance), len(zone),
+        "Diagnósticos logueados (%s/%s): predictions=%d, features=%d, zone_icap=%d, ventanas=%d",
+        station, pollutant, len(predictions), len(importance), len(zone), len(scores),
     )
     return paths
 
@@ -433,7 +440,7 @@ def run(args: argparse.Namespace) -> int:
             mlflow.log_metrics(_finite_metrics(metrics))
             mlflow.log_artifact(model_path)
             mlflow.log_artifact(report_path)
-            log_diagnostics(rolling_frame, test_frame, final_booster, station, pollutant)
+            log_diagnostics(rolling_frame, test_frame, final_booster, station, pollutant, rolling_scores)
 
         if not args.no_upload:
             mlflow_log.upload_model_artifact(model_path, args.mlflow_bucket, name, client=client)
