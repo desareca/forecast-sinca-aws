@@ -108,3 +108,12 @@
   esquema. Evaluar además renombrar `gain` → `importance` para no atar la
   columna a terminología de árboles. **Decisión del arquitecto**; reabrir al
   encarar Fase 4.
+- **PENDIENTE — trabajar desde VS Code local en SageMaker**: el flujo de
+  conexión remota (SSH-over-SSM vía AWS Toolkit → "Start and connect") está
+  bloqueado por el bug `aws/aws-toolkit-vscode#7915` (el `detached-server` de la
+  extensión no encuentra chunks de webpack, p. ej. `130.js`). No es un problema
+  de infra ni de IAM: `aws sagemaker start-session` funciona y devuelve sesión
+  válida. **Queda pendiente buscar una manera de trabajar desde VS Code local
+  contra el Space** (alternativas a evaluar: método SSH CLI de la doc de remote
+  access, `sagemaker-ssh-helper`, o esperar el fix del bug). Mientras tanto, el
+  Space se usa por la web de JupyterLab.
