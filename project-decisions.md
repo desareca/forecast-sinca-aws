@@ -79,9 +79,10 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 2. `setup-mlflow-ci-cd` — MLflow self-hosted (Fargate), OIDC + 3 workflows. **(completado)**
 3. `data-pipeline` (Fase 2) — scraper SINCA/Open-Meteo/feriados + ICAP + pandera. **(completado)**
 4. `baseline` (Fase 3) — persistencia + modelo simple (LightGBM lags). **(completado)**
-5. `experimentos-avanzados` (Fase 4) — autoencoder + DMD/Koopman.
-6. `evaluacion` (Fase 5) — comparar baseline + referencia pública.
-7. `productivizacion` (Fase 6) — reentrenamiento semanal + inferencia diaria.
+5. `analisis-modelos` (Fase 3.5) — dashboard Streamlit + persistencia de diagnósticos por run.
+6. `experimentos-avanzados` (Fase 4) — autoencoder + DMD/Koopman.
+7. `evaluacion` (Fase 5) — comparar baseline + referencia pública.
+8. `productivizacion` (Fase 6) — reentrenamiento semanal + inferencia diaria.
 
 ## 9. Decisiones cerradas
 

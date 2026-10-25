@@ -69,14 +69,63 @@ claves ni credenciales en el repo).
 
 ## Análisis (dashboard y notebooks)
 
-- **Dashboard Streamlit** (change `analisis-modelos`, on-demand): se correrá en
-  el Space — `streamlit run pipeline/analysis/streamlit_app.py --server.port 8501`
-  — y se ve por port-forward del 8501 en VS Code. Para iterar los gráficos sin
-  AWS: contenedor local (`docker/analysis.Dockerfile`).
-- **Notebook base**: `notebooks/analisis_baseline.ipynb` (plantilla versionada)
-  para análisis puntuales en JupyterLab del Space. Encender = Space `sinca-dev`
-  → Open Studio; apagar = Spaces → `sinca-dev` → Stop. Los notebooks puntuales
-  están en `.gitignore`; versioná el que quieras conservar con `git add -f`.
+### Dashboard Streamlit (on-demand)
+
+Dashboard interactivo para revisar el baseline por run: series real vs predicho
+con bandas ICAP, `ICAP_zona` real vs predicho, feature importance y RMSE
+LightGBM vs persistencia. Lee los diagnósticos que persiste cada run
+(`predictions.parquet`, `feature_importance.parquet`, `zone_icap.parquet`) desde
+`s3://sinca-mlflow/_mlflow/`, sin servidor MLflow. Si un run no tiene
+diagnósticos (corridas viejas), muestra solo métricas con un aviso.
+
+**Local en contenedor (contra el fixture, sin AWS):**
+
+```powershell
+# Genera el estado MLflow sintético (una vez, o cuando cambie el fixture)
+python pipeline/analysis/fixtures/make_fixture.py
+
+docker build -f docker/analysis.Dockerfile -t sinca-analysis .
+docker run --rm -p 8501:8501 -v "${PWD}:/app" sinca-analysis `
+  pipeline/analysis/streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+```
+
+Abrí http://localhost:8501. El código va montado como volumen (hot-reload sin
+rebuild). Para datos reales desde el contenedor, montá `~/.aws` y pasá
+`-e AWS_PROFILE -e AWS_DEFAULT_REGION`.
+
+**En el Space (datos reales, port-forward):**
+
+```bash
+# Dentro del Space sinca-dev (VS Code -> AWS Toolkit -> Start and connect)
+git pull
+pip install -r requirements-analysis.txt
+streamlit run pipeline/analysis/streamlit_app.py --server.port 8501
+```
+
+Luego, en VS Code, port-forward del **8501** y abrí `http://localhost:8501`. Al
+terminar, **apagá el Space** (Spaces → `sinca-dev` → Stop) para no dejar cómputo
+corriendo (~USD 0.06/h).
+
+**Dependencias:** `requirements-analysis.txt` es la fuente única para el
+contenedor local y para el venv del Space (streamlit, plotly, pandas, mlflow,
+boto3, pyarrow).
+
+### Notebook de análisis puntual
+
+`notebooks/analisis_baseline.ipynb` es una plantilla versionada para análisis
+ad-hoc en JupyterLab del Space (no es código de producción ni fuente de verdad).
+Flujo:
+
+1. **Encender**: SageMaker Studio → **Spaces** → `sinca-dev` → **Open** (o
+   **Start and connect** desde VS Code/AWS Toolkit).
+2. **Trabajar**: abrir el notebook en JupyterLab del Space. Corre con el rol del
+   Space (`sinca-dev-role`), sin credenciales explícitas; lee
+   `sinca-data/validated/` y `sinca-mlflow/_mlflow/`.
+3. **Apagar**: **Spaces** → `sinca-dev` → **Stop** (el EBS persiste; solo deja de
+   cobrar el cómputo).
+
+Los notebooks puntuales están en `.gitignore`; versioná el que quieras conservar
+con `git add -f`.
 
 ## Servidor MLflow (on-demand)
 

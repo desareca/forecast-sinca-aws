@@ -32,6 +32,7 @@ import logging
 import os
 import pathlib
 import sys
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -47,6 +48,7 @@ from evaluate.evaluate import (
     regular_threshold,
     sample_weights,
     weighted_rmse,
+    zone_icap,
 )
 from features.build import (
     FEATURE_COLUMNS,
@@ -239,6 +241,79 @@ def _prediction_frame(df: pd.DataFrame, prediction: np.ndarray) -> pd.DataFrame:
     return out
 
 
+PREDICTIONS_COLUMNS = ["timestamp", "estacion", "pollutant", "y_true", "y_pred", "split"]
+
+
+def _diagnostics_predictions(rolling_frame: pd.DataFrame, test_frame: pd.DataFrame) -> pd.DataFrame:
+    """Predicciones del rolling (valid) + test held-out, con columna `split`."""
+    frames: list[pd.DataFrame] = []
+    if not rolling_frame.empty:
+        valid = rolling_frame.copy()
+        valid["split"] = "valid"
+        frames.append(valid)
+    if not test_frame.empty:
+        test = test_frame.copy()
+        test["split"] = "test"
+        frames.append(test)
+    if not frames:
+        return pd.DataFrame(columns=PREDICTIONS_COLUMNS)
+    out = pd.concat(frames, ignore_index=True)
+    return out[PREDICTIONS_COLUMNS]
+
+
+def _feature_importance_frame(booster, station: str, pollutant: str) -> pd.DataFrame:
+    """Gain por feature para una serie (`booster.feature_importance("gain")`)."""
+    names = list(booster.feature_name())
+    gains = booster.feature_importance("gain")
+    return pd.DataFrame(
+        {
+            "estacion": station,
+            "pollutant": pollutant,
+            "feature": names,
+            "gain": [float(gain) for gain in gains],
+        }
+    )
+
+
+def log_diagnostics(
+    rolling_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    booster,
+    station: str,
+    pollutant: str,
+) -> dict[str, str]:
+    """Loguea como artefactos MLflow los diagnósticos del run.
+
+    Escribe `predictions.parquet`, `feature_importance.parquet` y
+    `zone_icap.parquet` en un dir temporal con los nombres canónicos y los
+    loguea al directorio de artefactos del run (`mlruns/<exp>/<run>/artifacts/`),
+    no a `model-artifacts/` (que `sinca-dev-role` no lee).
+    """
+    import mlflow
+
+    diag_dir = tempfile.mkdtemp(prefix="sinca-diag-")
+    paths: dict[str, str] = {}
+
+    predictions = _diagnostics_predictions(rolling_frame, test_frame)
+    paths["predictions"] = os.path.join(diag_dir, "predictions.parquet")
+    predictions.to_parquet(paths["predictions"], index=False)
+
+    importance = _feature_importance_frame(booster, station, pollutant)
+    paths["feature_importance"] = os.path.join(diag_dir, "feature_importance.parquet")
+    importance.to_parquet(paths["feature_importance"], index=False)
+
+    zone = zone_icap(test_frame)
+    paths["zone_icap"] = os.path.join(diag_dir, "zone_icap.parquet")
+    zone.to_parquet(paths["zone_icap"], index=False)
+
+    mlflow.log_artifacts(diag_dir)
+    log.info(
+        "Diagnósticos logueados (%s/%s): predictions=%d, features=%d, zone_icap=%d",
+        station, pollutant, len(predictions), len(importance), len(zone),
+    )
+    return paths
+
+
 def save_booster(booster, model_dir: str, name: str) -> str:
     os.makedirs(model_dir, exist_ok=True)
     path = os.path.join(model_dir, f"{name}.txt")
@@ -358,6 +433,7 @@ def run(args: argparse.Namespace) -> int:
             mlflow.log_metrics(_finite_metrics(metrics))
             mlflow.log_artifact(model_path)
             mlflow.log_artifact(report_path)
+            log_diagnostics(rolling_frame, test_frame, final_booster, station, pollutant)
 
         if not args.no_upload:
             mlflow_log.upload_model_artifact(model_path, args.mlflow_bucket, name, client=client)
