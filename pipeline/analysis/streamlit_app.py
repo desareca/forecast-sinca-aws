@@ -58,6 +58,13 @@ def _rmse_by_model(state_dir: str, runs: list[dict], station: str, pollutant: st
     return load.rmse_by_model(state_dir, runs, station, pollutant, set(selected))
 
 
+@st.cache_data(show_spinner=False)
+def _candidates_by_model(
+    state_dir: str, runs: list[dict], station: str, pollutant: str, selected: tuple[str, ...]
+) -> dict[str, pd.DataFrame]:
+    return load.candidates_by_model(state_dir, runs, station, pollutant, set(selected))
+
+
 def _source_selector() -> str | None:
     options = ["S3 (real)"]
     if FIXTURE_STATE.is_dir():
@@ -224,8 +231,19 @@ def main() -> None:
             else:
                 st.plotly_chart(plots.rmse_test_figure(rows), width="stretch")
         with col_valid:
-            st.subheader(f"Valid (CV) — {station} / {pollutant}")
-            if not any(row["valid_mean"] is not None for row in rows):
+            st.subheader(f"Valid (CV) - {station} / {pollutant}")
+            candidates = _candidates_by_model(
+                state_dir, training_runs, station, pollutant, tuple(sorted(selected_models))
+            )
+            if candidates:
+                st.plotly_chart(plots.rmse_candidates_figure(candidates), width="stretch")
+                st.caption(
+                    "Cada barra es un candidato del random search (score = RMSE ponderado "
+                    "medio sobre las 12 ventanas del search, el criterio con que se elige el "
+                    "ganador). El rombo marca el elegido. La tabla muestra la validación "
+                    "completa (42 ventanas) del modelo final."
+                )
+            elif not any(row["valid_mean"] is not None for row in rows):
                 st.info("Sin métricas de validación (ventana deslizante).")
             else:
                 st.plotly_chart(plots.rmse_valid_figure(rows), width="stretch")

@@ -16,6 +16,7 @@ helpers devuelven `None` y el dashboard muestra "solo métricas" con aviso.
 from __future__ import annotations
 
 import glob
+import json
 import logging
 import os
 import pathlib
@@ -165,6 +166,67 @@ def has_diagnostics(state_dir: str, run_id: str) -> bool:
     if not directory:
         return False
     return os.path.exists(os.path.join(directory, "predictions.parquet"))
+
+
+def search_candidates(state_dir: str, run: dict) -> pd.DataFrame | None:
+    """Candidatos del random search de un run, desde su JSON de reporte.
+
+    Devuelve `DataFrame[trial, score, params]` o `None` si el run no tiene el
+    reporte (persistencia o corridas previas al change).
+
+    `score` es el RMSE ponderado **promedio sobre las ventanas del search**
+    (`--search-windows`, 12 por defecto): es el criterio con el que se elige el
+    ganador, y **no** es comparable con el `rolling_scores.parquet`, que cubre
+    las 42 ventanas de la validación completa.
+    """
+    directory = _artifact_dir(state_dir, run["run_id"])
+    if not directory:
+        return None
+    for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                report = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        history = report.get("search_history") if isinstance(report, dict) else None
+        if not history:
+            continue
+        rows = [
+            {
+                "trial": int(item["trial"]),
+                "score": float(item["score"]),
+                "params": item.get("params", {}),
+            }
+            for item in history
+            if item.get("score") is not None
+        ]
+        if rows:
+            return pd.DataFrame(rows)
+    return None
+
+
+def candidates_by_model(
+    state_dir: str,
+    runs: list[dict],
+    station: str,
+    pollutant: str,
+    selected_labels: set[str] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Candidatos del search por modelo `(familia, versión)` de una serie."""
+    out: dict[str, pd.DataFrame] = {}
+    for run in runs:
+        params = run["params"]
+        if params.get("tipo") == "persistencia":
+            continue
+        if params.get("estacion") != station or params.get("pollutant") != pollutant:
+            continue
+        label = f"{model_family(run)} v{params.get('version')}"
+        if selected_labels is not None and label not in selected_labels:
+            continue
+        candidates = search_candidates(state_dir, run)
+        if candidates is not None and not candidates.empty:
+            out[label] = candidates
+    return out
 
 
 # --- Derivados ---------------------------------------------------------------

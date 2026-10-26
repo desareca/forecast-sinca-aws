@@ -314,18 +314,13 @@ def rmse_test_figure(rows: list[dict]) -> go.Figure:
 
 
 def rmse_valid_figure(rows: list[dict]) -> go.Figure:
-    """Barras de RMSE de valid (CV): media por ventana con rango min–max."""
+    """Barras de RMSE de valid (CV): media por ventana, sin rango min–max.
+
+    Fallback para runs sin reporte del search (sin candidatos que graficar).
+    """
     model_rows = [row for row in rows if row.get("valid_mean") is not None]
     labels = [row["label"] for row in model_rows]
     means = [row["valid_mean"] for row in model_rows]
-    upper = [
-        (row["valid_max"] - row["valid_mean"]) if row.get("valid_max") is not None else 0.0
-        for row in model_rows
-    ]
-    lower = [
-        (row["valid_mean"] - row["valid_min"]) if row.get("valid_min") is not None else 0.0
-        for row in model_rows
-    ]
 
     def _fmt(value):
         return f"{value:.2f}" if value is not None else "—"
@@ -343,25 +338,73 @@ def rmse_valid_figure(rows: list[dict]) -> go.Figure:
         go.Bar(
             x=labels, y=means,
             marker_color=COLOR_LGBM,
-            error_y={
-                "type": "data",
-                "symmetric": False,
-                "array": upper,
-                "arrayminus": lower,
-                "color": COLOR_TRUE,
-                "thickness": 1.2,
-                "width": 6,
-            },
             text=hover_text,
             textposition="none",
             hovertemplate="%{text}<extra></extra>",
         )
     )
     fig.update_layout(
-        title="RMSE de valid (ventana deslizante) — media con rango min–max",
+        title="RMSE de valid (ventana deslizante) — media",
         xaxis_title="modelo",
         yaxis_title="RMSE (µg/m³)",
         margin={"l": 40, "r": 20, "t": 60, "b": 60},
         height=420,
+    )
+    return fig
+
+
+CANDIDATE_COLORS = (COLOR_LGBM, "#0f766e", "#7c3aed", "#b45309")
+
+
+def rmse_candidates_figure(candidates_by_model: dict[str, pd.DataFrame]) -> go.Figure:
+    """Barras del `score` de cada candidato del search (una barra por trial).
+
+    `score` = RMSE ponderado promedio sobre las ventanas del search (12 por
+    defecto). Todos los candidatos del modelo elegido van en el gráfico; el
+    ganador (menor score) se marca con un rombo.
+    """
+    fig = go.Figure()
+    for index, (label, frame) in enumerate(sorted(candidates_by_model.items())):
+        frame = frame.sort_values("trial")
+        color = CANDIDATE_COLORS[index % len(CANDIDATE_COLORS)]
+        winner_trial = int(frame.loc[frame["score"].idxmin(), "trial"])
+        x = [f"c{int(trial)}" for trial in frame["trial"]]
+        hover_text = [
+            f"<b>{label}</b> · candidato {int(row.trial)}<br>"
+            f"score: {row.score:.2f}"
+            + ("<br>★ ganador" if int(row.trial) == winner_trial else "")
+            for row in frame.itertuples()
+        ]
+        fig.add_bar(
+            name=label,
+            x=x,
+            y=frame["score"],
+            marker_color=color,
+            marker_opacity=0.55,
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        )
+        winner = frame[frame["trial"] == winner_trial].iloc[0]
+        fig.add_scatter(
+            x=[f"c{winner_trial}"],
+            y=[winner["score"]],
+            mode="markers",
+            marker={
+                "symbol": "diamond",
+                "size": 12,
+                "color": "white",
+                "line": {"width": 2.5, "color": color},
+            },
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    fig.update_layout(
+        title="RMSE de valid (CV) — candidatos del search",
+        xaxis_title="candidato (trial del random search)",
+        yaxis_title="RMSE (µg/m³)",
+        margin={"l": 40, "r": 20, "t": 60, "b": 60},
+        height=420,
+        barmode="group",
+        bargap=0.15,
     )
     return fig

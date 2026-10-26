@@ -10,6 +10,7 @@ Uso:
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import shutil
 import sys
@@ -69,7 +70,41 @@ def _importance(station: str, pollutant: str, rng) -> pd.DataFrame:
     )
 
 
-def _log_run(name: str, params: dict, metrics: dict, frames: dict[str, pd.DataFrame]) -> None:
+def _search_history(rng, base_score: float) -> tuple[list[dict], dict]:
+    """20 candidatos señuelo del search; el ganador es el de menor score."""
+    space = {
+        "learning_rate": [0.01, 0.05, 0.1],
+        "num_leaves": [31, 63, 127],
+        "min_child_samples": [20, 50, 100],
+        "subsample": [0.7, 0.8, 1.0],
+        "colsample_bytree": [0.7, 0.8, 1.0],
+        "reg_alpha": [0.0, 0.1, 1.0],
+        "reg_lambda": [0.0, 0.1, 1.0],
+    }
+    history = []
+    for trial in range(20):
+        params = {
+            name: values[int(rng.integers(len(values)))] for name, values in space.items()
+        }
+        history.append(
+            {
+                "trial": trial,
+                "params": params,
+                "score": float(base_score + rng.normal(0.0, 1.4)),
+            }
+        )
+    best = min(history, key=lambda item: item["score"])
+    best["score"] = float(best["score"] - 1.0)
+    return history, best["params"]
+
+
+def _log_run(
+    name: str,
+    params: dict,
+    metrics: dict,
+    frames: dict[str, pd.DataFrame],
+    json_artifacts: dict[str, dict] | None = None,
+) -> None:
     import mlflow
 
     with mlflow.start_run(run_name=name):
@@ -79,6 +114,10 @@ def _log_run(name: str, params: dict, metrics: dict, frames: dict[str, pd.DataFr
         with tempfile.TemporaryDirectory(prefix="sinca-fixture-") as tmp:
             for filename, frame in frames.items():
                 frame.to_parquet(pathlib.Path(tmp) / filename, index=False)
+            for filename, payload in (json_artifacts or {}).items():
+                (pathlib.Path(tmp) / filename).write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
             mlflow.log_artifacts(tmp)
 
 
@@ -113,6 +152,8 @@ def main() -> int:
                 metrics["rolling_weighted_rmse_mean"] = float(rolling_scores.mean())
                 metrics["rolling_weighted_rmse_std"] = float(rolling_scores.std())
 
+                history, best_params = _search_history(rng, float(rolling_scores.mean()))
+
                 _log_run(
                     mlflow_log.run_name(station, model, version),
                     {
@@ -135,6 +176,16 @@ def main() -> int:
                                 "rmse": rolling_scores,
                             }
                         ),
+                    },
+                    json_artifacts={
+                        f"{mlflow_log.run_name(station, model, version)}.json": {
+                            "estacion": station,
+                            "pollutant": pollutant,
+                            "model": model,
+                            "version": version,
+                            "best_params": best_params,
+                            "search_history": history,
+                        }
                     },
                 )
 
