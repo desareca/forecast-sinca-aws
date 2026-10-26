@@ -148,8 +148,22 @@ docker run --rm -p 8501:8501 -v "${PWD}:/app" sinca-analysis `
 ```
 
 Abrí http://localhost:8501. El código va montado como volumen (hot-reload sin
-rebuild). Para datos reales desde el contenedor, montá `~/.aws` y pasá
-`-e AWS_PROFILE -e AWS_DEFAULT_REGION`.
+rebuild). En el panel lateral, **Fuente de datos → `S3 (real)`** (por defecto
+arranca en el fixture, si está generado).
+
+Para datos reales desde el contenedor hace falta montar las credenciales:
+
+```powershell
+docker run --rm -p 8501:8501 -v "${PWD}:/app" `
+  -v "$HOME/.aws/credentials:/root/.aws/credentials:ro" `
+  -e AWS_PROFILE=<profile> -e AWS_DEFAULT_REGION=us-east-1 sinca-analysis `
+  pipeline/analysis/streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+```
+
+> Se monta **solo `credentials`**, no todo `~/.aws`: el `config` del Space define
+> `ca_bundle` con una ruta de Linux (`/home/desareca/.aws/...`) que no existe en
+> el contenedor, y boto3 falla con `SSLError`. La región va por
+> `AWS_DEFAULT_REGION`.
 
 **En el Space (datos reales, port-forward):**
 

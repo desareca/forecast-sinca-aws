@@ -40,7 +40,8 @@
   <!-- 2026-10-26: job `sinca-baseline-train-2026-10-26-15-55-51-226` → Completed (2380 s facturables, ~40 min). 6 series LightGBM + persistencia; `Estado MLflow subido ... 38 objetos`. -->
 - [x] 6.3 Verificar en S3 que aparecen `predictions.parquet`, `feature_importance.parquet` y `zone_icap.parquet` bajo `s3://sinca-mlflow/_mlflow/mlruns/.../artifacts/`
   <!-- 2026-10-26: 7 run dirs; 6 runs LightGBM × 4 parquet (6 predictions, 6 feature_importance, 6 zone_icap, 6 rolling_scores) = 24 parquet; 39 objetos totales (sqlite + code/ + modelos). Persistencia sin parquet (esperado). -->
-- [ ] 6.4 Levantar el dashboard en el Space (`git pull` + `pip install -r requirements-analysis.txt` + `streamlit run pipeline/analysis/streamlit_app.py --server.port 8501`) y port-forward del 8501
+- [x] 6.4 Levantar el dashboard en el Space (`git pull` + `pip install -r requirements-analysis.txt` + `streamlit run pipeline/analysis/streamlit_app.py --server.port 8501`) y port-forward del 8501
+  <!-- 2026-10-26: ejecutado con Docker local contra S3 real (opcion A aprobada por el operador), no en el Space: el port-forward depende de la conexion remota de VS Code, bloqueada por aws-toolkit-vscode#7915. `/_stcore/health`=ok en :8501; AppTest sin excepciones. -->
 
 ## 7. Verificación funcional
 
@@ -214,3 +215,24 @@
   GitHub (no hay TTY para responder el prompt). El `|| true` se mantiene: si la
   key todavía no existe, el clone falla callado y el operador lo hace a mano
   después de generarla (paso documentado en README).
+- **6.4 (desvío aprobado: Docker local, no el Space)**: el port-forward del 8501
+  depende de la conexión remota de VS Code, bloqueada por
+  `aws/aws-toolkit-vscode#7915`. Con el operador se eligió correr el dashboard
+  en **Docker local contra S3 real** (misma app, mismos datos). Se levantó con
+  el código montado (`-v ${PWD}:/app`): `/_stcore/health` = `ok` y `AppTest`
+  sin excepciones, 4 tabs y 5 figuras. **Queda a criterio del arquitecto** si la
+  tarea se reescribe como "Docker local contra S3" o se deja el Space para
+  cuando se resuelva el bug.
+- **6.4 (hallazgo: montar todo `~/.aws` rompe el contenedor)**: el `config` del
+  Space define `ca_bundle = /home/desareca/.aws/desareca-ca-bundle.pem`; al
+  montar `~/.aws` completo, boto3 intenta leer esa ruta de Linux y falla con
+  `SSLError: [Errno 2] No such file or directory`. Solución documentada en
+  README: montar **solo** `~/.aws/credentials` y pasar la región por
+  `AWS_DEFAULT_REGION`. (Además, el shell del operador tiene `AWS_PROFILE=evolet`
+  de otra cuenta: en este proyecto siempre se pasa `desareca_dev` explícito.)
+- **7.1 (verificación programática)**: con el estado real descargado de S3, se
+  recalculó el RMSE sobre `predictions.parquet` (split `test`) por serie y se
+  comparó contra el `test_rmse` del `mlflow.sqlite`: **delta 0.0 en las 6
+  series** (19.6646 / 19.4533 / 17.6652 / 16.5959 / 28.7509 / 27.7482).
+  `feature_importance` 22 filas y `zone_icap` ~1.9k filas por run. El run de
+  persistencia degrada a "solo métricas" sin fallar (requisito de degradación).
