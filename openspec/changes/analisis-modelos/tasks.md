@@ -36,8 +36,10 @@
 
 - [x] 6.1 Reset del tracking (borrado aprobado, "partir de 0"): `aws s3 rm s3://sinca-mlflow/_mlflow/ --recursive` y `aws s3 rm s3://sinca-mlflow/model-artifacts/ --recursive`; pegar output real
   <!-- 2026-10-26: 17 objetos / 49 MB borrados (7 runs viejos + sqlite + code/ + model-artifacts). Output real del operador pegado en sesión. -->
-- [ ] 6.2 Re-correr el Training Job completo: `python pipeline/train/launch.py --role-arn <arn> --image-uri <uri>:latest --wait` → 7 runs limpios (`sinca-{estacion}-lightgbm-v1` × 6 + `sinca-persistence-baseline`)
-- [ ] 6.3 Verificar en S3 que aparecen `predictions.parquet`, `feature_importance.parquet` y `zone_icap.parquet` bajo `s3://sinca-mlflow/_mlflow/mlruns/.../artifacts/`
+- [x] 6.2 Re-correr el Training Job completo: `python pipeline/train/launch.py --role-arn <arn> --image-uri <uri>:latest --wait` → 7 runs limpios (`sinca-{estacion}-lightgbm-v1` × 6 + `sinca-persistence-baseline`)
+  <!-- 2026-10-26: job `sinca-baseline-train-2026-10-26-15-55-51-226` → Completed (2380 s facturables, ~40 min). 6 series LightGBM + persistencia; `Estado MLflow subido ... 38 objetos`. -->
+- [x] 6.3 Verificar en S3 que aparecen `predictions.parquet`, `feature_importance.parquet` y `zone_icap.parquet` bajo `s3://sinca-mlflow/_mlflow/mlruns/.../artifacts/`
+  <!-- 2026-10-26: 7 run dirs; 6 runs LightGBM × 4 parquet (6 predictions, 6 feature_importance, 6 zone_icap, 6 rolling_scores) = 24 parquet; 39 objetos totales (sqlite + code/ + modelos). Persistencia sin parquet (esperado). -->
 - [ ] 6.4 Levantar el dashboard en el Space (`git pull` + `pip install -r requirements-analysis.txt` + `streamlit run pipeline/analysis/streamlit_app.py --server.port 8501`) y port-forward del 8501
 
 ## 7. Verificación funcional
