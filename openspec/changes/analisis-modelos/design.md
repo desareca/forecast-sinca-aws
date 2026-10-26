@@ -61,6 +61,15 @@ Los 7 runs actuales del baseline no tienen predicciones persistidas y comparten 
 
 Además del dashboard (vista "fija" de resultados), se deja un notebook base (`notebooks/analisis_baseline.ipynb`) para que el operador desarrolle análisis puntuales/ad-hoc en JupyterLab del Space. Corre con el rol `sinca-dev-role` (sin credenciales) y lee las mismas fuentes que el dashboard (validated + MLflow). No es código de producción ni fuente de verdad: es scratch persistido en el EBS del Space. Para evitar sobrecostos, la guía de encendido/trabajo/apagado va en el README.
 
+### 8. Scripts locales de start/stop del Space (no versionados)
+
+El ciclo de ahorro del Space es "Stop" (borra el app = cómputo, conserva EFS/EBS) y "Open" (recrea el app). Pero la consola a veces no recrea el app al "Open" y tira "App [default] ... is not found or in unusable state" (el Space queda `InService` con `list-apps` vacío). Para un ciclo confiable se dejan dos scripts PowerShell locales:
+
+- `start-space.ps1` — idempotente: si el app está `InService` no hace nada; si existe en mal estado lo borra y recrea; si no existe lo crea. Luego espera `InService` (poll de `describe-app`).
+- `stop-space.ps1` — `delete-app` (apaga el cómputo, conserva EFS/EBS).
+
+Llevan el profile y account reales (`AWS_PROFILE`, `AWS_ACCOUNT_ID`) y el `DOMAIN_ID`, por lo que **no se versionan**: van en `.gitignore` (mismo patrón que `terraform.tfvars`/`backend.hcl`). Se versiona un par `.example` con placeholders como referencia, y el flujo se documenta en el README (sección "Entorno de desarrollo"). Alternativa considerada (usar solo la consola) descartada por el quirk del app; alternativa (versionar los `.ps1` con valores reales) descartada por la regla fija de no commitear credenciales.
+
 ## Risks / Trade-offs
 
 - **El dashboard depende de diagnósticos persistidos** → si un run no los tiene (p. ej. corridas viejas), degrada a "solo métricas" con aviso, no falla.

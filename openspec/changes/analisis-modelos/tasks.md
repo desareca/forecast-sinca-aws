@@ -43,6 +43,59 @@
 
 - [ ] 7.1 Ver el dashboard con datos reales: series real vs pred, `ICAP_zona`, RMSE vs persistencia y feature importance, confirmando con output/captura real que coinciden con las métricas de MLflow
 
+## 8. Scripts locales de start/stop del Space (no versionados)
+
+- [ ] 8.1 Agregar a `.gitignore` (sección Terraform, junto a `backend.hcl`):
+  `infra/scripts/start-space.ps1` y `infra/scripts/stop-space.ps1` — llevan el
+  profile y account reales, nunca se commitean
+- [ ] 8.2 Crear `infra/scripts/start-space.ps1.example` y
+  `infra/scripts/stop-space.ps1.example` con placeholders (`AWS_PROFILE`,
+  `AWS_ACCOUNT_ID`, `DOMAIN_ID`), siguiendo la convención de
+  `terraform.tfvars.example`. Contenido de referencia (el operador copia el
+  `.example` a `.ps1` y completa los placeholders):
+
+  `start-space.ps1.example` — arranca el app JupyterLab (idempotente: crea si
+  falta, o borra y recrea si quedó en mal estado) y espera `InService`:
+
+  ```powershell
+  $env:AWS_PROFILE = "AWS_PROFILE"
+  $domain = "DOMAIN_ID"
+  $spec   = "InstanceType=ml.t3.large,LifecycleConfigArn=arn:aws:sagemaker:us-east-1:AWS_ACCOUNT_ID:studio-lifecycle-config/sinca-on-start"
+
+  $existing = aws sagemaker list-apps --domain-id-equals $domain --space-name-equals sinca-dev --profile $env:AWS_PROFILE --query "Apps[?AppName=='default'].Status" --output text
+
+  if ($existing -eq "InService") {
+      Write-Host "App ya InService."
+  } else {
+      if ($existing) {
+          aws sagemaker delete-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE
+          Start-Sleep -Seconds 20
+      }
+      aws sagemaker create-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --resource-spec $spec --profile $env:AWS_PROFILE
+  }
+
+  do {
+      Start-Sleep -Seconds 15
+      $status = aws sagemaker describe-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE --query "Status" --output text
+      Write-Host "Status: $status"
+  } while ($status -ne "InService")
+
+  Write-Host "Listo: abrir desde la consola (Studio -> Spaces -> sinca-dev -> Open)"
+  ```
+
+  `stop-space.ps1.example` — apaga el app (borra cómputo, conserva EFS/EBS):
+
+  ```powershell
+  $env:AWS_PROFILE = "AWS_PROFILE"
+  $domain = "DOMAIN_ID"
+  aws sagemaker delete-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE
+  ```
+
+- [ ] 8.3 Documentar en `README.md` (sección "Entorno de desarrollo") el flujo
+  start/stop con estos scripts: copiar `.example` → `.ps1`, completar
+  placeholders, y usar `.\start-space.ps1` / `.\stop-space.ps1` en vez de la
+  consola (evita el quirk del app).
+
 ## Notas de implementación
 
 - **1.1 (split de `predictions.parquet`)**: se persisten `rolling_frame` como
@@ -117,3 +170,10 @@
   contra el Space** (alternativas a evaluar: método SSH CLI de la doc de remote
   access, `sagemaker-ssh-helper`, o esperar el fix del bug). Mientras tanto, el
   Space se usa por la web de JupyterLab.
+- **8 (contexto — quirk del app JupyterLab)**: al apagar el Space con "Stop" se
+  borra el app (el cómputo) y el Space queda `InService` con `list-apps` vacío.
+  La consola a veces no recrea el app al "Open" y tira "App [default] ... is not
+  found or in unusable state". Por eso los scripts `start-space.ps1` /
+  `stop-space.ps1`: el start es idempotente (crea el app si falta, o lo borra y
+  recrea si quedó en mal estado) y espera `InService`. Llevan profile/account
+  reales → gitignored, con `.example` de placeholders como referencia.
