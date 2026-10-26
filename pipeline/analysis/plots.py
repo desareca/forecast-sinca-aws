@@ -353,58 +353,52 @@ def rmse_valid_figure(rows: list[dict]) -> go.Figure:
     return fig
 
 
-CANDIDATE_COLORS = (COLOR_LGBM, "#0f766e", "#7c3aed", "#b45309")
+COLOR_CANDIDATE = "#93b4f7"
+COLOR_CANDIDATE_BEST = "#b45309"
 
 
-def rmse_candidates_figure(candidates_by_model: dict[str, pd.DataFrame]) -> go.Figure:
-    """Barras del `score` de cada candidato del search (una barra por trial).
+def rmse_candidates_figure(candidates: pd.DataFrame, label: str) -> go.Figure:
+    """Barras del `score` de cada candidato del search, ordenadas de mejor a peor.
 
     `score` = RMSE ponderado promedio sobre las ventanas del search (12 por
-    defecto). Todos los candidatos del modelo elegido van en el gráfico; el
-    ganador (menor score) se marca con un rombo.
+    defecto). El mejor candidato (el seleccionado) va primero y pintado
+    distinto; el hover de cada barra muestra sus hiperparámetros.
     """
-    fig = go.Figure()
-    for index, (label, frame) in enumerate(sorted(candidates_by_model.items())):
-        frame = frame.sort_values("trial")
-        color = CANDIDATE_COLORS[index % len(CANDIDATE_COLORS)]
-        winner_trial = int(frame.loc[frame["score"].idxmin(), "trial"])
-        x = [f"c{int(trial)}" for trial in frame["trial"]]
-        hover_text = [
-            f"<b>{label}</b> · candidato {int(row.trial)}<br>"
-            f"score: {row.score:.2f}"
-            + ("<br>★ ganador" if int(row.trial) == winner_trial else "")
-            for row in frame.itertuples()
-        ]
-        fig.add_bar(
-            name=label,
-            x=x,
+    frame = candidates.sort_values("score", ascending=True).reset_index(drop=True)
+    best_trial = int(frame.loc[0, "trial"])
+    labels = [f"c{int(trial) + 1}" for trial in frame["trial"]]
+    colors = [
+        COLOR_CANDIDATE_BEST if int(trial) == best_trial else COLOR_CANDIDATE
+        for trial in frame["trial"]
+    ]
+    hover_text = [
+        f"<b>{label} · candidato {int(row.trial) + 1}</b><br>"
+        f"score: {row.score:.2f}"
+        + ("<br>★ el mejor (seleccionado)" if int(row.trial) == best_trial else "")
+        + "".join(f"<br>{key}: {value}" for key, value in (row.params or {}).items())
+        for row in frame.itertuples()
+    ]
+
+    fig = go.Figure(
+        go.Bar(
+            x=labels,
             y=frame["score"],
-            marker_color=color,
-            marker_opacity=0.55,
-            text=hover_text,
-            hovertemplate="%{text}<extra></extra>",
+            marker_color=colors,
+            text=[f"{value:.2f}" for value in frame["score"]],
+            textposition="outside",
+            cliponaxis=False,
+            customdata=hover_text,
+            hovertemplate="%{customdata}<extra></extra>",
         )
-        winner = frame[frame["trial"] == winner_trial].iloc[0]
-        fig.add_scatter(
-            x=[f"c{winner_trial}"],
-            y=[winner["score"]],
-            mode="markers",
-            marker={
-                "symbol": "diamond",
-                "size": 12,
-                "color": "white",
-                "line": {"width": 2.5, "color": color},
-            },
-            hoverinfo="skip",
-            showlegend=False,
-        )
+    )
     fig.update_layout(
-        title="RMSE de valid (CV) — candidatos del search",
-        xaxis_title="candidato (trial del random search)",
+        title=f"RMSE de valid (CV) — candidatos del search · {label}",
+        xaxis_title="candidato (ordenado de mejor a peor)",
         yaxis_title="RMSE (µg/m³)",
+        xaxis={"tickangle": 180},
         margin={"l": 40, "r": 20, "t": 60, "b": 60},
         height=420,
-        barmode="group",
-        bargap=0.15,
+        bargap=0.25,
+        showlegend=False,
     )
     return fig

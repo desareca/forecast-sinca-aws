@@ -236,13 +236,29 @@ def main() -> None:
                 state_dir, training_runs, station, pollutant, tuple(sorted(selected_models))
             )
             if candidates:
-                st.plotly_chart(plots.rmse_candidates_figure(candidates), width="stretch")
-                st.caption(
-                    "Cada barra es un candidato del random search (score = RMSE ponderado "
-                    "medio sobre las 12 ventanas del search, el criterio con que se elige el "
-                    "ganador). El rombo marca el elegido. La tabla muestra la validación "
-                    "completa (42 ventanas) del modelo final."
+                labels_with_candidates = [
+                    label for label in selected_models if label in candidates
+                ]
+                chosen_model = st.selectbox(
+                    "Modelo (candidatos)", labels_with_candidates, key="valid_model"
                 )
+                model_candidates = candidates[chosen_model]
+                st.plotly_chart(
+                    plots.rmse_candidates_figure(model_candidates, chosen_model),
+                    width="stretch",
+                )
+                st.caption(
+                    "Barras ordenadas de mejor a peor (score = RMSE ponderado medio sobre "
+                    "las 12 ventanas del search, el criterio con que se elige el ganador); "
+                    "la mejor va resaltada y el hover muestra sus hiperparámetros. La tabla "
+                    "de abajo muestra la validación completa (42 ventanas) del modelo final."
+                )
+                with st.expander("Hiperparámetros de los candidatos"):
+                    st.dataframe(
+                        load.candidates_table(model_candidates),
+                        hide_index=True,
+                        width="stretch",
+                    )
             elif not any(row["valid_mean"] is not None for row in rows):
                 st.info("Sin métricas de validación (ventana deslizante).")
             else:

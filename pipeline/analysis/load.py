@@ -205,6 +205,22 @@ def search_candidates(state_dir: str, run: dict) -> pd.DataFrame | None:
     return None
 
 
+def candidates_table(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Tabla de candidatos ordenada de mejor a peor, con sus hiperparámetros."""
+    frame = candidates.sort_values("score", ascending=True).reset_index(drop=True)
+    best_trial = int(frame.loc[0, "trial"])
+    rows: list[dict] = []
+    for row in frame.itertuples():
+        item: dict = {
+            "candidato": f"c{int(row.trial) + 1}",
+            "score": round(float(row.score), 3),
+            "mejor": "★" if int(row.trial) == best_trial else "",
+        }
+        item.update(row.params or {})
+        rows.append(item)
+    return pd.DataFrame(rows)
+
+
 def candidates_by_model(
     state_dir: str,
     runs: list[dict],
