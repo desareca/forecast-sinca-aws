@@ -29,8 +29,13 @@ if ! command -v terraform >/dev/null 2>&1; then
   apt-get install -y terraform
 fi
 
-# Clonar el repo (persistido en EFS; solo si no existe)
+# Clonar el repo (persistido en EFS; solo si no existe).
+# Por SSH: el Space no tiene credenciales (corre con `sinca-dev-role`), la key
+# ed25519 vive en ~/.ssh y persiste en EFS (se configura una sola vez, ver
+# README -> "Entorno de desarrollo -> Git desde el Space"). `accept-new` deja
+# el host key de GitHub en known_hosts en el primer clone (sin prompt de TTY).
 REPO_DIR="/home/sagemaker-user/forecast-sinca-aws"
 if [ ! -d "$REPO_DIR/.git" ]; then
-  git clone https://github.com/desareca/forecast-sinca-aws.git "$REPO_DIR" || true
+  GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" \
+    git clone git@github.com:desareca/forecast-sinca-aws.git "$REPO_DIR" || true
 fi
