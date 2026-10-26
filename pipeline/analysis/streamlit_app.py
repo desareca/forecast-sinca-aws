@@ -231,6 +231,10 @@ def main() -> None:
         # Resumen arriba de los gráficos, en el mismo formato desplegable que los hiperparámetros.
         with st.expander("Resumen por modelo vs persistencia"):
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        if any(row["valid_mean"] is not None for row in rows):
+            st.caption(
+                "La persistencia no se evalúa en la ventana deslizante (solo en test)."
+            )
 
         col_test, col_valid = st.columns(2)
         with col_test:
@@ -254,6 +258,7 @@ def main() -> None:
                         "Modelo (candidatos)",
                         labels_with_candidates,
                         key="valid_model",
+                        label_visibility="collapsed",
                     )
                 st.plotly_chart(
                     plots.rmse_candidates_figure(candidates[chosen_model], chosen_model),
@@ -270,11 +275,6 @@ def main() -> None:
                     st.info("Sin métricas de validación (ventana deslizante).")
                 else:
                     st.plotly_chart(plots.rmse_valid_figure(rows), width="stretch")
-
-        if any(row["valid_mean"] is not None for row in rows):
-            st.caption(
-                "La persistencia no se evalúa en la ventana deslizante (solo en test)."
-            )
 
         if chosen_model is not None and candidates:
             with st.expander("Hiperparámetros de los candidatos"):
