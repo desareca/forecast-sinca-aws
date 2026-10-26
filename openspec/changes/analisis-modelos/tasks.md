@@ -236,3 +236,30 @@
   series** (19.6646 / 19.4533 / 17.6652 / 16.5959 / 28.7509 / 27.7482).
   `feature_importance` 22 filas y `zone_icap` ~1.9k filas por run. El run de
   persistencia degrada a "solo métricas" sin fallar (requisito de degradación).
+- **4.1 (iteración operador — candidatos del search en Valid)**: se reemplazó el
+  gráfico de Valid (barras de media con rango min–max) por **una barra por
+  candidato del random search** por modelo seleccionado, con el ganador marcado
+  (rombo) y resaltado en el hover. Alcance: **solo visualización**, sin tocar el
+  entrenamiento ni re-correr nada; el dato sale del `search_history` del JSON de
+  reporte que ya loguea `train.py`.
+  - `load.search_candidates` / `load.candidates_by_model` (lee el JSON del run).
+  - `plots.rmse_candidates_figure`; `rmse_valid_figure` queda como fallback para
+    runs sin reporte y **sin** barras de error.
+  - `make_fixture.py` ahora genera el JSON de reporte con 20 candidatos señuelo
+    (antes no lo generaba, y el modo fixture no tenía candidatos).
+  - **Aclaración importante** (verificado con el operador): el `score` de cada
+    candidato es el promedio sobre las **12 ventanas del search**, mientras que
+    la tabla y `rolling_scores` usan las **42** de la validación completa. No son
+    comparables entre sí; el caption del gráfico lo dice.
+  - **Pendiente / decisión del arquitecto**: cajas o violines **por candidato**
+    requieren persistir el score por ventana de cada trial
+    (p. ej. `search_scores.parquet`, ~240 filas) y re-correr el job (~40 min).
+    Hoy `random_search` calcula esos valores y los descarta. También quedó
+    pendiente (descartado por el operador por ahora) el peso por antigüedad.
+- **3.3 (hallazgo: el fixture está medio trackeado)**: `fixtures/state/mlflow.sqlite`
+  está versionado, pero `fixtures/state/mlruns/` cae en la regla genérica
+  `mlruns/` del `.gitignore` (90 archivos, ~1,15 MB). Un clone limpio tiene el
+  sqlite pero **no** los artefactos → el modo fixture muestra los runs sin
+  diagnósticos. No se tocó (es decisión de repo): o se versiona el fixture
+  completo (negación en `.gitignore`), o se destrackea el sqlite y el fixture se
+  genera siempre con `make_fixture.py` (lo que dice el README).

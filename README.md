@@ -136,6 +136,13 @@ LightGBM vs persistencia. Lee los diagnósticos que persiste cada run
 `s3://sinca-mlflow/_mlflow/`, sin servidor MLflow. Si un run no tiene
 diagnósticos (corridas viejas), muestra solo métricas con un aviso.
 
+En **RMSE vs persistencia**, el panel de *Valid (CV)* muestra los **candidatos
+del random search** de cada modelo seleccionado (una barra por trial, con el
+ganador marcado), leídos del JSON de reporte del run. El `score` de un candidato
+es el RMSE ponderado medio sobre las **12 ventanas del search**; la tabla de
+abajo muestra la validación completa (**42 ventanas**) del modelo final — no son
+números comparables entre sí.
+
 **Local en contenedor (contra el fixture, sin AWS):**
 
 ```powershell
