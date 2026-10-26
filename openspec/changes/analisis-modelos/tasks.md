@@ -34,7 +34,8 @@
 
 ## 6. Ejecución real (operador corre y pega output)
 
-- [ ] 6.1 Reset del tracking (borrado aprobado, "partir de 0"): `aws s3 rm s3://sinca-mlflow/_mlflow/ --recursive` y `aws s3 rm s3://sinca-mlflow/model-artifacts/ --recursive`; pegar output real
+- [x] 6.1 Reset del tracking (borrado aprobado, "partir de 0"): `aws s3 rm s3://sinca-mlflow/_mlflow/ --recursive` y `aws s3 rm s3://sinca-mlflow/model-artifacts/ --recursive`; pegar output real
+  <!-- 2026-10-26: 17 objetos / 49 MB borrados (7 runs viejos + sqlite + code/ + model-artifacts). Output real del operador pegado en sesión. -->
 - [ ] 6.2 Re-correr el Training Job completo: `python pipeline/train/launch.py --role-arn <arn> --image-uri <uri>:latest --wait` → 7 runs limpios (`sinca-{estacion}-lightgbm-v1` × 6 + `sinca-persistence-baseline`)
 - [ ] 6.3 Verificar en S3 que aparecen `predictions.parquet`, `feature_importance.parquet` y `zone_icap.parquet` bajo `s3://sinca-mlflow/_mlflow/mlruns/.../artifacts/`
 - [ ] 6.4 Levantar el dashboard en el Space (`git pull` + `pip install -r requirements-analysis.txt` + `streamlit run pipeline/analysis/streamlit_app.py --server.port 8501`) y port-forward del 8501
@@ -45,14 +46,15 @@
 
 ## 8. Scripts locales de start/stop del Space (no versionados)
 
-- [ ] 8.1 Agregar a `.gitignore` (sección Terraform, junto a `backend.hcl`):
+- [x] 8.1 Agregar a `.gitignore` (sección Terraform, junto a `backend.hcl`):
   `infra/scripts/start-space.ps1` y `infra/scripts/stop-space.ps1` — llevan el
   profile y account reales, nunca se commitean
-- [ ] 8.2 Crear `infra/scripts/start-space.ps1.example` y
+- [x] 8.2 Crear `infra/scripts/start-space.ps1.example` y
   `infra/scripts/stop-space.ps1.example` con placeholders (`AWS_PROFILE`,
   `AWS_ACCOUNT_ID`, `DOMAIN_ID`), siguiendo la convención de
-  `terraform.tfvars.example`. Contenido de referencia (el operador copia el
-  `.example` a `.ps1` y completa los placeholders):
+  `terraform.tfvars.example`. Contenido de referencia (implementado en los
+  `.example`; el operador copia el `.example` a `.ps1` y completa los
+  placeholders):
 
   `start-space.ps1.example` — arranca el app JupyterLab (idempotente: crea si
   falta, o borra y recrea si quedó en mal estado) y espera `InService`:
@@ -91,17 +93,17 @@
   aws sagemaker delete-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE
   ```
 
-- [ ] 8.3 Documentar en `README.md` (sección "Entorno de desarrollo") el flujo
+- [x] 8.3 Documentar en `README.md` (sección "Entorno de desarrollo") el flujo
   start/stop con estos scripts: copiar `.example` → `.ps1`, completar
   placeholders, y usar `.\start-space.ps1` / `.\stop-space.ps1` en vez de la
   consola (evita el quirk del app).
 
 ## 9. Autenticación git desde el Space (SSH key)
 
-- [ ] 9.1 Cambiar el clone de `infra/scripts/on_start.sh` de HTTPS a SSH:
+- [x] 9.1 Cambiar el clone de `infra/scripts/on_start.sh` de HTTPS a SSH:
   `git clone git@github.com:desareca/forecast-sinca-aws.git "$REPO_DIR"` (para
   que un Space nuevo quede autenticado desde el primer arranque)
-- [ ] 9.2 Documentar en `README.md` (sección "Entorno de desarrollo") el flujo
+- [x] 9.2 Documentar en `README.md` (sección "Entorno de desarrollo") el flujo
   de autenticación git desde el Space: generar la key SSH en el Space
   (`ssh-keygen -t ed25519 -C "sinca-dev-space"`), agregar la pública a GitHub
   (Settings → SSH and GPG keys), y cambiar el remote a
@@ -198,3 +200,15 @@
   desde el arranque. La generación de la key y el alta en GitHub son pasos del
   operador (no del implementador); el implementador solo deja el clone por SSH y
   la documentación.
+- **8.2 (guardas de los scripts `.example`)**: se agregaron dos detalles sobre
+  el contenido de referencia de `tasks.md`, sin cambiar el flujo:
+  1. el poll de `start-space.ps1` corta también con `Failed`/`Deleting`/
+     `Deleted` y termina con `throw` (el `do/while` original quedaba en loop
+     infinito si el app fallaba);
+  2. `Write-Host` de progreso al borrar/recrear un app en mal estado.
+- **9.1 (`known_hosts` en el clone)**: `on_start.sh` clona con
+  `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"`. Sin eso, el
+  primer clone por SSH en un Space nuevo falla por verificación del host key de
+  GitHub (no hay TTY para responder el prompt). El `|| true` se mantiene: si la
+  key todavía no existe, el clone falla callado y el operador lo hace a mano
+  después de generarla (paso documentado en README).
