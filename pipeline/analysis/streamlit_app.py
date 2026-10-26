@@ -223,52 +223,66 @@ def main() -> None:
         rows = _rmse_by_model(
             state_dir, runs, station, pollutant, tuple(sorted(selected_models))
         )
+        candidates = _candidates_by_model(
+            state_dir, training_runs, station, pollutant, tuple(sorted(selected_models))
+        )
+        chosen_model: str | None = None
+
+        # Resumen arriba de los gráficos, en el mismo formato desplegable que los hiperparámetros.
+        with st.expander("Resumen por modelo vs persistencia"):
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
         col_test, col_valid = st.columns(2)
         with col_test:
-            st.subheader(f"Test — {station} / {pollutant}")
+            st.subheader(f"Test - {station} / {pollutant}")
             if not any(row["test_rmse"] is not None for row in rows):
                 st.info("Sin métricas de test para esta serie.")
             else:
                 st.plotly_chart(plots.rmse_test_figure(rows), width="stretch")
+
         with col_valid:
-            st.subheader(f"Valid (CV) - {station} / {pollutant}")
-            candidates = _candidates_by_model(
-                state_dir, training_runs, station, pollutant, tuple(sorted(selected_models))
-            )
-            if candidates:
-                labels_with_candidates = [
-                    label for label in selected_models if label in candidates
-                ]
-                chosen_model = st.selectbox(
-                    "Modelo (candidatos)", labels_with_candidates, key="valid_model"
-                )
-                model_candidates = candidates[chosen_model]
+            labels_with_candidates = [
+                label for label in selected_models if label in candidates
+            ]
+            if labels_with_candidates:
+                # Título y selector en columnas: no se superponen aunque el título sea largo.
+                title_col, selector_col = st.columns([3, 2], vertical_alignment="bottom")
+                with title_col:
+                    st.subheader(f"Valid (CV) - {station} / {pollutant}")
+                with selector_col:
+                    chosen_model = st.selectbox(
+                        "Modelo (candidatos)",
+                        labels_with_candidates,
+                        key="valid_model",
+                    )
                 st.plotly_chart(
-                    plots.rmse_candidates_figure(model_candidates, chosen_model),
+                    plots.rmse_candidates_figure(candidates[chosen_model], chosen_model),
                     width="stretch",
                 )
                 st.caption(
                     "Barras ordenadas de mejor a peor (score = RMSE ponderado medio sobre "
                     "las 12 ventanas del search, el criterio con que se elige el ganador); "
-                    "la mejor va resaltada y el hover muestra sus hiperparámetros. La tabla "
-                    "de abajo muestra la validación completa (42 ventanas) del modelo final."
+                    "la mejor va resaltada y el hover muestra sus hiperparámetros."
                 )
-                with st.expander("Hiperparámetros de los candidatos"):
-                    st.dataframe(
-                        load.candidates_table(model_candidates),
-                        hide_index=True,
-                        width="stretch",
-                    )
-            elif not any(row["valid_mean"] is not None for row in rows):
-                st.info("Sin métricas de validación (ventana deslizante).")
             else:
-                st.plotly_chart(plots.rmse_valid_figure(rows), width="stretch")
+                st.subheader(f"Valid (CV) - {station} / {pollutant}")
+                if not any(row["valid_mean"] is not None for row in rows):
+                    st.info("Sin métricas de validación (ventana deslizante).")
+                else:
+                    st.plotly_chart(plots.rmse_valid_figure(rows), width="stretch")
 
         if any(row["valid_mean"] is not None for row in rows):
             st.caption(
                 "La persistencia no se evalúa en la ventana deslizante (solo en test)."
             )
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+        if chosen_model is not None and candidates:
+            with st.expander("Hiperparámetros de los candidatos"):
+                st.dataframe(
+                    load.candidates_table(candidates[chosen_model]),
+                    hide_index=True,
+                    width="stretch",
+                )
 
 
 if __name__ == "__main__":

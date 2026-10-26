@@ -395,7 +395,6 @@ def rmse_candidates_figure(candidates: pd.DataFrame, label: str) -> go.Figure:
         title=f"RMSE de valid (CV) — candidatos del search · {label}",
         xaxis_title="candidato (ordenado de mejor a peor)",
         yaxis_title="RMSE (µg/m³)",
-        xaxis={"tickangle": 180},
         margin={"l": 40, "r": 20, "t": 60, "b": 60},
         height=420,
         bargap=0.25,
