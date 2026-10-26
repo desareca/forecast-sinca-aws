@@ -1,0 +1,19 @@
+# stop-space.ps1.example - Apaga el app JupyterLab del Space.
+#
+# Copiar a stop-space.ps1 (gitignored, lleva valores reales) y completar los
+# placeholders: AWS_PROFILE, DOMAIN_ID.
+#
+#   Copy-Item infra/scripts/stop-space.ps1.example infra/scripts/stop-space.ps1
+#   .\infra\scripts\stop-space.ps1
+#
+# Borra el app (el computo) y conserva el home en EFS/EBS: el proximo arranque
+# lo hace .\infra\scripts\start-space.ps1.
+
+$ErrorActionPreference = "Stop"
+
+$env:AWS_PROFILE = "AWS_PROFILE"
+$domain = "DOMAIN_ID"
+
+aws sagemaker delete-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE
+
+Write-Host "App borrado. El home (EFS/EBS) persiste; el proximo arranque es .\infra\scripts\start-space.ps1"

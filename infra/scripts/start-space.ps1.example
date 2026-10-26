@@ -1,0 +1,43 @@
+# start-space.ps1.example - Arranque idempotente del app JupyterLab del Space.
+#
+# Copiar a start-space.ps1 (gitignored, lleva valores reales) y completar los
+# placeholders: AWS_PROFILE, DOMAIN_ID, AWS_ACCOUNT_ID.
+#
+#   Copy-Item infra/scripts/start-space.ps1.example infra/scripts/start-space.ps1
+#   .\infra\scripts\start-space.ps1
+#
+# Por que existe: al apagar el Space con "Stop" se borra el app (el computo) y
+# la consola a veces no lo recrea al "Open" ("App [default] ... is not found or
+# in unusable state"). Este script crea el app si falta, lo recrea si quedo en
+# mal estado, y espera hasta que este InService.
+
+$ErrorActionPreference = "Stop"
+
+$env:AWS_PROFILE = "AWS_PROFILE"
+$domain = "DOMAIN_ID"
+$spec   = "InstanceType=ml.t3.large,LifecycleConfigArn=arn:aws:sagemaker:us-east-1:AWS_ACCOUNT_ID:studio-lifecycle-config/sinca-on-start"
+
+$existing = aws sagemaker list-apps --domain-id-equals $domain --space-name-equals sinca-dev --profile $env:AWS_PROFILE --query "Apps[?AppName=='default'].Status" --output text
+
+if ($existing -eq "InService") {
+    Write-Host "App ya InService."
+} else {
+    if ($existing) {
+        Write-Host "App en estado '$existing': borrando y recreando."
+        aws sagemaker delete-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE
+        Start-Sleep -Seconds 20
+    }
+    aws sagemaker create-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --resource-spec $spec --profile $env:AWS_PROFILE
+}
+
+do {
+    Start-Sleep -Seconds 15
+    $status = aws sagemaker describe-app --domain-id $domain --app-type JupyterLab --app-name default --space-name sinca-dev --profile $env:AWS_PROFILE --query "Status" --output text
+    Write-Host "Status: $status"
+} while ($status -ne "InService" -and $status -notin @("Failed", "Deleting", "Deleted"))
+
+if ($status -ne "InService") {
+    throw "El app quedo en estado '$status'. Revisar la consola de SageMaker Studio."
+}
+
+Write-Host "Listo: abrir desde la consola (Studio -> Spaces -> sinca-dev -> Open)"

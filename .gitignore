@@ -10,6 +10,11 @@
 !*.tfvars.example
 backend.hcl
 !*.hcl.example
+
+# Scripts locales del Space: llevan AWS_PROFILE / AWS_ACCOUNT_ID / DOMAIN_ID
+# reales. Se versionan solo los .example con placeholders.
+infra/scripts/start-space.ps1
+infra/scripts/stop-space.ps1
 crash.log
 override.tf
 override.tf.json
