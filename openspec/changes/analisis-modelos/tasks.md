@@ -238,11 +238,12 @@
   persistencia degrada a "solo métricas" sin fallar (requisito de degradación).
 - **4.1 (iteración operador — candidatos del search en Valid)**: se reemplazó el
   gráfico de Valid (barras de media con rango min–max) por **una barra por
-  candidato del random search**, con selector de modelo en el panel, orden de
-  mejor a peor, la mejor resaltada y los hiperparámetros visibles (hover + tabla
-  desplegable). Alcance: **solo visualización**, sin tocar el entrenamiento ni
-  re-correr nada; el dato sale del `search_history` del JSON de reporte que ya
-  loguea `train.py`.
+  candidato del random search**, con selector de modelo junto al título de Valid,
+  orden de mejor a peor, la mejor resaltada y los hiperparámetros visibles (hover
+  + tabla desplegable). La tabla resumen pasó arriba de los gráficos (desplegable)
+  y la de hiperparámetros abajo del todo. Alcance: **solo visualización**, sin
+  tocar el entrenamiento ni re-correr nada; el dato sale del `search_history` del
+  JSON de reporte que ya loguea `train.py`.
   - `load.search_candidates` / `load.candidates_by_model` (lee el JSON del run).
   - `plots.rmse_candidates_figure`; `rmse_valid_figure` queda como fallback para
     runs sin reporte y **sin** barras de error.
