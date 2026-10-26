@@ -45,7 +45,8 @@
 
 ## 7. Verificación funcional
 
-- [ ] 7.1 Ver el dashboard con datos reales: series real vs pred, `ICAP_zona`, RMSE vs persistencia y feature importance, confirmando con output/captura real que coinciden con las métricas de MLflow
+- [x] 7.1 Ver el dashboard con datos reales: series real vs pred, `ICAP_zona`, RMSE vs persistencia y feature importance, confirmando con output/captura real que coinciden con las métricas de MLflow
+  <!-- 2026-10-26: verificado. Automático: RMSE recalculado de predictions.parquet == test_rmse de MLflow (delta 0.0 en las 6 series) y AppTest con S3 real (4 tabs, 0 excepciones). Visual: el operador revisó el dashboard contra S3 real e iteró la pestaña RMSE hasta aprobarla. -->
 
 ## 8. Scripts locales de start/stop del Space (no versionados)
 
