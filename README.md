@@ -19,7 +19,7 @@ Araucanía), con horizonte de **24 horas**.
 
 ```
 infra/        # Terraform (IAM, SageMaker Studio, buckets, red, ECR/ECS, OIDC, scraper, training)
-infra/scripts/# scripts de operación (on_start.sh del Space, mlflow-server.sh)
+infra/scripts/# scripts de operación (on_start.sh del Space, mlflow-server.sh, start/stop-space.ps1.example)
 docker/       # Dockerfile (MLflow) + scraper.Dockerfile (datos) + train.Dockerfile (entrenamiento)
 pipeline/     # datos (scraper/ICAP/validación/persistencia) + modelado (features/baseline/train/evaluate)
 tests/        # unit + integration (futuro)
@@ -59,13 +59,71 @@ SSM** al Space `sinca-dev` de SageMaker Studio (dominio `sinca-studio`,
 venv, el `git` y el acceso a S3 corren en el Space (rol `sinca-dev-role`, sin
 claves ni credenciales en el repo).
 
-- **Conectar**: VS Code → panel **AWS Toolkit** → SageMaker → Space `sinca-dev`
-  → **Start and connect** (extensiones AWS Toolkit + Remote-SSH). El Space
-  queda `InService` y factura (~USD 0.05–0.08/h).
-- **Apagar**: SageMaker Console → Studio → Spaces → `sinca-dev` → **Stop**
-  (el EBS de 5 GB persiste; solo el cómputo deja de cobrar).
+> **Pendiente**: la conexión remota de VS Code vía AWS Toolkit está bloqueada
+> por el bug [`aws/aws-toolkit-vscode#7915`](https://github.com/aws/aws-toolkit-vscode/issues/7915)
+> (`aws sagemaker start-session` funciona y devuelve sesión válida; el
+> `detached-server` de la extensión no encuentra chunks de webpack). Mientras
+> tanto el Space se usa por la **web de JupyterLab**.
+
 - **Git local ↔ Space**: son dos clones. Commit/push en uno y `git pull` en el
-  otro para sincronizar.
+  otro para sincronizar (el Space necesita auth, ver abajo).
+
+### Arrancar y apagar (scripts locales)
+
+Al apagar con "Stop" se borra el app (el cómputo) y el home en EFS persiste,
+pero la consola a veces no recrea el app al "Open" y tira `App [default] ... is
+not found or in unusable state`. Por eso hay dos scripts PowerShell **locales**
+(no versionados: llevan el profile y el account reales):
+
+| Script | Qué hace |
+|---|---|
+| `start-space.ps1` | Idempotente: si el app está `InService` no hace nada; si quedó en mal estado lo borra y recrea; si no existe lo crea. Espera hasta `InService`. |
+| `stop-space.ps1` | `delete-app`: apaga el cómputo y conserva el home en EFS/EBS. |
+
+Setup (una sola vez):
+
+```powershell
+Copy-Item infra/scripts/start-space.ps1.example infra/scripts/start-space.ps1
+Copy-Item infra/scripts/stop-space.ps1.example infra/scripts/stop-space.ps1
+# Completar los placeholders en ambos: AWS_PROFILE, DOMAIN_ID, AWS_ACCOUNT_ID
+```
+
+Uso:
+
+```powershell
+.\infra\scripts\start-space.ps1   # crea/recrea el app y espera InService
+# ... abrir JupyterLab (Studio -> Spaces -> sinca-dev -> Open) y trabajar ...
+.\infra\scripts\stop-space.ps1    # apagar al terminar (~USD 0.06/h encendido)
+```
+
+Los `.ps1` reales están en `.gitignore`; solo se versionan los `.example` con
+placeholders (mismo patrón que `terraform.tfvars.example`).
+
+### Git desde el Space (SSH)
+
+El Space es un clone separado y **no tiene credenciales** (corre con
+`sinca-dev-role`), así que `git push` necesita autenticarse. Se usa una **key
+SSH `ed25519`** en el home del Space, que persiste en EFS → **se configura una
+sola vez**:
+
+1. En el Space (terminal de JupyterLab):
+   ```bash
+   ssh-keygen -t ed25519 -C "sinca-dev-space"   # Enter en todo (sin passphrase)
+   cat ~/.ssh/id_ed25519.pub
+   ```
+2. Copiar la pública en GitHub → **Settings → SSH and GPG keys → New SSH key**.
+3. Apuntar el remote del clone del Space a SSH:
+   ```bash
+   cd ~/forecast-sinca-aws
+   git remote set-url origin git@github.com:desareca/forecast-sinca-aws.git
+   ssh -T git@github.com   # "Hi desareca! You've successfully authenticated..."
+   ```
+
+`infra/scripts/on_start.sh` clona por **SSH** (con `StrictHostKeyChecking=accept-new`),
+así un Space **nuevo** queda autenticado desde el primer arranque en cuanto la
+key existe; si todavía no existe, el clone falla silenciosamente (`|| true`) y
+se hace a mano tras generarla. Patrón de trabajo: dos clones (local y Space),
+commit/push en uno y `git pull` en el otro.
 
 ## Análisis (dashboard y notebooks)
 
