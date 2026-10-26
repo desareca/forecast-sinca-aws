@@ -70,6 +70,14 @@ El ciclo de ahorro del Space es "Stop" (borra el app = cómputo, conserva EFS/EB
 
 Llevan el profile y account reales (`AWS_PROFILE`, `AWS_ACCOUNT_ID`) y el `DOMAIN_ID`, por lo que **no se versionan**: van en `.gitignore` (mismo patrón que `terraform.tfvars`/`backend.hcl`). Se versiona un par `.example` con placeholders como referencia, y el flujo se documenta en el README (sección "Entorno de desarrollo"). Alternativa considerada (usar solo la consola) descartada por el quirk del app; alternativa (versionar los `.ps1` con valores reales) descartada por la regla fija de no commitear credenciales.
 
+### 9. Autenticación git desde el Space (SSH key)
+
+El Space es un clone separado del repo (clonado por `on_start.sh` vía HTTPS) y, por diseño, no tiene credenciales (corre con `sinca-dev-role`, sin claves AWS ni token de GitHub). Para `git push` desde el Space hace falta autenticación contra GitHub. Decisión: **SSH key** `ed25519` generada en el Space, con la pública agregada a GitHub (Settings → SSH and GPG keys) y el remote cambiado a `git@github.com:desareca/forecast-sinca-aws.git`. La key vive en el home (`/home/sagemaker-user/.ssh`), que persiste en EFS, así que se configura una sola vez.
+
+- Alternativa considerada: **fine-grained PAT** (repo-scoped, Contents RW) con `credential.helper store`. Descartada como default por el ciclo de vida del token (rotación/expiración) frente a una key SSH persistente.
+- `on_start.sh` clona vía HTTPS; para un repo privado ese clone inicial falla sin credenciales (por eso el `|| true`). Se actualiza a SSH para que el primer arranque en un Space nuevo quede autenticado.
+- El flujo de dos clones (local ↔ Space) ya está documentado en el README; acá se agrega el paso de autenticación para poder pushear desde el Space.
+
 ## Risks / Trade-offs
 
 - **El dashboard depende de diagnósticos persistidos** → si un run no los tiene (p. ej. corridas viejas), degrada a "solo métricas" con aviso, no falla.

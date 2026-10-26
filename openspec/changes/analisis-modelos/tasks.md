@@ -96,6 +96,19 @@
   placeholders, y usar `.\start-space.ps1` / `.\stop-space.ps1` en vez de la
   consola (evita el quirk del app).
 
+## 9. Autenticación git desde el Space (SSH key)
+
+- [ ] 9.1 Cambiar el clone de `infra/scripts/on_start.sh` de HTTPS a SSH:
+  `git clone git@github.com:desareca/forecast-sinca-aws.git "$REPO_DIR"` (para
+  que un Space nuevo quede autenticado desde el primer arranque)
+- [ ] 9.2 Documentar en `README.md` (sección "Entorno de desarrollo") el flujo
+  de autenticación git desde el Space: generar la key SSH en el Space
+  (`ssh-keygen -t ed25519 -C "sinca-dev-space"`), agregar la pública a GitHub
+  (Settings → SSH and GPG keys), y cambiar el remote a
+  `git@github.com:desareca/forecast-sinca-aws.git`. Aclarar que la key persiste
+  en EFS (se configura una sola vez) y el patrón de dos clones (commit/push en
+  uno, `git pull` en el otro).
+
 ## Notas de implementación
 
 - **1.1 (split de `predictions.parquet`)**: se persisten `rolling_frame` como
@@ -177,3 +190,11 @@
   `stop-space.ps1`: el start es idempotente (crea el app si falta, o lo borra y
   recrea si quedó en mal estado) y espera `InService`. Llevan profile/account
   reales → gitignored, con `.example` de placeholders como referencia.
+- **9 (contexto — git auth desde el Space)**: el Space es un clone separado sin
+  credenciales (rol `sinca-dev-role`), por lo que `git push` requiere
+  autenticación. Se elige SSH key (`ed25519`) persistida en EFS (se configura
+  una sola vez) frente a un fine-grained PAT (rotación/expiración). El
+  `on_start.sh` pasa a clonar por SSH para que un Space nuevo quede autenticado
+  desde el arranque. La generación de la key y el alta en GitHub son pasos del
+  operador (no del implementador); el implementador solo deja el clone por SSH y
+  la documentación.

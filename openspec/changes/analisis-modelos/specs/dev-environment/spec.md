@@ -15,3 +15,15 @@ El sistema SHALL disponer de scripts locales (no versionados) para arrancar y ap
 #### Scenario: Credenciales fuera del repo
 - **WHEN** se versiona el repo
 - **THEN** los `.ps1` con valores reales no se commitean (gitignored) y solo los `.example` con placeholders quedan versionados
+
+### Requirement: Autenticación git desde el Space
+
+El sistema SHALL permitir `git push` desde el Space de SageMaker Studio mediante una key SSH (`ed25519`) persistida en el home (EFS), con la pública registrada en GitHub y el remote del clone apuntando a SSH (`git@github.com:...`). El lifecycle config SHALL clonar el repo por SSH para que un Space nuevo quede autenticado desde el primer arranque.
+
+#### Scenario: Push desde el Space
+- **WHEN** el operador hace `git push` desde el clone del Space
+- **THEN** la operación se autentica con la key SSH persistida en EFS, sin credenciales en el repo
+
+#### Scenario: Clonado autenticado en Space nuevo
+- **WHEN** un Space nuevo ejecuta el lifecycle config (`on_start.sh`)
+- **THEN** el repo se clona por SSH, de modo que `git pull`/`git push` funcionan sin pasos manuales de autenticación

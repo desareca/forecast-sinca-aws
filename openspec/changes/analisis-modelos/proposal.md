@@ -11,6 +11,7 @@ El baseline (Fase 3) quedó entrenado y verificado en MLflow, pero sus resultado
 - **Reset del tracking MLflow** (borrado directo, aprobado) y **re-correr el baseline** para regenerar los runs con diagnósticos persistidos.
 - **Notebook de análisis puntual** (`notebooks/analisis_baseline.ipynb`): punto de partida para análisis exploratorios en SageMaker Studio, con guía de encendido/trabajo/apagado para evitar sobrecostos.
 - **Scripts de start/stop del Space** (`infra/scripts/start-space.ps1` / `stop-space.ps1`, no versionados): arrancan/apagan el app JupyterLab del Space de forma idempotente, evitando el quirk de la consola que a veces no recrea el app al "Open" (deja el Space `InService` con `list-apps` vacío).
+- **Autenticación git desde el Space** (SSH key): habilita `git push` desde el Space (que por diseño no tiene credenciales) vía una key SSH persistida en EFS, con el remote cambiado a SSH y `on_start.sh` clonando por SSH.
 
 ## Capabilities
 
@@ -22,10 +23,12 @@ El baseline (Fase 3) quedó entrenado y verificado en MLflow, pero sus resultado
 
 - `modelado`: se agrega la persistencia por run de diagnósticos (predicciones del held-out y de la ventana deslizante, feature importance, `ICAP_zona`) como artefactos de tracking MLflow.
 - `dev-environment`: se agregan scripts locales de start/stop del Space (no versionados, con `.example` de referencia) para un ciclo de encendido/apagado confiable del app JupyterLab.
+- `dev-environment`: se agrega autenticación git por SSH key para pushear desde el Space.
 
 ## Impact
 
 - **Repo**: nuevo `pipeline/analysis/` (`load.py`, `plots.py`, `streamlit_app.py`), `docker/analysis.Dockerfile`, `requirements-analysis.txt`, `notebooks/analisis_baseline.ipynb`; modificación de `pipeline/train/train.py` (persistir diagnósticos). Nuevos `infra/scripts/start-space.ps1.example` y `stop-space.ps1.example` (referencia con placeholders; los `.ps1` reales son locales y gitignored).
+- **Repo**: modificación de `infra/scripts/on_start.sh` (clonar por SSH en vez de HTTPS).
 - **Infraestructura AWS**: sin cambios (usa `sinca-dev-role` existente y el Space on-demand). Se re-corre el Training Job del baseline (~USD 0.07).
 - **Datos**: se borra y regenera el estado de tracking en `s3://sinca-mlflow/_mlflow/` (reset explícito y aprobado por el operador).
 - **No incluye**: reentrenamiento/inferencia automatizada (Fase 6), comparativa contra referencia pública (Fase 5 `evaluacion`), ni features/modelos nuevos (Fase 4).
