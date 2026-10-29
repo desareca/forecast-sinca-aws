@@ -25,6 +25,23 @@ data "aws_iam_policy_document" "dev_policy" {
     ]
   }
 
+  # `s3:ListBucket` exige el ARN del bucket, no un prefijo: la statement de
+  # arriba solo alcanza para las acciones de objeto (Get/Put/Delete). Sin esto,
+  # `list_objects_v2` falla con AccessDenied tanto en el notebook como en
+  # `mlflow_log.download_state()`. Se acota con `s3:prefix` para no listar nada
+  # fuera de `_mlflow/`.
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.mlflow.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["_mlflow/", "_mlflow/*"]
+    }
+  }
+
   statement {
     effect = "Allow"
     actions = [
