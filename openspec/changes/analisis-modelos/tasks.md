@@ -169,6 +169,26 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
 `sagemaker_image_version_alias = null` (solo arn) y replicar el flag en el
 `$spec`; registrarlo en Notas de implementación.
 
+## 12. Cierre (higiene)
+
+- [ ] 12.1 `infra/scripts/on_start.sh`: quitar `install_terraform` (función) y su
+  línea `_try "Terraform" install_terraform`; ajustar el comentario de cabecera
+  si lista terraform. Terraform no se usa en el Space (corre en local/CI); sacar
+  el paso elimina el `WARN` recurrente y deja el log `END (ok)` sin ruido.
+- [ ] 12.2 `project-decisions.md` §3: fila `dev-environment` — quitar "terraform"
+  de la lifecycle config (deja "reinstala aws-cli si falta y clona el repo").
+- [ ] 12.3 `docs/space-sagemaker.md`: §4.2 quitar la línea `WARN ... Terraform`
+  del ejemplo de log; §6 cerrar el pendiente `apt-get` sin `sudo` con la decisión
+  "terraform fuera del Space (corre en local/CI), ya no se instala en la LCC".
+- [ ] 12.4 `notebooks/analisis_baseline.ipynb`: limpiar outputs y execution_count
+  (`jupyter nbconvert --clear-output --inplace notebooks/analisis_baseline.ipynb`
+  o equivalente) + commit atómico.
+- [ ] 12.5 (operador) `.\infra\scripts\stop-space.ps1` → apagar el Space (no es
+  opcional, factura ~USD 0.06/h); pegar output.
+- [ ] 12.6 Nota (sin ejecutar acá): abrir change `cicd` futuro para decidir el
+  `apply -auto-approve` de `infra-cd.yml` en cada push a `infra/**` (hoy el
+  apply manual compite por el lock). Registrado, no bloquea archivar.
+
 ## Notas de implementación
 
 - **1.1 (split de `predictions.parquet`)**: se persisten `rolling_frame` como
