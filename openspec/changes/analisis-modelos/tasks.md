@@ -475,13 +475,15 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   su fix, y el checklist de "recrear desde cero" como criterio de aceptación.
   `README.md` apunta a ese documento desde "Entorno de desarrollo". Los valores
   de cuenta/dominio van como placeholders, igual que en los `.ps1.example`.
-- **12.1 (terraform fuera de la LCC)**: se borró `install_terraform` y su
-  `_try "Terraform" ...`. Verificado con `bash -n` y con la simulación local del
-  patrón (`_try` que falla → `EXIT=0` + `WARN`; `_fail` → `EXIT=1`). Se agregó
-  una línea al comentario de cabecera explicando **por qué** no está: corre en
-  local/CI y `apt-get` necesita root, que la LCC no tiene.
-  **Ojo**: la LCC deployada en AWS todavía tiene el paso de Terraform hasta que
-  el CI aplique este commit; un arranque intermedio sigue mostrando el `WARN`.
+- **12.1 (verificación real post-push)**: el push de `baee91d` disparó el CI, que
+  hizo `plan` + `apply` y **reemplazó la LCC** en ~40 s. Verificado por API:
+  - `describe-studio-lifecycle-config` → el contenido decodificado **no** contiene
+    `install_terraform` y es **idéntico byte a byte** al `on_start.sh` del repo
+    (salvo el EOL final).
+  - El `lifecycle_config_arn` del Space apunta al `sinca-on-start` recreado.
+  Consecuencia en el próximo arranque: el log debe quedar `BEGIN → OK: AWS CLI v2
+  → OK: repo clonado por SSH → END (ok)`, sin ningún `WARN` (el de Terraform ya no
+  existe). Eso no se ejecutó en esta sesión: es 12.5 (operador).
 - **12.3 (docs coherentes con la decisión)**: en `docs/space-sagemaker.md` el
   ejemplo de log de §4.2 ya no incluye la línea de `WARN ... Terraform`, y §6
   reemplaza el pendiente "apt-get sin sudo" por una subsección
