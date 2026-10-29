@@ -78,6 +78,28 @@ El Space es un clone separado del repo (clonado por `on_start.sh` vía HTTPS) y,
 - `on_start.sh` clona vía HTTPS; para un repo privado ese clone inicial falla sin credenciales (por eso el `|| true`). Se actualiza a SSH para que el primer arranque en un Space nuevo quede autenticado.
 - El flujo de dos clones (local ↔ Space) ya está documentado en el README; acá se agrega el paso de autenticación para poder pushear desde el Space.
 
+### 10. Imagen del Space como fuente única de verdad
+
+El app JupyterLab no puede recrearse desde cero porque el `default_resource_spec` del Space no define imagen SageMaker (`SageMaker Image ARN is required`). Se fija en Terraform como fuente única:
+
+- `sagemaker_image_arn = arn:aws:sagemaker:us-east-1:885854791233:image/sagemaker-distribution-cpu` (imagen pública de SageMaker, no de la cuenta del proyecto).
+- `sagemaker_image_version_alias = "3.2.0"` (alias **versionado**, no `latest`).
+
+El `latest` se descarta por determinismo: el criterio es "recrear desde cero sin intervención", y un salto implícito del alias entre recreaciones cambia kernels/paquetes y se manifiesta como un fallo sin causa aparente. Bumpear es una línea + review. El par arn+`3.2.0` es el que CloudTrail registra como el último que arrancó. Se propaga a `start-space.ps1.example` (`$spec` de `create-app`) para no depender de la herencia del Space.
+
+### 11. Lifecycle config robusta (regla `_try`/`_fail`)
+
+`on_start.sh` fallaba entero porque `npm install -g @opencode-ai/opencode` (paquete inexistente) mataba el script bajo `set -euo pipefail`. Se quita `-e` y se hace explícito el contrato:
+
+- **`_try "label" cmd`** — conveniencia de dev (aws-cli, terraform, git-clone): si falla, loguea `WARN (no bloqueante)` y sigue; nunca voltea el app.
+- **`_fail "msg"`** — requisito del Space: falla ruidoso con `exit 1`.
+
+Hoy **no hay pasos `_fail`**: el app JupyterLab arranca sin depender de ninguna CLI. La regla queda viva: cuando algo se vuelva imprescindible, se escribe con `_fail`. Se elimina el bloque de **Node.js + Open Code CLI** (no se usa en el Space; los agentes corren en la máquina local). El git-clone queda como `_try` (una key SSH ausente en EFS nuevo no debe matar el arranque; el README ya documenta el alta manual de la key).
+
+### 12. Logs de la LCC en EFS
+
+Toda la salida del script se duplica con `tee -a ~/.on_start.log` (home en EFS, persiste) y, en paralelo, queda en stdout (CloudWatch). Marker `===== on_start begin/end =====` por corrida. Esto elimina la iteración a ciegas: si el app muere en `Failed`, el log completo sigue legible desde el EFS sin depender de que el app arranque.
+
 ## Risks / Trade-offs
 
 - **El dashboard depende de diagnósticos persistidos** → si un run no los tiene (p. ej. corridas viejas), degrada a "solo métricas" con aviso, no falla.

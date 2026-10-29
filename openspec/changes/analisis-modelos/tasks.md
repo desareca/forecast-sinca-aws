@@ -115,6 +115,60 @@
   en EFS (se configura una sola vez) y el patrón de dos clones (commit/push en
   uno, `git pull` en el otro).
 
+## 10. Reparación del Space (imagen SageMaker + lifecycle config robusta)
+
+Motivo: el Space `sinca-dev` no reconstruye el app desde cero: el
+`default_resource_spec` no define imagen (`SageMaker Image ARN is required`) y
+`on_start.sh` falla por el paquete inexistente `@opencode-ai/opencode` bajo
+`set -euo pipefail`. Esto bloqueaba la tarea 5.4. Se corrige acá (es el
+prerrequisito directo de "verificar que el notebook abre en el Space").
+
+- [ ] 10.1 `infra/variables.tf`: agregar `sagemaker_image_arn` (default
+  `arn:aws:sagemaker:us-east-1:885854791233:image/sagemaker-distribution-cpu`)
+  y `sagemaker_image_version_alias` (default `"3.2.0"`). Imagen pública de
+  SageMaker, no de la cuenta del proyecto.
+- [ ] 10.2 `infra/sagemaker-domain.tf`: en
+  `space_settings.jupyter_lab_app_settings.default_resource_spec` agregar
+  `sagemaker_image_arn` + `sagemaker_image_version_alias` referenciando las
+  variables de 10.1.
+- [ ] 10.3 `infra/scripts/start-space.ps1.example`: sumar al `$spec` de
+  `create-app` `SageMakerImageArn=...` y `SageMakerImageVersionAlias=3.2.0`
+  (propaga la fuente única de verdad).
+- [ ] 10.4 `infra/scripts/on_start.sh`: reescribir con log + `_try`/`_fail`:
+  - `set -uo pipefail` (sacar `-e`); funciones `log`, `_fail` (exit 1), `_try`
+    (loguea `WARN (no bloqueante)` y sigue).
+  - `tee -a ~/.on_start.log` para toda la salida; marker begin/end por corrida.
+  - conveniencia (`aws-cli`, `terraform`, `git-clone`) por `_try`; el clone SSH
+    mantiene `StrictHostKeyChecking=accept-new` y la guarda `[ ! -d "$REPO_DIR/.git" ]`.
+  - quitar el bloque de Node.js + Open Code CLI (no se usa en el Space; era el
+    bloqueante).
+  - sin pasos `_fail` hoy (el app arranca sin ninguna CLI).
+- [ ] 10.5 `modules/dev-environment/blueprint.md`: línea 52 quitar "Node.js +
+  Open Code CLI"; en `## Notas de este proyecto` registrar: imagen fijada
+  (arn + alias `3.2.0`), LCC `_try`/`_fail` + log EFS, opencode fuera del Space.
+- [ ] 10.6 `project-decisions.md` §3: fila `dev-environment` — quitar
+  "Node+OpenCode" de la descripción de la lifecycle config.
+
+## 11. Ejecución real (operador corre y pega output)
+
+- [ ] 11.1 `terraform -chdir=infra init -backend-config=backend.hcl` y
+  `terraform -chdir=infra plan` → pegar output (verificar que `default_resource_spec`
+  muestra `sagemaker_image_arn` + alias).
+- [ ] 11.2 `terraform -chdir=infra apply` (deny list → lo corre el operador) →
+  pegar output (actualiza la LCC `sinca-on-start` y las `space_settings`).
+- [ ] 11.3 `Copy-Item infra/scripts/start-space.ps1.example infra/scripts/start-space.ps1`
+  + completar placeholders (`AWS_PROFILE`, `DOMAIN_ID`, `AWS_ACCOUNT_ID`) +
+  `.\infra\scripts\start-space.ps1` → app `InService`.
+- [ ] 11.4 Verificación (criterio e = tarea 5.4): abrir
+  `notebooks/analisis_baseline.ipynb` en JupyterLab del Space y leer
+  `~/.on_start.log` (terminal de JupyterLab): corrida limpia; el `git-clone`
+  puede quedar en `WARN` solo si falta la key SSH en EFS nuevo (documentado en
+  README). Pegar output real.
+
+Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
+`sagemaker_image_version_alias = null` (solo arn) y replicar el flag en el
+`$spec`; registrarlo en Notas de implementación.
+
 ## Notas de implementación
 
 - **1.1 (split de `predictions.parquet`)**: se persisten `rolling_frame` como
