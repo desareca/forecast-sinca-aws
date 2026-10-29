@@ -180,7 +180,7 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
 - [x] 12.3 `docs/space-sagemaker.md`: §4.2 quitar la línea `WARN ... Terraform`
   del ejemplo de log; §6 cerrar el pendiente `apt-get` sin `sudo` con la decisión
   "terraform fuera del Space (corre en local/CI), ya no se instala en la LCC".
-- [ ] 12.4 `notebooks/analisis_baseline.ipynb`: limpiar outputs y execution_count
+- [x] 12.4 `notebooks/analisis_baseline.ipynb`: limpiar outputs y execution_count
   (`jupyter nbconvert --clear-output --inplace notebooks/analisis_baseline.ipynb`
   o equivalente) + commit atómico.
 - [ ] 12.5 (operador) `.\infra\scripts\stop-space.ps1` → apagar el Space (no es
