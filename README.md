@@ -68,6 +68,11 @@ claves ni credenciales en el repo).
 - **Git local ↔ Space**: son dos clones. Commit/push en uno y `git pull` en el
   otro para sincronizar (el Space necesita auth, ver abajo).
 
+> **Runbook completo**: [`docs/space-sagemaker.md`](docs/space-sagemaker.md) —
+> qué compone el entorno, ciclo prender/apagar, y diagnóstico paso a paso cuando
+> el Space no arranca (imagen del app, lifecycle config, policy del rol, git
+> divergido, lock de Terraform).
+
 ### Arrancar y apagar (scripts locales)
 
 Al apagar con "Stop" se borra el app (el cómputo) y el home en EFS persiste,

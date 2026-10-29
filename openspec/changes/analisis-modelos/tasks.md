@@ -449,3 +449,9 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   (`1.15.7`) hay que usar `-backend-config backend.hcl` (separado por espacio).
   El CI usa la versión `1.9.8` y `-backend-config="bucket=..."` sí le funciona:
   no es un problema del workflow, es del binario local.
+- **Cierre (runbook)**: todo el diagnóstico de esta sección quedó documentado en
+  `docs/space-sagemaker.md` (pedido del operador para futuras sesiones): piezas
+  del entorno, ciclo normal, tabla síntoma → causa, las 5 causas conocidas con
+  su fix, y el checklist de "recrear desde cero" como criterio de aceptación.
+  `README.md` apunta a ese documento desde "Entorno de desarrollo". Los valores
+  de cuenta/dominio van como placeholders, igual que en los `.ps1.example`.
