@@ -30,7 +30,7 @@
 
 - [x] 5.1 Actualizar `README.md` — sección "Dashboard de análisis": correr local en contenedor (`docker build`/`docker run` + fixture) y en el Space (`pip install -r requirements-analysis.txt` + `streamlit run` + port-forward del 8501)
 - [x] 5.2 Actualizar `project-decisions.md` §8 — insertar la fase `analisis-modelos` después de `baseline` y renumerar las siguientes
-- [ ] 5.4 Verificar que `notebooks/analisis_baseline.ipynb` (base, provisto por el arquitecto) abre en el Space, y documentar en `README.md` el flujo de notebooks: encender (Studio → Spaces → `sinca-dev` → Open), trabajar (rol del Space, sin credenciales), y apagar (Spaces → `sinca-dev` → Stop) para evitar sobrecostos
+- [x] 5.4 Verificar que `notebooks/analisis_baseline.ipynb` (base, provisto por el arquitecto) abre en el Space, y documentar en `README.md` el flujo de notebooks: encender (Studio → Spaces → `sinca-dev` → Open), trabajar (rol del Space, sin credenciales), y apagar (Spaces → `sinca-dev` → Stop) para evitar sobrecostos
 
 ## 6. Ejecución real (operador corre y pega output)
 
@@ -156,10 +156,10 @@ prerrequisito directo de "verificar que el notebook abre en el Space").
   muestra `sagemaker_image_arn` + alias).
 - [x] 11.2 `terraform -chdir=infra apply` (deny list → lo corre el operador) →
   pegar output (actualiza la LCC `sinca-on-start` y las `space_settings`).
-- [ ] 11.3 `Copy-Item infra/scripts/start-space.ps1.example infra/scripts/start-space.ps1`
+- [x] 11.3 `Copy-Item infra/scripts/start-space.ps1.example infra/scripts/start-space.ps1`
   + completar placeholders (`AWS_PROFILE`, `DOMAIN_ID`, `AWS_ACCOUNT_ID`) +
   `.\infra\scripts\start-space.ps1` → app `InService`.
-- [ ] 11.4 Verificación (criterio e = tarea 5.4): abrir
+- [x] 11.4 Verificación (criterio e = tarea 5.4): abrir
   `notebooks/analisis_baseline.ipynb` en JupyterLab del Space y leer
   `~/.on_start.log` (terminal de JupyterLab): corrida limpia; el `git-clone`
   puede quedar en `WARN` solo si falta la key SSH en EFS nuevo (documentado en
@@ -422,3 +422,30 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   con condición `StringLike {"s3:prefix": ["_mlflow/", "_mlflow/*"]}`, que es
   exactamente el mínimo privilegio que se quiso expresar. Es IAM → decisión
   del arquitecto + `apply` del operador.
+- **11.4 / 5.4 (VERIFICADO con datos reales del notebook en el Space)**: el
+  notebook corrió completo en JupyterLab (`Run All`) y los outputs quedaron
+  commiteados (`6a3eb83`), así que la evidencia es reproducible desde el repo:
+  - celda 2: **7 runs** `FINISHED` (6 LightGBM + `sinca-persistence-baseline`).
+  - celda 3: lista `validated/sinca/estacion=.../year=.../month=...` y lee el
+    parquet (rol dev → `ListBucket` sobre `sinca-data` OK).
+  - celda 4: **`pred_keys` = 6** rutas `_mlflow/mlruns/<run_id>/artifacts/
+    predictions.parquet` (seis series), y lee el parquet con el esquema
+    `timestamp, estacion, pollutant, y_true, y_pred, split`.
+  - celda 5: `<Figure size 1200x400 with 1 Axes>` → el gráfico real vs pred
+    se dibuja.
+  Con esto se cierra también la 5.4 (el notebook abre y corre en el Space).
+- **11.4 (desvío de higiene, decidido por el operador)**: el notebook
+  versionado quedó **con outputs y execution_count** (`6a3eb83`, +774 líneas)
+  porque el operador lo commiteó como prueba de push desde el Space. No rompe
+  nada, pero ensucia el diff: si el arquitecto quiere, corresponde un commit
+  que lo devuelva a "sin outputs".
+- **11.2/11.4 (CI aplica solo)**: `.github/workflows/infra-cd.yml` corre
+  `plan` **y `apply -auto-approve`** en cada push a `main` que toque `infra/**`.
+  El `apply` manual del operador es redundante y compite por el lock de DynamoDB
+  (`runner@runnervm48cm3`). La policy de IAM terminó aplicada por CI: verificado
+  por API (`s3:ListBucket` sobre `sinca-mlflow` con `StringLike s3:prefix =
+  ["_mlflow/", "_mlflow/*"]`).
+- **11.4 (`-backend-config` con `=` no funciona)**: en el Terraform local
+  (`1.15.7`) hay que usar `-backend-config backend.hcl` (separado por espacio).
+  El CI usa la versión `1.9.8` y `-backend-config="bucket=..."` sí le funciona:
+  no es un problema del workflow, es del binario local.
