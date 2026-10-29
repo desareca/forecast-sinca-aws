@@ -151,7 +151,7 @@ prerrequisito directo de "verificar que el notebook abre en el Space").
 
 ## 11. Ejecución real (operador corre y pega output)
 
-- [ ] 11.1 `terraform -chdir=infra init -backend-config=backend.hcl` y
+- [x] 11.1 `terraform -chdir=infra init -backend-config=backend.hcl` y
   `terraform -chdir=infra plan` → pegar output (verificar que `default_resource_spec`
   muestra `sagemaker_image_arn` + alias).
 - [ ] 11.2 `terraform -chdir=infra apply` (deny list → lo corre el operador) →
@@ -350,3 +350,26 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   `create-app` sin imagen falla con `SageMaker Image ARN is required` y la
   consola muestra el cartel engañoso "Permissions not configured correctly".
   **No verificado contra AWS todavía** (eso es 11.1–11.4, operador).
+- **11.1 (plan real, corre el operador)**: `init` falla con
+  `-backend-config=backend.hcl` en el Terraform local (`1.15.7`): interpreta el
+  flag como argumento posicional → `Too many command line arguments`. Con
+  `-backend-config backend.hcl` (espacio, sin `=`) inicializa bien contra el
+  backend S3 (`549024266383-tfstate`, `terraform-locks`, `desareca_dev`).
+  Plan: **1 add / 3 change / 1 destroy**.
+  - `aws_sagemaker_space.dev`: agrega `sagemaker_image_arn` +
+    `sagemaker_image_version_alias` (lo buscado) y recalcula
+    `lifecycle_config_arn` (known after apply).
+  - `aws_sagemaker_studio_lifecycle_config.on_start`: **se reemplaza** (el
+    contenido fuerza reemplazo; `-/+`, no update in-place). Riesgo: por defecto
+    Terraform destruye la LCC vieja **antes** de crear la nueva, y el Space la
+    referencia (`LifecycleConfigArn`). Si AWS rechaza borrar una LCC en uso, el
+    apply corta ahí. Además cambia el ARN, que el Space toma después.
+  - `aws_sagemaker_domain.studio` y `aws_sagemaker_user_profile.admin`: solo
+    remoción de bloques que Terraform no declara (`studio_web_portal_settings`
+    vacío en el dominio; `jupyter_lab_app_settings.lifecycle_config_arns` en el
+    user profile, que la consola había dejado a nivel usuario). Sin efecto sobre
+    la LCC del Space. Se aceptan.
+- **11.1 (riesgo abierto, no decidido acá)**: si el `apply` falla al destruir la
+  LCC en uso, la salida no es improvisar comandos contra la consola: hay que
+  volver al arquitecto (posibles salidas: `create_before_destroy`, renombrar el
+  recurso, o desacoplar la LCC del Space antes de reemplazarla).
