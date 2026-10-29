@@ -154,7 +154,7 @@ prerrequisito directo de "verificar que el notebook abre en el Space").
 - [x] 11.1 `terraform -chdir=infra init -backend-config=backend.hcl` y
   `terraform -chdir=infra plan` → pegar output (verificar que `default_resource_spec`
   muestra `sagemaker_image_arn` + alias).
-- [ ] 11.2 `terraform -chdir=infra apply` (deny list → lo corre el operador) →
+- [x] 11.2 `terraform -chdir=infra apply` (deny list → lo corre el operador) →
   pegar output (actualiza la LCC `sinca-on-start` y las `space_settings`).
 - [ ] 11.3 `Copy-Item infra/scripts/start-space.ps1.example infra/scripts/start-space.ps1`
   + completar placeholders (`AWS_PROFILE`, `DOMAIN_ID`, `AWS_ACCOUNT_ID`) +
@@ -373,3 +373,17 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   LCC en uso, la salida no es improvisar comandos contra la consola: hay que
   volver al arquitecto (posibles salidas: `create_before_destroy`, renombrar el
   recurso, o desacoplar la LCC del Space antes de reemplazarla).
+- **11.2 (`apply` ejecutado por el operador — riesgo 1 NO materializado)**: el
+  reemplazo `-/+` de la LCC salió limpio: AWS permitió `Destroying...
+  Destruction complete after 0s` y el `Creating...` inmediato con el mismo
+  nombre (`1 added, 3 changed, 1 destroyed`). No hizo falta tocar arquitectura.
+  Verificado después por API (no por el output del apply):
+  - `describe-space` → `SageMakerImageArn =
+    ...:885854791233:image/sagemaker-distribution-cpu`,
+    `SageMakerImageVersionAlias = 3.2.0`, `InstanceType = ml.t3.large`,
+    `LifecycleConfigArn` apuntando a `sinca-on-start`.
+  - `describe-studio-lifecycle-config` → el contenido decodificado contiene
+    `_try` y no menciona `opencode`: es el script nuevo.
+  - Queda un registro de app `default` en `Failed` de los intentos previos (se
+    autoborra y solo es visible 24 h en `list-apps`); no impide `create-app`.
+    Es justamente el caso que motiva 11.3.
