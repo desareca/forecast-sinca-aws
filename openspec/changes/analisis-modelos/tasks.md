@@ -387,3 +387,23 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   - Queda un registro de app `default` en `Failed` de los intentos previos (se
     autoborra y solo es visible 24 h en `list-apps`); no impide `create-app`.
     Es justamente el caso que motiva 11.3.
+- **11.4 (log real — WARN de Terraform CONFIRMADO, no bloqueante)**: la LCC corre
+  como **`sagemaker-user`, no como root** (el header del log lo muestra:
+  `user=sagemaker-user`). Resultado real de `~/.on_start.log`:
+  ```
+  OK: AWS CLI v2
+  E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)
+  E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), are you root?
+  WARN (no bloqueante): 'Terraform' fallo (exit 100) — el Space arranca igual
+  OK: repo clonado por SSH
+  === on_start END (ok) ===
+  ```
+  Consecuencias: (a) el criterio de 11.4 ("corrida limpia") **no se cumple al
+  pie de la letra**: hay un `WARN` que no es el de `git-clone`; (b) `terraform`
+  no queda disponible dentro del Space, aunque la fila `dev-environment` de
+  `project-decisions.md` §3 dice que la lifecycle config lo reinstala; (c) el
+  `set -uo pipefail` + `_try` cumplieron: el fallo no tumbó el app.
+  Arreglo candidato (una línea por comando, no aplicado): prefijar `sudo` en
+  los `apt-get`, en el `gpg --dearmor` y en el `echo` a
+  `/etc/apt/sources.list.d/`. Requiere otro `apply` + reinicio del Space → **lo
+  decide el arquitecto / el operador**, no el implementador.
