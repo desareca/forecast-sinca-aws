@@ -148,3 +148,7 @@ y versionado, y no hay "quick setup" que cree recursos de red sin avisar (ver
   y el fallo solo era visible como "Permissions not configured correctly".
 - **opencode fuera del Space**: Node.js + Open Code CLI ya no se instalan en el
   lifecycle config; el agente se usa desde local, no dentro del Space.
+- **IaC/tooling fuera del Space**: Terraform tampoco se instala en la LCC (corre
+  en local/CI). Lección: `~/.on_start` no reinstala herramientas del flujo de la
+  máquina/CI, solo lo que el Space usa de verdad (guard de aws-cli + repo).
+  Instalar CLIs no usadas es justo el modo de fallo que ató el arranque.

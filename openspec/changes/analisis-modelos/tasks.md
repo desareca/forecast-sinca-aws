@@ -183,11 +183,13 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
 - [x] 12.4 `notebooks/analisis_baseline.ipynb`: limpiar outputs y execution_count
   (`jupyter nbconvert --clear-output --inplace notebooks/analisis_baseline.ipynb`
   o equivalente) + commit atómico.
-- [ ] 12.5 (operador) `.\infra\scripts\stop-space.ps1` → apagar el Space (no es
-  opcional, factura ~USD 0.06/h); pegar output.
-- [ ] 12.6 Nota (sin ejecutar acá): abrir change `cicd` futuro para decidir el
-  `apply -auto-approve` de `infra-cd.yml` en cada push a `infra/**` (hoy el
-  apply manual compite por el lock). Registrado, no bloquea archivar.
+- [x] 12.5 (operador) `.\infra\scripts\stop-space.ps1` → apagar el Space (no es
+  opcional, factura ~USD 0.06/h).
+  <!-- 2026-10-29: list-apps muestra el app `default` en `Deleted` → el Space ya
+       está apagado (sin cómputo facturable; el EFS queda, no factura). -->
+- [x] 12.6 Nota (registrada, no se ejecuta acá): abrir change `cicd` futuro para
+  decidir el `apply -auto-approve` de `infra-cd.yml` en cada push a `infra/**`
+  (hoy el apply manual compite por el lock). No bloquea archivar.
 
 ## Notas de implementación
 
