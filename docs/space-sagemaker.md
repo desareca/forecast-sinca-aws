@@ -166,7 +166,6 @@ markers por corrida:
 ```
 === on_start BEGIN (user=..., repo=...) ===
 OK: AWS CLI v2
-WARN (no bloqueante): 'Terraform' fallo (exit 100) — el Space arranca igual
 OK: repo clonado por SSH
 === on_start END (ok) ===
 ```
@@ -265,11 +264,15 @@ real: **no "arrancó una vez", sino "arranca desde cero".**
 
 ## 6. Pendientes / decisiones abiertas
 
-- **`apt-get` sin `sudo`**: la LCC corre como `sagemaker-user`, así que Terraform
-  nunca se instala y queda en `WARN`. Mientras el Terraform se corra desde local
-  no molesta, pero contradice la fila `dev-environment` de
-  `project-decisions.md`. Fix candidato: `sudo` en los `apt-get` (y en las
-  escrituras a `/usr/share/keyrings` y `/etc/apt/sources.list.d/`).
 - **Notebook con outputs versionados**: el archivo debería commitearse sin
   outputs; hoy hay una corrida commiteada.
 - **Costos**: el Space encendido factura ~USD 0.06/h. Apagarlo no es opcional.
+
+### Cerrado: Terraform ya no se instala en el Space
+
+La LCC corre como `sagemaker-user` (sin root), así que `apt-get` no puede tomar
+el lock de `dpkg` y Terraform nunca se instalaba: cada arranque dejaba un
+`WARN (no bloqueante)` en el log. La decisión fue **sacar Terraform del Space**:
+se corre en local (el operador) o en CI (`.github/workflows/infra-cd.yml`), nunca
+dentro del Space. Con eso el log queda `END (ok)` sin ruido y la LCC no necesita
+`sudo`.

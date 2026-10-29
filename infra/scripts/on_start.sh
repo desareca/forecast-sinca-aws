@@ -3,6 +3,9 @@
 #
 # Corre al prender el Space y reinstala lo efimero que no vive en EFS.
 #
+# Terraform NO se instala aca: corre en local/CI, no en el Space (y apt-get
+# requiere root, que la LCC no tiene). El Space solo necesita aws-cli y el repo.
+#
 # Regla: un paso de CONVENIENCIA nunca puede dejar el Space sin arrancar. Solo
 # un REQUISITO real deja abortar el arranque, y hoy no hay ninguno (el app
 # arranca sin ninguna CLI: el repo y los venv ya estan en EFS). Todo lo de
@@ -46,17 +49,6 @@ install_aws_cli() {
     /tmp/aws/install
 }
 
-install_terraform() {
-  command -v terraform >/dev/null 2>&1 && return 0
-  apt-get install -y gnupg software-properties-common &&
-    wget -qO- https://apt.releases.hashicorp.com/gpg |
-    gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg &&
-    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
-      > /etc/apt/sources.list.d/hashicorp.list &&
-    apt-get update &&
-    apt-get install -y terraform
-}
-
 clone_repo() {
   [ -d "$REPO_DIR/.git" ] && return 0
   # Por SSH: el Space no tiene credenciales (corre con `sinca-dev-role`); la key
@@ -72,7 +64,6 @@ main() {
   log "=== on_start BEGIN (user=$(id -un), repo=$REPO_DIR) ==="
 
   _try "AWS CLI v2" install_aws_cli
-  _try "Terraform" install_terraform
   _try "repo clonado por SSH" clone_repo
 
   log "=== on_start END (ok) ==="

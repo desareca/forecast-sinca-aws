@@ -171,13 +171,13 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
 
 ## 12. Cierre (higiene)
 
-- [ ] 12.1 `infra/scripts/on_start.sh`: quitar `install_terraform` (función) y su
+- [x] 12.1 `infra/scripts/on_start.sh`: quitar `install_terraform` (función) y su
   línea `_try "Terraform" install_terraform`; ajustar el comentario de cabecera
   si lista terraform. Terraform no se usa en el Space (corre en local/CI); sacar
   el paso elimina el `WARN` recurrente y deja el log `END (ok)` sin ruido.
-- [ ] 12.2 `project-decisions.md` §3: fila `dev-environment` — quitar "terraform"
+- [x] 12.2 `project-decisions.md` §3: fila `dev-environment` — quitar "terraform"
   de la lifecycle config (deja "reinstala aws-cli si falta y clona el repo").
-- [ ] 12.3 `docs/space-sagemaker.md`: §4.2 quitar la línea `WARN ... Terraform`
+- [x] 12.3 `docs/space-sagemaker.md`: §4.2 quitar la línea `WARN ... Terraform`
   del ejemplo de log; §6 cerrar el pendiente `apt-get` sin `sudo` con la decisión
   "terraform fuera del Space (corre en local/CI), ya no se instala en la LCC".
 - [ ] 12.4 `notebooks/analisis_baseline.ipynb`: limpiar outputs y execution_count
@@ -475,3 +475,19 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   su fix, y el checklist de "recrear desde cero" como criterio de aceptación.
   `README.md` apunta a ese documento desde "Entorno de desarrollo". Los valores
   de cuenta/dominio van como placeholders, igual que en los `.ps1.example`.
+- **12.1 (terraform fuera de la LCC)**: se borró `install_terraform` y su
+  `_try "Terraform" ...`. Verificado con `bash -n` y con la simulación local del
+  patrón (`_try` que falla → `EXIT=0` + `WARN`; `_fail` → `EXIT=1`). Se agregó
+  una línea al comentario de cabecera explicando **por qué** no está: corre en
+  local/CI y `apt-get` necesita root, que la LCC no tiene.
+  **Ojo**: la LCC deployada en AWS todavía tiene el paso de Terraform hasta que
+  el CI aplique este commit; un arranque intermedio sigue mostrando el `WARN`.
+- **12.3 (docs coherentes con la decisión)**: en `docs/space-sagemaker.md` el
+  ejemplo de log de §4.2 ya no incluye la línea de `WARN ... Terraform`, y §6
+  reemplaza el pendiente "apt-get sin sudo" por una subsección
+  "Cerrado: Terraform ya no se instala en el Space" con la decisión tomada.
+- **12.4 (notebook sin outputs)**: `jupyter nbconvert --clear-output --inplace`.
+  Estado verificado: las 5 celdas de código con `outputs: []` y
+  `execution_count: null` (−595 líneas). Commit atómico separado del cambio de
+  LCC. Recordar: si se vuelve a correr en el Space y se commitea, vuelven los
+  outputs (pasó en `6a3eb83`).
