@@ -55,8 +55,10 @@ resource "aws_sagemaker_space" "dev" {
 
     jupyter_lab_app_settings {
       default_resource_spec {
-        instance_type        = var.space_instance_type
-        lifecycle_config_arn = aws_sagemaker_studio_lifecycle_config.on_start.arn
+        instance_type                 = var.space_instance_type
+        lifecycle_config_arn          = aws_sagemaker_studio_lifecycle_config.on_start.arn
+        sagemaker_image_arn           = var.sagemaker_image_arn
+        sagemaker_image_version_alias = var.sagemaker_image_version_alias
       }
     }
   }

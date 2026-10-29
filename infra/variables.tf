@@ -39,6 +39,18 @@ variable "space_instance_type" {
   default     = "ml.t3.large"
 }
 
+variable "sagemaker_image_arn" {
+  description = "ARN de la imagen JupyterLab del Space (imagen pública de SageMaker, no de la cuenta del proyecto)"
+  type        = string
+  default     = "arn:aws:sagemaker:us-east-1:885854791233:image/sagemaker-distribution-cpu"
+}
+
+variable "sagemaker_image_version_alias" {
+  description = "Alias de versión de la imagen JupyterLab del Space (null = usar la versión por defecto de la imagen)"
+  type        = string
+  default     = "3.2.0"
+}
+
 variable "mlflow_allowed_cidr" {
   description = "CIDR autorizado a acceder a la UI de MLflow (puerto 5000). Restringir a la IP del operador."
   type        = string

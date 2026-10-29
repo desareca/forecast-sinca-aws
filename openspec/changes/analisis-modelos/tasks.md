@@ -123,18 +123,18 @@ Motivo: el Space `sinca-dev` no reconstruye el app desde cero: el
 `set -euo pipefail`. Esto bloqueaba la tarea 5.4. Se corrige acá (es el
 prerrequisito directo de "verificar que el notebook abre en el Space").
 
-- [ ] 10.1 `infra/variables.tf`: agregar `sagemaker_image_arn` (default
+- [x] 10.1 `infra/variables.tf`: agregar `sagemaker_image_arn` (default
   `arn:aws:sagemaker:us-east-1:885854791233:image/sagemaker-distribution-cpu`)
   y `sagemaker_image_version_alias` (default `"3.2.0"`). Imagen pública de
   SageMaker, no de la cuenta del proyecto.
-- [ ] 10.2 `infra/sagemaker-domain.tf`: en
+- [x] 10.2 `infra/sagemaker-domain.tf`: en
   `space_settings.jupyter_lab_app_settings.default_resource_spec` agregar
   `sagemaker_image_arn` + `sagemaker_image_version_alias` referenciando las
   variables de 10.1.
-- [ ] 10.3 `infra/scripts/start-space.ps1.example`: sumar al `$spec` de
+- [x] 10.3 `infra/scripts/start-space.ps1.example`: sumar al `$spec` de
   `create-app` `SageMakerImageArn=...` y `SageMakerImageVersionAlias=3.2.0`
   (propaga la fuente única de verdad).
-- [ ] 10.4 `infra/scripts/on_start.sh`: reescribir con log + `_try`/`_fail`:
+- [x] 10.4 `infra/scripts/on_start.sh`: reescribir con log + `_try`/`_fail`:
   - `set -uo pipefail` (sacar `-e`); funciones `log`, `_fail` (exit 1), `_try`
     (loguea `WARN (no bloqueante)` y sigue).
   - `tee -a ~/.on_start.log` para toda la salida; marker begin/end por corrida.
@@ -143,10 +143,10 @@ prerrequisito directo de "verificar que el notebook abre en el Space").
   - quitar el bloque de Node.js + Open Code CLI (no se usa en el Space; era el
     bloqueante).
   - sin pasos `_fail` hoy (el app arranca sin ninguna CLI).
-- [ ] 10.5 `modules/dev-environment/blueprint.md`: línea 52 quitar "Node.js +
+- [x] 10.5 `modules/dev-environment/blueprint.md`: línea 52 quitar "Node.js +
   Open Code CLI"; en `## Notas de este proyecto` registrar: imagen fijada
   (arn + alias `3.2.0`), LCC `_try`/`_fail` + log EFS, opencode fuera del Space.
-- [ ] 10.6 `project-decisions.md` §3: fila `dev-environment` — quitar
+- [x] 10.6 `project-decisions.md` §3: fila `dev-environment` — quitar
   "Node+OpenCode" de la descripción de la lifecycle config.
 
 ## 11. Ejecución real (operador corre y pega output)
@@ -320,3 +320,33 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   diagnósticos. No se tocó (es decisión de repo): o se versiona el fixture
   completo (negación en `.gitignore`), o se destrackea el sqlite y el fixture se
   genera siempre con `make_fixture.py` (lo que dice el README).
+- **10.4 (log fuera de `~` a propósito)**: el `tee` escribe en
+  `/home/sagemaker-user/.on_start.log` (ruta explícita) en vez de
+  `~/.on_start.log`: el lifecycle config puede correr como **root**, y en ese
+  caso `~` es `/root`, que no está en EFS ni es lo que se lee desde la terminal
+  de JupyterLab (tarea 11.4). Se mantiene el criterio de 10.4, cambia solo la
+  resolución de la ruta.
+- **10.4 (verificación local del patrón, sin AWS)**: con una copia del script en
+  `/tmp` (rutas de repo/log redirigidas y las instalaciones reemplazadas por
+  no-ops) se confirmó el comportamiento pedido: una conveniencia que falla
+  termina `EXIT=0` con `WARN (no bloqueante)` en el log, y un `_fail` termina
+  `EXIT=1` **a través del `tee`** (lo propaga `pipefail`). Sin esa prueba, el
+  `main | tee` habría tragado el código de salida de `_fail`.
+- **10.4 (apt-get sin `sudo`)**: los `apt-get` de `install_terraform` quedaron
+  igual que antes (sin `sudo`), asumiendo que la LCC corre como root. Si en
+  11.4 el paso queda en `WARN` con error de permisos, es eso: el `_try` lo deja
+  pasar sin tumbar el app, y hay que ajustar el script.
+- **10.3 (el ARN de imagen no sale de `AWS_ACCOUNT_ID`)**: la imagen es pública
+  de SageMaker (cuenta `885854791233`), no de la cuenta del proyecto, así que en
+  `start-space.ps1.example` el ARN va literal con un comentario que lo aclara;
+  solo el ARN de la lifecycle config usa el placeholder `AWS_ACCOUNT_ID`.
+- **10.5 (ajuste de consistencia fuera del texto de la tarea)**: además de la
+  línea 52, se actualizó el bullet de "Parámetros a definir por proyecto" que
+  decía "además de Node + Open Code CLI" (quedaba contradictorio al sacarlo).
+  No cambia ninguna decisión: es el mismo cambio aplicado a otra mención.
+- **10.2 (efecto esperado en la recreación del app)**: al fijar
+  `sagemaker_image_arn` en el `default_resource_spec` del Space, todo `CreateApp`
+  (consola o `start-space.ps1`) hereda imagen + alias. Esto es lo que faltaba:
+  `create-app` sin imagen falla con `SageMaker Image ARN is required` y la
+  consola muestra el cartel engañoso "Permissions not configured correctly".
+  **No verificado contra AWS todavía** (eso es 11.1–11.4, operador).

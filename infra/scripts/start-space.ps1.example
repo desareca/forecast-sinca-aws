@@ -15,7 +15,11 @@ $ErrorActionPreference = "Stop"
 
 $env:AWS_PROFILE = "AWS_PROFILE"
 $domain = "DOMAIN_ID"
-$spec   = "InstanceType=ml.t3.large,LifecycleConfigArn=arn:aws:sagemaker:us-east-1:AWS_ACCOUNT_ID:studio-lifecycle-config/sinca-on-start"
+# La imagen es publica de SageMaker (cuenta 885854791233), no de la cuenta del
+# proyecto: por eso el ARN no lleva el placeholder AWS_ACCOUNT_ID. Es el mismo
+# valor que fija Terraform (variables sagemaker_image_arn / _version_alias).
+$image  = "arn:aws:sagemaker:us-east-1:885854791233:image/sagemaker-distribution-cpu"
+$spec   = "InstanceType=ml.t3.large,LifecycleConfigArn=arn:aws:sagemaker:us-east-1:AWS_ACCOUNT_ID:studio-lifecycle-config/sinca-on-start,SageMakerImageArn=$image,SageMakerImageVersionAlias=3.2.0"
 
 $existing = aws sagemaker list-apps --domain-id-equals $domain --space-name-equals sinca-dev --profile $env:AWS_PROFILE --query "Apps[?AppName=='default'].Status" --output text
 

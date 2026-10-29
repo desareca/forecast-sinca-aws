@@ -49,13 +49,17 @@ local (no en EFS) se **borra al apagar**. Por eso, lo que no persiste solo se
 reinstala en cada arranque vía un script de lifecycle (`~/.on_start` que corre
 al prender el Space):
 
-- Reinstalar **Node.js + Open Code CLI** (no persisten solos en el cómputo).
 - Configurar **repos de GitHub** (clonar / setear remotes / credenciales).
 - Cualquier tool/CLI que se necesite y no viva en EFS.
 
 Regla: **todo lo reusable vive en EFS; todo lo efímero se reinstala en
 `~/.on_start`**. Si algo "desaparece" al apagar, es que falta en el lifecycle
 script.
+
+Regla complementaria: **un paso de conveniencia nunca puede voltear el Space**.
+El script distingue requisitos (`_fail`, aborta) de conveniencia (`_try`, loguea
+`WARN (no bloqueante)` y sigue) y deja toda la salida en un log persistente en
+EFS, legible desde el propio Space aunque el app haya arrancado a medias.
 
 ### 3. Conexión preferida: VS Code LOCAL vía SSH-sobre-SSM
 
@@ -104,7 +108,8 @@ y versionado, y no hay "quick setup" que cree recursos de red sin avisar (ver
 
 - Nombre del dominio/espacio SageMaker Studio y del Space.
 - Tamaño de instancia (default `ml.t3.large`).
-- Qué instala/configura el `~/.on_start` además de Node + Open Code CLI.
+- Qué instala/configura el `~/.on_start` (cada paso de conveniencia va por `_try`,
+  no bloqueante).
 - Repo(s) de GitHub a clonar y su estrategia de acceso.
 - Si se habilita SSH sobre SSM (default: sí, para VS Code remoto).
 
@@ -127,3 +132,19 @@ y versionado, y no hay "quick setup" que cree recursos de red sin avisar (ver
   Space es el cómputo y SSM es solo el túnel de conexión. El rol de dev no
   necesita permisos `ssm` explícitos: el SSH-over-SSM lo gestiona el backend
   de SageMaker.
+- **Imagen del app fijada en Terraform**: el `default_resource_spec` del Space
+  define `sagemaker_image_arn`
+  (`arn:aws:sagemaker:us-east-1:885854791233:image/sagemaker-distribution-cpu`,
+  imagen **pública** de SageMaker, no de la cuenta del proyecto) y
+  `sagemaker_image_version_alias = "3.2.0"`. Sin el ARN, `create-app` falla con
+  `SageMaker Image ARN is required for App with type [JupyterLab]` y la consola
+  de Studio muestra un cartel engañoso de "Permissions not configured
+  correctly" (no es IAM). El ARN está también en `start-space.ps1.example`.
+- **Lifecycle config robusta (`_try` / `_fail` + log en EFS)**: `on_start.sh`
+  corre con `set -uo pipefail` (sin `-e`), separa requisitos (`_fail`, aborta) de
+  conveniencia (`_try`, `WARN (no bloqueante)`) y vuelca todo a
+  `/home/sagemaker-user/.on_start.log` (EFS), legible desde JupyterLab. Motivo:
+  un `npm install` de un paquete inexistente bajo `set -e` tumbaba el app entero
+  y el fallo solo era visible como "Permissions not configured correctly".
+- **opencode fuera del Space**: Node.js + Open Code CLI ya no se instalan en el
+  lifecycle config; el agente se usa desde local, no dentro del Space.

@@ -33,7 +33,7 @@ Dev environment remoto según `modules/dev-environment/blueprint.md`.
 | Blueprint | ¿Aplica? | Parámetros de este proyecto |
 |---|---|---|
 | `compute` | Sí | Entrenamiento en SageMaker Training Job (CPU `ml.m5.large` tabular / GPU `ml.g4dn.xlarge` AE+DMD). **Cómputo de training confirmado (Fase 3):** Training Job on-demand, CPU `ml.m5.large`, imagen ECR `sinca-train` (solo runtime; el código viaja por `source_dir`/`entry_point` desde `pipeline/`), disparo manual. Cómputo del scraper: **Fargate on-demand** (decidido en Fase 2; imagen ECR `sinca-scraper`, task Fargate sin service). |
-| `dev-environment` | Sí | SageMaker Studio Space `ml.t3.large`, EFS persistente, SSH over SSM, lifecycle config reinstala Node+OpenCode+aws+terraform+repo. |
+| `dev-environment` | Sí | SageMaker Studio Space `ml.t3.large`, EFS persistente, SSH over SSM, imagen JupyterLab fijada en Terraform (`sagemaker-distribution-cpu` + alias `3.2.0`); lifecycle config reinstala aws+terraform+repo (pasos de conveniencia no bloqueantes, con log en EFS). |
 | `data-quality` | Sí | pandera; convención `raw/`/`validated/`/`quarantine/`; dimensiones y umbrales se definen en Fase 2. |
 | `tracking-experimentos` | Sí | MLflow self-hosted (SQLite+S3), prefijo `sinca-mlflow/_mlflow/`; logging directo sin servidor como modo principal. |
 | `costos` | Sí | Checklist "¿qué queda corriendo?" por servicio; estimación mensual < USD 5 (Space apagable). |
