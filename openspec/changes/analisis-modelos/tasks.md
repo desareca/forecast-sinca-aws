@@ -407,3 +407,18 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   los `apt-get`, en el `gpg --dearmor` y en el `echo` a
   `/etc/apt/sources.list.d/`. Requiere otro `apply` + reinicio del Space → **lo
   decide el arquitecto / el operador**, no el implementador.
+- **11.4 (hallazgo: la policy del rol dev no permite LISTAR `sinca-mlflow`)**: la
+  celda 4 del notebook falla con
+  `AccessDenied ... s3:ListBucket on arn:aws:s3:::sinca-mlflow`. La policy
+  (`infra/iam-dev.tf`) incluye `s3:ListBucket` sobre
+  `arn:aws:s3:::sinca-mlflow/_mlflow` y `.../_mlflow/*`, pero `ListBucket`
+  **exige el ARN del bucket**, no un prefijo: esas dos entradas son inútiles
+  para listar. Lo que sí funciona es `GetObject` (celda 2 baja
+  `_mlflow/mlflow.sqlite` sin problema) y `sinca-data` (tiene el ARN del
+  bucket → celda 3 OK). **Alcance real**: además del notebook, rompe
+  `mlflow_log.download_state()` (pagina con `list_objects_v2`) → el "dashboard
+  en el Space" del README falla igual bajo el rol dev. Arreglo mínimo
+  propuesto (no aplicado): `s3:ListBucket` sobre `arn:aws:s3:::sinca-mlflow`
+  con condición `StringLike {"s3:prefix": ["_mlflow/", "_mlflow/*"]}`, que es
+  exactamente el mínimo privilegio que se quiso expresar. Es IAM → decisión
+  del arquitecto + `apply` del operador.
