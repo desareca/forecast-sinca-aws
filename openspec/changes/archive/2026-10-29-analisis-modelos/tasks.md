@@ -495,3 +495,19 @@ Contingencia: si `terraform apply` rechaza el alias `3.2.0`, setear
   `execution_count: null` (−595 líneas). Commit atómico separado del cambio de
   LCC. Recordar: si se vuelve a correr en el Space y se commitea, vuelven los
   outputs (pasó en `6a3eb83`).
+
+- **Cierre (sync + archive)**: los delta specs se aplicaron a mano en
+  openspec/specs/ (paso /opsx/sync) y despues se corrio
+  `openspec archive analisis-modelos --yes --skip-specs`. Motivo del
+  `--skip-specs`: `archive` re-aplica los deltas sobre los specs principales y
+  aborta con `ADDED failed ... already exists` si ya se sincronizaron
+  (`No files were changed`). Con el flag, archiva el change preservando el
+  merge ya revisado.
+- **Cierre (correccion en dev-environment no cubierta por el delta)**: el
+  requisito existente "Lifecycle config para reinstalar lo efimero" exigia
+  literalmente "Node.js + Open Code CLI, AWS CLI, Terraform", que es exactamente
+  lo que este change deroga (10.4 y 12.1). Se ajusto a aws-cli + clon del repo
+  con la regla de no bloqueante, en vez de dejarlo contradiciendo el requisito
+  nuevo "Lifecycle config robusta y con logs" y project-decisions.md §3. El
+  delta no traia un MODIFIED para ese requisito: es la unica edicion fuera de los
+  deltas, registrada aca para revision del arquitecto.
