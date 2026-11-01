@@ -80,9 +80,15 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 3. `data-pipeline` (Fase 2) — scraper SINCA/Open-Meteo/feriados + ICAP + pandera. **(completado)**
 4. `baseline` (Fase 3) — persistencia + modelo simple (LightGBM lags). **(completado)**
 5. `analisis-modelos` (Fase 3.5) — dashboard Streamlit + persistencia de diagnósticos por run.
-6. `experimentos-avanzados` (Fase 4) — autoencoder + DMD/Koopman.
-7. `evaluacion` (Fase 5) — comparar baseline + referencia pública.
-8. `productivizacion` (Fase 6) — reentrenamiento semanal + inferencia diaria.
+6. `ae-reconstruccion` (Fase 4, parte 1) — autoencoders sobre las 6 series de MP con
+   auxiliares al latente, compuerta de reconstrucción y primer pase de DMD global
+   sin optimizar.
+7. `ae-dmd` (Fase 4, parte 2) — dinámica sobre el latente: parámetros del DMD,
+   localización (catálogo PA-14), control, Koopman end-to-end, loss conjunta ICAP.
+   (Borrador en `openspec/changes/ae-dmd/`; se rehace con los resultados del
+   change anterior.)
+8. `evaluacion` (Fase 5) — comparar baseline + referencia pública.
+9. `productivizacion` (Fase 6) — reentrenamiento semanal + inferencia diaria.
 
 ## 9. Decisiones cerradas
 
