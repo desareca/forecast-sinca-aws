@@ -60,7 +60,7 @@
   "agents": {
     "arquitecto": {
       "system": "Arquitecto — piensa, explora, redacta proposal/design/tasks.md via /opsx/propose. No implementa codigo.",
-      "model": "opencode/deepseek-v4-pro",
+      "model": "opencode/claude-sonnet-5-5",
       "permissions": [
         { "action": "edit", "resource": "*", "effect": "ask" },
         { "action": "shell", "resource": "*", "effect": "ask" }
@@ -68,7 +68,7 @@
     },
     "implementador": {
       "system": "Implementador — ejecuta tareas de tasks.md via /opsx/apply, cierra changes via /opsx/archive. No redacta arquitectura.",
-      "model": "opencode/deepseek-v4.1-flash",
+      "model": "opencode/deepseek-v4.1-flash-free",
       "permissions": [
         { "action": "edit", "resource": "*", "effect": "allow" }
       ]
