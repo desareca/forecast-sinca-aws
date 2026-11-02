@@ -1,0 +1,13 @@
+# Dependencias de TENSORFLOW para los notebooks de nivel 2 (change `ae-reconstruccion`).
+#
+# Separado de `requirements-analysis.txt` a propósito: el dashboard y el Space no
+# necesitan TF salvo para cargar `encoder.keras`/`decoder_mp.keras` y decodificar.
+#
+# La versión de `tensorflow-cpu` DEBE ser la misma que la imagen de training
+# `docker/train-tf.Dockerfile` (tag `tf-cpu-v1`); si no coinciden, los `.keras` pueden
+# no cargarse. Antes de instalar, verificar con output real si el Space ya trae
+# TensorFlow (`pip list | grep -i -E "tensorflow|keras"`): tarea 9.4.
+#
+# Instalar solo en el venv del Space y solo cuando se use el nivel 2:
+#   python -m pip install -r requirements-notebooks-tf.txt
+tensorflow-cpu==2.20.0
