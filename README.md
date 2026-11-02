@@ -358,13 +358,10 @@ python pipeline/train/train.py --local-validated-dir <dir>/validated --no-upload
 
 ### Build + push de la imagen de entrenamiento
 
+Tags explícitos por imagen (`lgbm-v1` para LightGBM, `tf-cpu-v1` para los autoencoders); nunca `:latest`. Pasos completos, retag y lanzamiento en [`docker/README.md`](docker/README.md).
+
 ```powershell
-$env:AWS_PROFILE="<profile>"
-docker build -f docker/train.Dockerfile -t sinca-train .
-$acct = aws sts get-caller-identity --query Account --output text
-aws ecr get-login-password | docker login --username AWS --password-stdin $acct.dkr.ecr.us-east-1.amazonaws.com
-docker tag sinca-train:latest $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
-docker push $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
+docker build -f docker/train.Dockerfile -t sinca-train:lgbm-v1 .
 ```
 
 ### Lanzar el Training Job (manual)

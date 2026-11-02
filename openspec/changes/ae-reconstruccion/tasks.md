@@ -54,7 +54,7 @@
 
 - [x] 6.1 Crear `docker/train-tf.Dockerfile` (solo runtime, `tensorflow-cpu`, patrón de `train.Dockerfile`; sin código ni `requirements.txt` ajeno en `source_dir`)
 - [x] 6.2 Ajustar `train/launch.py` para elegir imagen (tag explícito), tipo de instancia y entry point; sin `:latest`
-- [ ] 6.3 Documentar en `docker/` el flujo de build/push con los tags `lgbm-v1` y `tf-cpu-v1`
+- [x] 6.3 Documentar en `docker/` el flujo de build/push con los tags `lgbm-v1` y `tf-cpu-v1`
 - [x] 6.4 Mover `pipeline/requirements.txt` fuera de `source_dir` (`git mv pipeline/requirements.txt requirements-scraper.txt`), de modo que el toolkit de SageMaker no instale deps del scraper en los Training Jobs; confirmar que ningún Dockerfile, workflow ni doc lo referencia y actualizar lo que corresponda (ver `design.md` D10)
 
 ## 7. Dashboard
@@ -154,3 +154,5 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 ### Tareas 6.4 y documentación (cierre de código)
 
 - **6.4**: `pipeline/requirements.txt` movido con `git mv` a `requirements-scraper.txt` (raíz). Verificado con `git grep` que nada lo referencia: ni workflows de `.github/`, ni Dockerfiles (`scraper.Dockerfile` instala sus deps inline y solo hace `COPY pipeline/`), ni README. Quedan menciones solo en documentación histórica (`archive/`, `modules/compute/blueprint.md`, `design.md`) que no se modifican. `requirements-dev.txt` tiene un comentario genérico sobre el comportamiento del toolkit, que sigue siendo válido.
+
+- **6.3**: `docker/README.md` documenta build, push y retag con tags explícitos (`lgbm-v1`, `tf-cpu-v1`), la regla de no usar `:latest` y que `sinca-train` es `MUTABLE` (por eso no se reusa un tag publicado). El retag de la imagen LightGBM (9.2) queda descrito como paso del operador, sin ejecutarlo. En `README.md`, el bloque de build de entrenamiento dejó de publicar `:latest` y enlaza a esa guía; los comandos reales de AWS siguen pendientes de ejecución (grupo 9).
