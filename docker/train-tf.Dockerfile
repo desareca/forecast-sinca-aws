@@ -30,7 +30,11 @@ RUN pip install --no-cache-dir \
     "scikit-learn>=1.4,<2.0" \
     "mlflow>=3.0,<4.0" \
     "boto3>=1.34,<2.0" \
-    "pyarrow>=15.0,<22.0" \
-    "sagemaker-training>=4.7,<5.0"
+    "pyarrow>=15.0,<22.0"
+
+# sagemaker-training fija protobuf<=3.20.3, incompatible con TensorFlow 2.20 (protobuf>=5.28).
+# Se instala sin dependencias y se agregan sus deps de runtime excepto protobuf.
+RUN pip install --no-cache-dir --no-deps "sagemaker-training>=4.7,<5.0" \
+    && pip install --no-cache-dir "retrying" "gevent" "inotify_simple==1.2.1" "werkzeug" "paramiko" "psutil"
 
 ENTRYPOINT ["train"]

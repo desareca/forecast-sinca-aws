@@ -84,9 +84,9 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 
 ## 9. Ejecución real — preparación (con el operador)
 
-- [ ] 9.1 Verificar identidad AWS (`aws sts get-caller-identity --profile $AWS_PROFILE`), cuota `ml.g4dn.xlarge`/`ml.m5.large` for training job usage y existencia del repo ECR `sinca-train`
-- [ ] 9.2 Retaggear la imagen LightGBM existente como `lgbm-v1` (sin reconstruir) y ajustar la referencia en el lanzador; confirmar con una corrida corta de LightGBM que sigue funcionando
-- [ ] 9.3 Construir y subir la imagen `tf-cpu-v1` a `sinca-train`; confirmar el digest y que `lgbm-v1` sigue disponible
+- [x] 9.1 Verificar identidad AWS (`aws sts get-caller-identity --profile $AWS_PROFILE`), cuota `ml.g4dn.xlarge`/`ml.m5.large` for training job usage y existencia del repo ECR `sinca-train`
+- [x] 9.2 Retaggear la imagen LightGBM existente como `lgbm-v1` (sin reconstruir) y ajustar la referencia en el lanzador; confirmar con una corrida corta de LightGBM que sigue funcionando
+- [x] 9.3 Construir y subir la imagen `tf-cpu-v1` a `sinca-train`; confirmar el digest y que `lgbm-v1` sigue disponible
 - [ ] 9.4 En el Space (imagen `sagemaker-distribution-cpu`), verificar con output real si TensorFlow ya viene instalado y en qué versión (`pip list | grep -i -E "tensorflow|keras"`), y revisar disco/RAM disponibles; si no está o la versión difiere de `tf-cpu-v1`, instalar `requirements-notebooks-tf.txt` en el venv del Space y confirmar `import tensorflow`. Registrar en `EXPERIMENT-LOG.md`
 - [ ] 9.5 Medir con datos reales cuántas ventanas sobreviven por `L ∈ {24, 72, 168}` y generar el reporte de rangos por canal; registrar en `EXPERIMENT-LOG.md` (si con `L = 168` sobreviven muy pocas, parar y volver al Arquitecto)
 
@@ -168,3 +168,11 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 - Código y documentación de los grupos 1–8 completos, incluidas 3.7, 5.7, 6.3, 6.4, 8.1, 8.2 y la parte documental de 8.7.
 - **Pendiente solo el grupo 9–12** (AWS, Training Jobs, humo, punto de control 10.3, verificación en el Space). Son ejecución real con el operador.
 - Pendientes de operador anotados en las notas: retag `lgbm-v1` (9.2, procedimiento en `docker/README.md`), build y push de `tf-cpu-v1` (9.3), y verificación en el humo (10.1) de que el Training Job ya no instala dependencias del scraper y de las versiones de `tensorflow`/`numpy`/`pandas`.
+
+### Ejecución real — grupo 9 (en curso)
+
+- **9.1 (completa):** identidad `549024266383` (coincide con el bucket de tfstate de la cuenta personal). Cuotas: `ml.m5.large` = 20, `ml.g4dn.xlarge` = 1. Repo `sinca-train` existe (MUTABLE, scan on push).
+- **9.2 (completa):** corrida corta de LightGBM con `lgbm-v1` (`sinca-baseline-train-2026-11-02-20-25-47-337`): `Completed` en 275 s, 6 series entrenadas, persistencia calculada, artefactos y estado MLflow subidos (38 → 75 objetos). **Efecto colateral a limpiar:** los runs de prueba quedaron en `sinca-baseline` con versión `99`; borrarlos antes de 12.1 para que no aparezcan en el dashboard. Entorno: `.venv` del proyecto (SageMaker SDK 2.257.7), Python local.
+- **9.2 (detalle del retag):** confirmado con Docker local que `latest` = digest `sha256:31bbdf92…` (la imagen LightGBM). Se creó el tag `lgbm-v1` con `aws ecr put-image` sobre el manifest de ese digest. ECR re-serializa el índice multi-arquitectura al guardarlo, así que el digest del índice de `lgbm-v1` (`sha256:492de5f7…`) difiere del de `latest`. Los manifests hijos son idénticos en ambos (`amd64` `sha256:1c2c504…`, attestation `sha256:12c63cd…`). El tag `lgbm-v1` se sobrescribió 3 veces durante el intento; el estado final es el digest `492de5f7…`. No hizo falta cambiar código: `train/launch.py` ya recibe `--image-uri` con tag explícito y sus ejemplos usan `lgbm-v1`. Falta: corrida corta de LightGBM con `:lgbm-v1` para cerrar 9.2.
+- **9.3 (completa):** push de `tf-cpu-v1` OK, digest `sha256:351f5ed8…` (igual al manifest list del build local). `lgbm-v1` (`sha256:492de5f7…`) y `latest` (`sha256:31bbdf92…`) sin cambios. Detalle del diseño: `docker/train-tf.Dockerfile` no resolvía: `sagemaker-training` fija `protobuf<=3.20.3` y `tensorflow-cpu 2.20` exige `protobuf>=5.28`. Solución aplicada: `sagemaker-training` con `--no-deps` y sus deps de runtime sin protobuf (desviación de 6.1, aprobada por el operador). Build local OK; imports OK (tf 2.20.0, protobuf 7.36.2). `pip check` reporta solo ese conflicto, esperado. Falta: validar el entry point `train` en el humo 10.1 sobre SageMaker. Push y digest pendientes.
+- **Tag `:latest` de `sinca-train`:** se conserva apuntando a LightGBM sin cambios; la regla de no usar `:latest` en los lanzamientos sigue vigente.
