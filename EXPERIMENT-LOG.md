@@ -107,3 +107,24 @@ en el punto de control 10.3, no acá.
   - Registrar el venv como kernel de JupyterLab (`ipykernel`), que todavía no está instalado.
   - Verificar que `analysis/load.py` y los notebooks de nivel 1 siguen funcionando en el Python base.
 
+---
+
+## 2026-11-02 — ae-reconstruccion 9.5: ventanas por L y rangos por canal (datos reales)
+
+- **Hipótesis**: con la regla de descarte (ventana de MP sin huecos > 6 h) sobreviven ventanas suficientes también para `L = 168`. Si no, se para y se vuelve al Arquitecto.
+- **Qué se corrió**: grilla horaria de 50.471 h (2021-01-01 → 2026-10-04), particiones held-out (train = posiciones [0, 48168), test = [48168, 50471)), normalización ajustada solo con train. Lectura de `sinca-data/validated/` y cómputo local; no se escribió nada en AWS. Cuenta verificada antes de correr: `549024266383`.
+- **Ventanas que sobreviven** (`survival_counts`):
+
+  | L | train | test |
+  |---|---|---|
+  | 24 | 43.051 | 1.999 |
+  | 72 | 39.414 | 1.761 |
+  | 168 | 33.669 | 1.377 |
+
+- **Rangos por canal** (`range_report`, espacio z, normalizado con train):
+  - **MP**: sin recorte (fracción recortada 0). Rango z entre −3.7 y 4.6 (`pm10_nielol` máx. 4.56).
+  - **Aux con colas**: `pres_nielol` mín. −20.7 z; `pres_las_encinas` mín. −10.2 z; `rain_las_encinas` máx. 62.1 z; `rain_nielol` máx. 23.9 z; `rain_padre_las_casas_ii` máx. 19.7 z (1,1 % recortado). Con ±5 de recorte en aux, la fracción recortada es baja (≤ 1,1 %).
+  - **`rain`**: la mediana y los percentiles 1 y 99 de `rain_las_encinas` son iguales (≈ −0,026 z): casi todas las horas están en cero. Es el canal que se espera difícil (ver design D3).
+- **Lectura**: `L = 168` tiene ~34 mil ventanas de train, más del doble de las ~17 mil que estimaba `design.md`. El criterio de parar no se cumple.
+- **Decisión / siguiente paso**: continuar con 10.1 (humo). Como hay más muestras que lo estimado, la memoria pico de `L = 168` en `ml.m5.large` (8 GB) hay que medirla de verdad.
+
