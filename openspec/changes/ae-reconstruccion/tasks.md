@@ -162,3 +162,9 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 - **8.2**: `pipeline/ae/README.md` documenta los módulos, los tests sin AWS, el experimento local (con `--no-upload`), la ejecución en Docker con `--entrypoint python` sobre la imagen `tf-cpu-v1`, y el Training Job por `launch.py --entry-point ae/run.py --hp ...` con el orden search → final → dmd → reference. Los comandos se derivan de los flags reales de `run.py` y `launch.py`; no se ejecutaron contra AWS.
 
 - **8.7 (parte documental)**: el README raíz tiene una sección de notebooks de exploración del autoencoder: lectura vía `analysis/load.py`, versionado con `git add -f` (porque `*.ipynb` está ignorado), notebooks sin outputs (`nbconvert --clear-output`), instalación de TF solo para nivel 2, y el flujo encender/trabajar/apagar del Space. La parte de código de 8.7 (reutilizar `load.py`, notebooks sin outputs) se había cumplido antes.
+
+### Estado tras el cierre de código (supersede el bullet "Alcance" de arriba)
+
+- Código y documentación de los grupos 1–8 completos, incluidas 3.7, 5.7, 6.3, 6.4, 8.1, 8.2 y la parte documental de 8.7.
+- **Pendiente solo el grupo 9–12** (AWS, Training Jobs, humo, punto de control 10.3, verificación en el Space). Son ejecución real con el operador.
+- Pendientes de operador anotados en las notas: retag `lgbm-v1` (9.2, procedimiento en `docker/README.md`), build y push de `tf-cpu-v1` (9.3), y verificación en el humo (10.1) de que el Training Job ya no instala dependencias del scraper y de las versiones de `tensorflow`/`numpy`/`pandas`.
