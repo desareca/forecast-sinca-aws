@@ -68,22 +68,50 @@ def test_diagnosticos_latente_detectan_colapso():
     assert diag["eff_dim_pr"] < 3.5
 
 
-def test_compuerta_solo_reporta_sin_umbrales():
+def test_compuerta_relativa_decide_sin_umbrales():
+    # Capa relativa (D5): supera al promedio y a PCA(d) en todas las series.
     ae = {"s": {"rmse": 1.0, "var_ratio": 0.9, "slope": 0.95}}
     pca = {"s": {"rmse": 2.0}}
-    gate = aem.gate_decision(ae, pca, None)
-    assert gate["gate_pass"] is None
-    assert gate["beats_pca"] is True
+    mean = {"s": {"rmse": 3.0}}
+    gate = aem.gate_decision(ae, pca, mean, None)
+    assert gate["relative"] is True and gate["gate_pass"] is True
+    assert gate["beats_pca"] is True and gate["beats_mean"] is True
+    assert gate["numeric"] is None  # sin umbrales, la capa numérica no aplica
 
 
-def test_compuerta_con_umbrales_decide():
+def test_compuerta_relativa_falla_si_no_supera_al_promedio():
+    ae = {"s": {"rmse": 1.0, "var_ratio": 0.9, "slope": 0.95}}
+    pca = {"s": {"rmse": 2.0}}
+    mean = {"s": {"rmse": 0.8}}  # el predictor del promedio es mejor
+    gate = aem.gate_decision(ae, pca, mean, None)
+    assert gate["beats_pca"] is True and gate["beats_mean"] is False
+    assert gate["gate_pass"] is False
+
+
+def test_compuerta_relativa_falla_si_una_serie_no_supera_pca():
+    ae = {"a": {"rmse": 1.0, "var_ratio": 0.9, "slope": 1.0}, "b": {"rmse": 2.5, "var_ratio": 0.9, "slope": 1.0}}
+    pca = {"a": {"rmse": 2.0}, "b": {"rmse": 2.0}}
+    mean = {"a": {"rmse": 3.0}, "b": {"rmse": 3.0}}
+    gate = aem.gate_decision(ae, pca, mean, None)
+    assert gate["beats_pca_by_series"] == {"a": True, "b": False}
+    assert gate["gate_pass"] is False
+
+
+def test_compuerta_numerica_se_suma_a_la_relativa():
     ae = {"s": {"rmse": 1.0, "var_ratio": 0.5, "slope": 0.95}}
     pca = {"s": {"rmse": 2.0}}
-    gate = aem.gate_decision(ae, pca, {"min_var_ratio": 0.9, "slope_tol": 0.1})
-    assert gate["gate_pass"] is False
-    gate_ok = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.95, "slope": 1.0}}, pca,
+    mean = {"s": {"rmse": 3.0}}
+    # Relativa aprobada, numérica no (var_ratio bajo): gate_pass falso.
+    gate = aem.gate_decision(ae, pca, mean, {"min_var_ratio": 0.9, "slope_tol": 0.1})
+    assert gate["relative"] is True and gate["numeric"] is False and gate["gate_pass"] is False
+    # Ambas capas aprobadas.
+    ok = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.95, "slope": 1.0}}, pca, mean,
+                           {"min_var_ratio": 0.9, "slope_tol": 0.1})
+    assert ok["gate_pass"] is True
+    # Numérica exige la relativa: aunque las métricas numéricas pasen, sin superar PCA no hay aprobación.
+    bad_rel = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.95, "slope": 1.0}}, {"s": {"rmse": 0.5}}, mean,
                                 {"min_var_ratio": 0.9, "slope_tol": 0.1})
-    assert gate_ok["gate_pass"] is True
+    assert bad_rel["numeric"] is True and bad_rel["gate_pass"] is False
 
 
 # --- DMD (4.5) ---------------------------------------------------------------

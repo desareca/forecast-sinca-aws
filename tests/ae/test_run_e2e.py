@@ -14,6 +14,20 @@ pytest.importorskip("mlflow")
 from conftest import synthetic_validated  # noqa: E402
 
 
+def _force_gate_pass(monkeypatch) -> None:
+    """Fuerza la compuerta relativa a aprobada (solo para tests de mecánica del DMD)."""
+    from ae import metrics as aem
+
+    real = aem.gate_decision
+
+    def approved(*args, **kwargs):
+        gate = real(*args, **kwargs)
+        gate.update(gate_pass=True, relative=True)
+        return gate
+
+    monkeypatch.setattr(aem, "gate_decision", approved)
+
+
 def _write_validated(root: pathlib.Path) -> pathlib.Path:
     data = synthetic_validated(start="2026-01-01", hours=24 * 280, gaps=True)
     for key, frame in (("sinca", data["sinca"]), ("open_meteo", data["open_meteo"]), ("feriados", data["feriados"])):
@@ -47,7 +61,12 @@ def pipeline_run(tmp_path_factory):
 
     tmp = tmp_path_factory.mktemp("ae_e2e")
     validated = _write_validated(tmp / "validated")
-    assert aerun.run(aerun.parse_args(_args(tmp, validated, "--mode", "final", "--arch", "mlp", "--seeds", "0"))) == 0
+    mp = pytest.MonkeyPatch()
+    try:
+        _force_gate_pass(mp)
+        assert aerun.run(aerun.parse_args(_args(tmp, validated, "--mode", "final", "--arch", "mlp", "--seeds", "0"))) == 0
+    finally:
+        mp.undo()
     assert aerun.run(aerun.parse_args(_args(tmp, validated, "--mode", "reference", "--arch", "mlp"))) == 0
     return tmp, validated
 
@@ -81,7 +100,10 @@ def test_final_guarda_modelos_y_tablas(pipeline_run):
     assert (seed_dir / "decoder_mp.keras").exists()
     config = json.loads((seed_dir / "config.json").read_text(encoding="utf-8"))
     assert config["cfg"]["d_aux"] == 2
-    assert config["gate"]["gate_pass"] is None  # sin umbrales: solo reporta
+    # Compuerta en dos capas: gate_pass siempre booleano; sin umbrales la numérica es None.
+    assert isinstance(config["gate"]["gate_pass"], bool)
+    assert config["gate"]["numeric"] is None
+    assert "beats_mean" in config["gate"]
 
 
 def test_reference_registra_mean_y_pca(pipeline_run):

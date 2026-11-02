@@ -113,7 +113,7 @@ def _ae_view(state_dir: str, runs: list[dict]) -> None:
     gate = metrics.get("gate_pass")
     beats = metrics.get("gate_beats_pca")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Compuerta", "sin umbrales (solo reporta)" if gate is None else ("aprobada" if gate else "no aprobada"))
+    c1.metric("Compuerta (relativa, + numérica si hay umbrales)", "—" if gate is None else ("aprobada" if gate else "no aprobada"))
     c2.metric("Supera PCA(d) en todas las series", "sí" if beats else "no" if beats is not None else "—")
     ablation = metrics.get("ablation_zaux_delta_rmse_test")
     c3.metric("Ablación z_aux (Δ RMSE MP, test)", f"{ablation:.3f}" if ablation is not None else "—")

@@ -120,36 +120,51 @@ def latent_diagnostics(z: np.ndarray, d_aux: int, dead_std: float = 1e-4) -> dic
 def gate_decision(
     ae_metrics: dict[str, dict[str, float]],
     pca_metrics: dict[str, dict[str, float]],
+    mean_metrics: dict[str, dict[str, float]] | None = None,
     thresholds: dict[str, float] | None = None,
 ) -> dict:
-    """Compuerta de reconstrucción sobre MP (dura solo si hay umbrales).
+    """Compuerta de reconstrucción sobre MP, en dos capas (design.md D5).
 
-    `ae_metrics`/`pca_metrics`: `{serie: recon_metrics}`. Siempre reporta si el AE
-    supera a PCA(d) en todas las series (`beats_pca`). Sin `thresholds` (default,
-    fijados tras el humo, tarea 3.5) la compuerta solo reporta: `gate_pass=None`.
+    - **Capa relativa** (siempre activa, sin parámetros): el AE supera, en RMSE de
+      MP y en **todas** las series, al predictor del promedio (`mean_metrics`) y a
+      PCA(d) (`pca_metrics`). Se registra siempre como `gate_relative`.
+    - **Capa numérica** (solo si se pasan `thresholds`, fijados por el Arquitecto
+      en el punto de control 10.3): `min_var_ratio`, `slope_tol` (|pendiente−1| ≤ tol)
+      y `max_rmse_vs_pca` (RMSE_AE ≤ factor × RMSE_PCA). Sin umbrales `numeric` es None.
 
-    Umbrales admitidos: `min_var_ratio`, `slope_tol` (|pendiente−1| ≤ tol) y
-    `max_rmse_vs_pca` (RMSE_AE ≤ factor × RMSE_PCA).
+    `gate_pass` = capa relativa **y**, si hay umbrales, capa numérica.
     """
     series = sorted(ae_metrics)
-    beats = {s: ae_metrics[s]["rmse"] < pca_metrics[s]["rmse"] for s in series if s in pca_metrics}
-    result: dict = {
-        "beats_pca": bool(beats) and all(beats.values()),
-        "beats_pca_by_series": {s: bool(v) for s, v in beats.items()},
-        "gate_pass": None,
-        "thresholds": thresholds,
-    }
-    if thresholds is None:
-        return result
+    beats_pca = {s: ae_metrics[s]["rmse"] < pca_metrics[s]["rmse"] for s in series if s in pca_metrics}
+    beats_mean = {}
+    if mean_metrics is not None:
+        beats_mean = {s: ae_metrics[s]["rmse"] < mean_metrics[s]["rmse"] for s in series if s in mean_metrics}
+    beats_pca_all = bool(beats_pca) and all(beats_pca.values())
+    beats_mean_all = bool(beats_mean) and all(beats_mean.values())
+    relative = beats_pca_all and beats_mean_all
+
+    numeric: bool | None = None
     checks: dict[str, bool] = {}
-    for s in series:
-        m = ae_metrics[s]
-        if "min_var_ratio" in thresholds:
-            checks[f"{s}_var"] = m["var_ratio"] >= thresholds["min_var_ratio"]
-        if "slope_tol" in thresholds:
-            checks[f"{s}_slope"] = abs(m["slope"] - 1.0) <= thresholds["slope_tol"]
-        if "max_rmse_vs_pca" in thresholds and s in pca_metrics:
-            checks[f"{s}_pca"] = m["rmse"] <= thresholds["max_rmse_vs_pca"] * pca_metrics[s]["rmse"]
-    result["checks"] = {k: bool(v) for k, v in checks.items()}
-    result["gate_pass"] = bool(checks) and all(checks.values())
-    return result
+    if thresholds is not None:
+        for s in series:
+            m = ae_metrics[s]
+            if "min_var_ratio" in thresholds:
+                checks[f"{s}_var"] = m["var_ratio"] >= thresholds["min_var_ratio"]
+            if "slope_tol" in thresholds:
+                checks[f"{s}_slope"] = abs(m["slope"] - 1.0) <= thresholds["slope_tol"]
+            if "max_rmse_vs_pca" in thresholds and s in pca_metrics:
+                checks[f"{s}_pca"] = m["rmse"] <= thresholds["max_rmse_vs_pca"] * pca_metrics[s]["rmse"]
+        numeric = bool(checks) and all(checks.values())
+
+    gate_pass = relative and (numeric is None or numeric)
+    return {
+        "gate_pass": bool(gate_pass),
+        "relative": bool(relative),
+        "numeric": numeric,
+        "beats_pca": bool(beats_pca_all),
+        "beats_mean": bool(beats_mean_all),
+        "beats_pca_by_series": {s: bool(v) for s, v in beats_pca.items()},
+        "beats_mean_by_series": {s: bool(v) for s, v in beats_mean.items()},
+        "thresholds": thresholds,
+        "checks": {k: bool(v) for k, v in checks.items()},
+    }

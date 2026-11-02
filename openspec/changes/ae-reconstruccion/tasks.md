@@ -30,7 +30,7 @@
 - [x] 3.4 Ablación de `z_aux` (poner el bloque en cero y medir el empeoramiento del MP)
 - [x] 3.5 Compuerta de reconstrucción dura sobre MP, con umbrales **parametrizables** (se fijan tras el humo; por defecto solo reporta sin decidir)
 - [x] 3.6 Tests con datos sintéticos conocidos (señal suavizada → razón de varianza < 1; reconstrucción perfecta → pendiente 1)
-- [ ] 3.7 Compuerta en dos capas (ver `design.md` D5): `gate_pass` se calcula y se registra **siempre** con la capa relativa (el AE supera al predictor del promedio y a PCA(d) en la reconstrucción de MP; calcular `gate_beats_mean` además de `gate_beats_pca`); la capa numérica (`--gate-thresholds`) se suma al `gate_pass` cuando se fije en el punto de control. Actualizar `gate_decision` y los tests (con y sin umbrales)
+- [x] 3.7 Compuerta en dos capas (ver `design.md` D5): `gate_pass` se calcula y se registra **siempre** con la capa relativa (el AE supera al predictor del promedio y a PCA(d) en la reconstrucción de MP; calcular `gate_beats_mean` además de `gate_beats_pca`); la capa numérica (`--gate-thresholds`) se suma al `gate_pass` cuando se fije en el punto de control. Actualizar `gate_decision` y los tests (con y sin umbrales)
 
 ## 4. Módulo DMD (`pipeline/ae/dmd.py`)
 

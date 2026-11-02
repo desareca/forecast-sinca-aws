@@ -281,8 +281,12 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
         tables[split] = table.assign(split=split)
         pca_metrics, _ = split_metrics(grid, win, aed.mp_to_ugm3(reference_recon_z("pca", ctx, win, cfg.d), ctx.norm))
         results[f"{split}_pca"] = pca_metrics
+        mean_metrics, _ = split_metrics(grid, win, aed.mp_to_ugm3(reference_recon_z("mean", ctx, win, cfg.d), ctx.norm))
+        results[f"{split}_mean"] = mean_metrics
 
-    gate = aem.gate_decision(results.get("valid", {}), results.get("valid_pca", {}), args.gate_thresholds)
+    gate = aem.gate_decision(
+        results.get("valid", {}), results.get("valid_pca", {}), results.get("valid_mean", {}), args.gate_thresholds,
+    )
     latent = aem.latent_diagnostics(zs["test"], models.d_aux) if "test" in zs else {}
     ablation = float("nan")
     if "test" in zs:
@@ -303,16 +307,22 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
         **_flatten_metrics("valid_recon_", results.get("valid", {})),
         **_flatten_metrics("ref_pca_test_", results.get("test_pca", {})),
         **_flatten_metrics("ref_pca_valid_", results.get("valid_pca", {})),
+        **_flatten_metrics("ref_mean_valid_", results.get("valid_mean", {})),
+        **_flatten_metrics("ref_mean_test_", results.get("test_mean", {})),
         "recon_rmse_mean_test": _mean_metric(results.get("test", {})),
         "recon_rmse_mean_valid": _mean_metric(results.get("valid", {})),
         "ablation_zaux_delta_rmse_test": ablation,
+        # Compuerta en dos capas (D5): gate_pass se registra siempre (capa relativa y, si hay umbrales, numérica).
+        "gate_pass": float(gate["gate_pass"]),
+        "gate_relative": float(gate["relative"]),
         "gate_beats_pca": float(gate["beats_pca"]),
+        "gate_beats_mean": float(gate["beats_mean"]),
         "epochs_run": float(len(history.history.get("loss", []))),
         "train_loss_final": float(history.history["loss"][-1]) if history.history.get("loss") else float("nan"),
         **{f"latent_{k}": v for k, v in latent.items()},
     }
-    if gate["gate_pass"] is not None:
-        metrics["gate_pass"] = float(gate["gate_pass"])
+    if gate["numeric"] is not None:
+        metrics["gate_numeric"] = float(gate["numeric"])
 
     tags = {"modelo": f"ae-{cfg.arch}", "tipo": "entrenamiento", "stage": "ae-reconstruccion", "seed": cfg.seed}
     params = {**config_to_params(cfg, version), "gate_thresholds": json.dumps(args.gate_thresholds)}
@@ -323,7 +333,7 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
             ignore_index=True,
         ),
         "diagnostics.parquet": pd.DataFrame(
-            [{"split": s, "serie": k, "metric": m, "value": v} for s, per in results.items() if not s.endswith("_pca") for k, ms in per.items() for m, v in ms.items()]
+            [{"split": s, "serie": k, "metric": m, "value": v} for s, per in results.items() if s in ("valid", "test") for k, ms in per.items() for m, v in ms.items()]
         ),
     }
     run_id = _log_run(name, tags, params, metrics, frames, files={"encoder.keras": enc_path, "decoder_mp.keras": dec_path})
