@@ -338,7 +338,11 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
     }
     run_id = _log_run(name, tags, params, metrics, frames, files={"encoder.keras": enc_path, "decoder_mp.keras": dec_path})
     log.info("Run %s registrado (seed=%d, gate=%s)", run_id, cfg.seed, gate["gate_pass"])
-    return {"run_id": run_id, "name": name, "seed": cfg.seed, "gate": gate, "test_rmse_mean": metrics["recon_rmse_mean_test"], "model_dir": seed_dir}
+    return {
+        "run_id": run_id, "name": name, "seed": cfg.seed, "gate": gate,
+        "test_rmse_mean": metrics["recon_rmse_mean_test"], "model_dir": seed_dir,
+        "models": models,
+    }
 
 
 def run_reference(grid: aed.HourlyGrid, cfg: AEConfig, version: int) -> None:
@@ -364,21 +368,65 @@ def run_reference(grid: aed.HourlyGrid, cfg: AEConfig, version: int) -> None:
         log.info("Referencia %s registrada", name)
 
 
-def run_dmd(grid: aed.HourlyGrid, cfg: AEConfig, args, ae_run_id: str, ae_dir: str, sinca: pd.DataFrame, open_meteo, feriados) -> None:
-    """Pase de DMD sobre el latente congelado; registra runs por serie y el operador."""
-    from mlflow.tracking import MlflowClient
+def _cfg_from_run_params(params: dict) -> AEConfig:
+    """Reconstruye la configuración del AE desde los params de su run en MLflow (strings)."""
+    def as_bool(value) -> bool:
+        return str(value).lower() in ("true", "1", "yes")
+
+    return AEConfig(
+        arch=params["arch"], length=int(params["length"]), d=int(params["d"]), d_aux=int(params["d_aux"]),
+        hidden=int(params["hidden"]), dropout=float(params["dropout"]), lr=float(params["lr"]),
+        batch_size=int(params["batch_size"]), w_mp=float(params["w_mp"]), w_aux=float(params["w_aux"]),
+        aux_input=as_bool(params["aux_input"]), seed=int(params["seed"]),
+    )
+
+
+def load_ae_for_dmd(args, ae_run_id: str):
+    """Carga encoder/decoder del AE para el pase de DMD. Devuelve `(cfg, models, gate_pass)`.
+
+    - Con `--ae-dir` (pruebas): lee `encoder.keras`, `decoder_mp.keras` y `config.json`
+      de ese directorio local.
+    - Sin `--ae-dir` (camino de respaldo, tarea 5.7): usa el estado de MLflow ya
+      descargado en `--mlflow-dir` (desde `sinca-mlflow/_mlflow/`) con `analysis/load.py`,
+      toma la configuración de los params del run y la compuerta de su métrica `gate_pass`.
+    """
+    import keras
     from ae import models as aeml
 
-    with open(os.path.join(ae_dir, "config.json"), encoding="utf-8") as handle:
-        saved = json.load(handle)
-    gate = saved.get("gate", {})
-    if gate.get("gate_pass") is False:
-        raise RuntimeError("La compuerta marcó este AE como no aprobado: no se aplica el pase de DMD.")
+    if args.ae_dir:
+        with open(os.path.join(args.ae_dir, "config.json"), encoding="utf-8") as handle:
+            saved = json.load(handle)
+        cfg = AEConfig(**saved["cfg"])
+        gate_pass = bool(saved.get("gate", {}).get("gate_pass"))
+        enc_path = os.path.join(args.ae_dir, "encoder.keras")
+        dec_path = os.path.join(args.ae_dir, "decoder_mp.keras")
+    else:
+        from mlflow.tracking import MlflowClient
+        from analysis import load as analysis_load
 
-    import keras
-    encoder = keras.saving.load_model(os.path.join(ae_dir, "encoder.keras"), compile=False)
-    decoder = keras.saving.load_model(os.path.join(ae_dir, "decoder_mp.keras"), compile=False)
-    models = aeml.AEModels(full=None, encoder=encoder, decoder_mp=decoder, decoder_aux=None, d=cfg.d, d_aux=cfg.resolved_d_aux(), aux_input_dim=0)
+        run = MlflowClient().get_run(ae_run_id)
+        cfg = _cfg_from_run_params(run.data.params)
+        gate_pass = bool(run.data.metrics.get("gate_pass", 0.0))
+        state = analysis_load.ensure_state(data_dir=args.mlflow_dir)
+        enc_path = analysis_load.artifact_path(state, ae_run_id, "encoder.keras")
+        dec_path = analysis_load.artifact_path(state, ae_run_id, "decoder_mp.keras")
+        if not enc_path or not dec_path:
+            raise RuntimeError(f"El run {ae_run_id} no tiene encoder.keras/decoder_mp.keras como artefactos.")
+
+    encoder = keras.saving.load_model(enc_path, compile=False)
+    decoder = keras.saving.load_model(dec_path, compile=False)
+    models = aeml.AEModels(full=None, encoder=encoder, decoder_mp=decoder, decoder_aux=None,
+                           d=cfg.d, d_aux=cfg.resolved_d_aux(), aux_input_dim=0)
+    return cfg, models, gate_pass
+
+
+def run_dmd_pass(grid: aed.HourlyGrid, cfg: AEConfig, args, ae_run_id: str, models, sinca: pd.DataFrame, open_meteo, feriados) -> None:
+    """Pase de DMD sobre el latente congelado de `models`; registra runs por serie y el operador.
+
+    No comprueba la compuerta: el llamador decide (`run()` lo hace antes de llamar).
+    """
+    from mlflow.tracking import MlflowClient
+    from ae import models as aeml
 
     spans = aed.holdout_spans(grid.index)
     valid_span = default_valid_span(grid, spans["train"])
@@ -545,14 +593,23 @@ def run(args) -> int:
     if args.mode == "final":
         for seed in args.seeds:
             cfg = _config_from_args(args, args.arch, seed)
-            run_final(grid, cfg, args, args.version, model_dir)
+            result = run_final(grid, cfg, args, args.version, model_dir)
+            # Pase DMD encadenado en el mismo job (D7.6): semilla 0 y solo si la compuerta aprueba.
+            if args.dmd_after_final and seed == DMD_SEED:
+                if result["gate"]["gate_pass"]:
+                    run_dmd_pass(grid, cfg, args, result["run_id"], result["models"],
+                                 data["sinca"], data["open_meteo"], data["feriados"])
+                else:
+                    log.info("Compuerta no aprobada: no se encadena el pase de DMD (seed %d).", seed)
     elif args.mode == "reference":
         run_reference(grid, _config_from_args(args, args.arch, 0), args.version)
     elif args.mode == "dmd":
-        if not args.ae_dir or not args.ae_run_id:
-            raise SystemExit("--mode dmd requiere --ae-dir y --ae-run-id")
-        cfg = _config_from_args(args, args.arch, DMD_SEED)
-        run_dmd(grid, cfg, args, args.ae_run_id, args.ae_dir, data["sinca"], data["open_meteo"], data["feriados"])
+        if not args.ae_run_id:
+            raise SystemExit("--mode dmd requiere --ae-run-id (y opcionalmente --ae-dir para pruebas)")
+        cfg, models, gate_pass = load_ae_for_dmd(args, args.ae_run_id)
+        if not gate_pass:
+            raise SystemExit("La compuerta no aprobó este AE: no se aplica el pase de DMD.")
+        run_dmd_pass(grid, cfg, args, args.ae_run_id, models, data["sinca"], data["open_meteo"], data["feriados"])
 
     if not args.no_upload:
         mlflow_log.upload_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None)
@@ -601,7 +658,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(*_flag("search-windows"), type=int, default=4)
     parser.add_argument(*_flag("search-report"), default=None, help="JSON de `search`: usa la mejor config de --arch.")
     parser.add_argument(*_flag("gate-thresholds"), type=_gate_thresholds, default=None, help="JSON con umbrales; vacío = solo reporta.")
-    parser.add_argument(*_flag("ae-dir"), default=None)
+    parser.add_argument(*_flag("dmd-after-final"), type=lambda s: s.lower() in ("1", "true", "yes"), default=True,
+                        help="Encadena el pase de DMD tras el entrenamiento final (semilla 0) si la compuerta aprueba.")
+    parser.add_argument(*_flag("ae-dir"), default=None, help="Solo pruebas: directorio local con encoder.keras/decoder_mp.keras/config.json.")
     parser.add_argument(*_flag("ae-run-id"), default=None)
     parser.add_argument(*_flag("no-upload"), action="store_true")
     return parser.parse_args(argv)
