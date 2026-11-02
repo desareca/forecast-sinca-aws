@@ -58,3 +58,36 @@ Reglas rápidas:
   resultan mal calibrados (muchos o ningún caso extremo), ajustar y re-correr.
   Con los resultados del baseline se fija la vara para la Fase 4 (autoencoder +
   DMD/Koopman).
+
+---
+
+## Plantilla - autoencoders (`ae-reconstruccion`)
+
+Una entrada por corrida de experimento (o por familia de corridas). Los campos se
+llenan con los **valores reales** de MLflow (`sinca-baseline`, runs `sinca-zona-ae_{arq}-v{n}`);
+no se anotan resultados antes de tenerlos. Los umbrales de la compuerta numérica se fijan
+en el punto de control 10.3, no acá.
+
+```
+## <fecha> - ae-<arquitectura> L=<L> d=<d>
+
+- **Arquitectura y configuración**: arquitectura (`mlp`/`conv1d`/`gru`/`lstm`/`linear_decoder`),
+  `L`, `d`, `d_aux`, `hidden`, `dropout`, `lr`, `batch_size`, `aux_input`.
+- **Pesos de la loss**: `w_mp` (fijo en 1) y `w_aux` (barrido `{0, 0.1, 0.5, 1}`).
+- **Semillas**: entrenamiento final con 3 semillas (`--seeds 0,1,2`); el DMD usa la semilla 0.
+- **Hipótesis**: qué se esperaba de esta configuración y por qué.
+- **Compuerta (capa relativa)**: `gate_pass`, `gate_beats_pca`, `gate_beats_mean` (por serie
+  en `beats_*_by_series` del `config.json`). Capa numérica: `gate_numeric` (solo con umbrales).
+- **Reconstrucción (test, µg/m³)**: RMSE medio y por serie (`recon_rmse_*`), razón de varianza,
+  pendiente real vs reconstruido, espectro, error por tramo de concentración (< 50, 50–100, > 100).
+- **Latente**: dimensión efectiva (`latent_eff_dim_pr`), dimensiones muertas (`latent_dead_dims`).
+- **Aporte de `z_aux`**: `ablation_zaux_delta_rmse_test` (empeoramiento del MP al anularlo).
+- **Linealizabilidad (DMD, semilla 0)**: `dmd_latent_rmse_1`, `dmd_latent_rmse_24` (y la
+  variante truncada `dmd_trunc_latent_rmse_*`).
+- **Pronóstico informativo vs persistencia y LightGBM**: métricas de los runs `ae-<arq>-dmd`
+  frente a `sinca-persistence-baseline` y `sinca-<estacion>-lightgbm-v1` (mismas filas).
+- **Hallazgos**: qué pasó, qué no esperábamos, problemas de datos o de cómputo (tiempo por
+  epoch, memoria pico en `ml.m5.large`).
+- **Decisión / siguiente paso**: qué se hace con esto (descartar, ajustar, pasar a `ae-dmd`).
+```
+

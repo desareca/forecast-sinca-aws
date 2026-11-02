@@ -74,7 +74,7 @@ Exploración en **dos niveles**: nivel 1 sin TensorFlow (parquet, numpy, plotly)
 y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 `requirements-analysis.txt` no suma TF; el nivel 2 usa `requirements-notebooks-tf.txt`.
 
-- [ ] 8.1 Crear `EXPERIMENT-LOG.md` con la plantilla de entrada por experimento (arquitectura, `L`, `d`, `w_aux`, métricas de compuerta, hallazgos)
+- [x] 8.1 Crear `EXPERIMENT-LOG.md` con la plantilla de entrada por experimento (arquitectura, `L`, `d`, `w_aux`, métricas de compuerta, hallazgos)
 - [ ] 8.2 Registrar en `README.md` de `pipeline/ae/` cómo correr un experimento local en Docker y en Training Job
 - [x] 8.3 `notebooks/exploracion_datos_ae.ipynb` (plantilla): explorar los datos de entrada del AE: cobertura y huecos por serie y canal, ventanas que sobreviven según `L`, rangos tras la transformación, efecto de la interpolación de ≤ 6 h y del recorte de aux
 - [x] 8.4 `notebooks/exploracion_reconstruccion.ipynb` (plantilla): elegir runs de AE y explorar `reconstruction.parquet` — real vs reconstruido con zoom a episodios, diagnósticos de aplanamiento (varianza, pendiente, espectro, error por nivel), comparación contra `ref-mean` y `ref-pca-d*`, efecto de la ablación de `z_aux`
@@ -156,3 +156,5 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 - **6.4**: `pipeline/requirements.txt` movido con `git mv` a `requirements-scraper.txt` (raíz). Verificado con `git grep` que nada lo referencia: ni workflows de `.github/`, ni Dockerfiles (`scraper.Dockerfile` instala sus deps inline y solo hace `COPY pipeline/`), ni README. Quedan menciones solo en documentación histórica (`archive/`, `modules/compute/blueprint.md`, `design.md`) que no se modifican. `requirements-dev.txt` tiene un comentario genérico sobre el comportamiento del toolkit, que sigue siendo válido.
 
 - **6.3**: `docker/README.md` documenta build, push y retag con tags explícitos (`lgbm-v1`, `tf-cpu-v1`), la regla de no usar `:latest` y que `sinca-train` es `MUTABLE` (por eso no se reusa un tag publicado). El retag de la imagen LightGBM (9.2) queda descrito como paso del operador, sin ejecutarlo. En `README.md`, el bloque de build de entrenamiento dejó de publicar `:latest` y enlaza a esa guía; los comandos reales de AWS siguen pendientes de ejecución (grupo 9).
+
+- **8.1**: `EXPERIMENT-LOG.md` ya tenía la plantilla general y la entrada de baseline. Se agregó la plantilla específica de autoencoders (arquitectura, `L`, `d`, `w_aux`, compuerta relativa y numérica, reconstrucción, latente, `z_aux`, DMD, comparación contra persistencia y LightGBM). No se anotan resultados: se llenan con valores reales de MLflow tras el humo y los experimentos.
