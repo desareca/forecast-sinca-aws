@@ -87,7 +87,7 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 - [x] 9.1 Verificar identidad AWS (`aws sts get-caller-identity --profile $AWS_PROFILE`), cuota `ml.g4dn.xlarge`/`ml.m5.large` for training job usage y existencia del repo ECR `sinca-train`
 - [x] 9.2 Retaggear la imagen LightGBM existente como `lgbm-v1` (sin reconstruir) y ajustar la referencia en el lanzador; confirmar con una corrida corta de LightGBM que sigue funcionando
 - [x] 9.3 Construir y subir la imagen `tf-cpu-v1` a `sinca-train`; confirmar el digest y que `lgbm-v1` sigue disponible
-- [ ] 9.4 En el Space (imagen `sagemaker-distribution-cpu`), verificar con output real si TensorFlow ya viene instalado y en qué versión (`pip list | grep -i -E "tensorflow|keras"`), y revisar disco/RAM disponibles; si no está o la versión difiere de `tf-cpu-v1`, instalar `requirements-notebooks-tf.txt` en el venv del Space y confirmar `import tensorflow`. Registrar en `EXPERIMENT-LOG.md`
+- [x] 9.4 En el Space (imagen `sagemaker-distribution-cpu`), verificar con output real si TensorFlow ya viene instalado y en qué versión (`pip list | grep -i -E "tensorflow|keras"`), y revisar disco/RAM disponibles; si no está o la versión difiere de `tf-cpu-v1`, instalar `requirements-notebooks-tf.txt` en el venv del Space y confirmar `import tensorflow`. Registrar en `EXPERIMENT-LOG.md`
 - [ ] 9.5 Medir con datos reales cuántas ventanas sobreviven por `L ∈ {24, 72, 168}` y generar el reporte de rangos por canal; registrar en `EXPERIMENT-LOG.md` (si con `L = 168` sobreviven muy pocas, parar y volver al Arquitecto)
 
 ## 10. Ejecución real — humo y punto de control

@@ -91,3 +91,19 @@ en el punto de control 10.3, no acá.
 - **Decisión / siguiente paso**: qué se hace con esto (descartar, ajustar, pasar a `ae-dmd`).
 ```
 
+---
+
+## 2026-11-02 — ae-reconstruccion 9.4: entorno TensorFlow del Space
+
+- **Hipótesis**: el Space (`sagemaker-distribution-cpu`) puede traer TensorFlow en una versión distinta de `tf-cpu-v1` (2.20.0), lo que impediría cargar los `.keras` de la imagen de training en el nivel 2 de los notebooks.
+- **Qué se verificó (salida real)**: la imagen trae `tensorflow 2.18.0`, `keras 3.10.0`, `tf_keras 2.18.0`; disco `/home` 5.0 GB (4.9 GB libres); RAM 7.6 GiB. **No coincide** con `tf-cpu-v1`.
+- **Qué se probó**:
+  1. `pip install` directo sobre el Python base (`/opt/conda`): instaló TF 2.20 y `numpy` 2.5.4, rompió dependencias de la imagen (`sagemaker`, `autogluon`, `numba`, `catboost`, `scipy`) y **no persistió** tras apagar y encender el Space (volvió `tf 2.18.0`). Descartado.
+  2. `pip install --user` en `~/.local`: TF importó, pero el `keras` 3.10 de la base quedó mezclado y el import falló. Descartado.
+  3. **Venv aislado** `/home/sagemaker-user/venv-tf` con `requirements-notebooks-tf.txt`: `tf 2.20.0`, `keras 3.15.1`, `numpy 2.5.4`. Queda dentro de `/home`, que es el disco que persiste.
+- **Decisión**: el nivel 2 de los notebooks usa `/home/sagemaker-user/venv-tf/bin/python`, no el Python base. El Python base sigue con TF 2.18 y **no** debe usarse para cargar `encoder.keras`/`decoder_mp.keras`.
+- **Pendiente (para 12.2)**:
+  - Persistencia del venv tras apagar y encender el Space: **verificada** (`tf 2.20.0`, `keras 3.15.1`).
+  - Registrar el venv como kernel de JupyterLab (`ipykernel`), que todavía no está instalado.
+  - Verificar que `analysis/load.py` y los notebooks de nivel 1 siguen funcionando en el Python base.
+
