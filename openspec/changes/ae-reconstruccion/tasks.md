@@ -55,7 +55,7 @@
 - [x] 6.1 Crear `docker/train-tf.Dockerfile` (solo runtime, `tensorflow-cpu`, patrón de `train.Dockerfile`; sin código ni `requirements.txt` ajeno en `source_dir`)
 - [x] 6.2 Ajustar `train/launch.py` para elegir imagen (tag explícito), tipo de instancia y entry point; sin `:latest`
 - [ ] 6.3 Documentar en `docker/` el flujo de build/push con los tags `lgbm-v1` y `tf-cpu-v1`
-- [ ] 6.4 Mover `pipeline/requirements.txt` fuera de `source_dir` (`git mv pipeline/requirements.txt requirements-scraper.txt`), de modo que el toolkit de SageMaker no instale deps del scraper en los Training Jobs; confirmar que ningún Dockerfile, workflow ni doc lo referencia y actualizar lo que corresponda (ver `design.md` D10)
+- [x] 6.4 Mover `pipeline/requirements.txt` fuera de `source_dir` (`git mv pipeline/requirements.txt requirements-scraper.txt`), de modo que el toolkit de SageMaker no instale deps del scraper en los Training Jobs; confirmar que ningún Dockerfile, workflow ni doc lo referencia y actualizar lo que corresponda (ver `design.md` D10)
 
 ## 7. Dashboard
 
@@ -150,3 +150,7 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 - **Dependencia operativa a vigilar**: `ensure_state(data_dir=...)` no descarga; el estado lo baja `run()` desde `sinca-mlflow/_mlflow/` antes de usar `--mlflow-dir`. Con `--no-upload` el directorio debe existir con el estado previo. Un job `dmd` en SageMaker depende de que el descargue ocurra (solo si no hay `--no-upload`).
 - **Tests**: el AE de prueba (2 épocas) no supera al promedio ni a PCA, así que los tests que necesitan el pase fuerzan la aprobación con `monkeypatch` sobre `metrics.gate_decision`. El caso de rechazo usa la compuerta real. **57 tests pasan**.
 - **Sin cambios en `design.md`.**
+
+### Tareas 6.4 y documentación (cierre de código)
+
+- **6.4**: `pipeline/requirements.txt` movido con `git mv` a `requirements-scraper.txt` (raíz). Verificado con `git grep` que nada lo referencia: ni workflows de `.github/`, ni Dockerfiles (`scraper.Dockerfile` instala sus deps inline y solo hace `COPY pipeline/`), ni README. Quedan menciones solo en documentación histórica (`archive/`, `modules/compute/blueprint.md`, `design.md`) que no se modifican. `requirements-dev.txt` tiene un comentario genérico sobre el comportamiento del toolkit, que sigue siendo válido.
