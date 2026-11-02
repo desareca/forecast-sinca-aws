@@ -100,8 +100,9 @@ aux [L×(12+12 máscaras+~10 cal)]    │                  └─► decoder_aux
         ──► encoder_aux ──► z_aux ──┘
 ```
 
-- **Latente `d`** ∈ {8, 16, 32}; `d_aux = d/4` por defecto (≥ 2), parámetro
-  ajustable.
+- **Latente `d`** ∈ {8, 16, 32} es la dimensión **total**; `z_aux` tiene `d_aux`
+  dimensiones (`max(2, d/4)` por defecto, ajustable) y `z_mp` tiene `d − d_aux`.
+  Así PCA(d) tiene el mismo tamaño total de latente y la comparación es justa.
 - **El decoder de MP ve todo el latente** (`z_mp` y `z_aux`): la meteo aporta
   contexto de dinámica a la reconstrucción de MP. Diagnóstico de aporte:
   poner `z_aux` en cero en evaluación y medir el empeoramiento del MP.
@@ -187,9 +188,14 @@ log tiende a subestimar la media (desigualdad de Jensen), sobre todo en picos.
 Se mide por separado del aplanamiento; si es relevante se evalúa una corrección
 de sesgo al destransformar.
 
-**Umbrales**: no se fijan a priori. Se calibran con la corrida de humo y los fija
-el Arquitecto en el punto de control (ver tareas). Hasta entonces la compuerta
-reporta métricas sin decidir.
+**Compuerta en dos capas** (decisión del Arquitecto tras la implementación):
+- **Capa relativa, activa desde el inicio y sin parámetros**: el AE supera al
+  predictor del promedio y a PCA(d) en la reconstrucción de MP. `gate_pass` se
+  registra siempre con estos criterios.
+- **Capa numérica**: umbrales sobre los diagnósticos de aplanamiento (razón de
+  varianza mínima, tolerancia de pendiente, factor máximo de RMSE vs PCA, etc.).
+  No se fijan a priori: se calibran con la corrida de humo y los fija el
+  Arquitecto en el punto de control 10.3; entonces se suman al `gate_pass`.
 
 ### D6 — Protocolo y selección
 
@@ -213,7 +219,11 @@ Aplicado a las configuraciones finalistas que pasan la compuerta:
    cada hora de train.
 2. DMD exacto global por mínimos cuadrados sobre pares `(z_t, z_{t+1})`, con
    `numpy`/`tf.linalg`, rango completo (y una versión truncada como segunda
-   variante). Sin búsqueda de parámetros.
+   variante). Sin búsqueda de parámetros. El pronóstico informativo (runs por
+   serie `ae-{arq}-dmd`, con `rolling_scores.parquet` vacío por no haber
+   búsqueda) usa solo el rango completo; la variante truncada se evalúa en
+   linealizabilidad (`dmd_trunc_latent_rmse_*`) y se persiste en
+   `dmd_operator_trunc.npz`.
 3. **Linealizabilidad**: error de predecir `z` a 1 y a 24 pasos con `K` y
    `K^24` sobre valid/test.
 4. **Pronóstico informativo**: `z_{t+24} = K^24 z_t` → `decoder_mp` → ventana
@@ -224,13 +234,20 @@ Aplicado a las configuraciones finalistas que pasan la compuerta:
 5. Es **informativo**: no se afina nada para mejorarlo. La meteo futura no se
    conoce: el bloque `z_aux` evoluciona de forma autónoma bajo `K` (el
    tratamiento de la meteo futura y del control es el PA-2, en `ae-dmd`).
+6. **Cómo el pase accede al AE**: camino principal = **encadenado en el mismo
+   job** del entrenamiento final, solo si pasa la compuerta (no hay descarga de
+   artefactos ni escritura concurrente a SQLite). Respaldo = modo `dmd`
+   independiente con `--ae-run-id`, que descarga `encoder.keras` y
+   `decoder_mp.keras` del run desde `sinca-mlflow/_mlflow/` con los helpers de
+   `analysis/load.py` (el `sinca-training-role` ya tiene lectura sobre ese
+   prefijo); `--ae-dir` (directorio local) se mantiene para pruebas.
 
 ### D8 — Tracking y dashboard
 
-- **Experimento MLflow**: mismo `sinca-baseline` (comparación directa en el
-  dashboard; el nombre es engañoso pero cambiarlo rompería el flujo existente).
-  Las corridas AE se distinguen por tags. Alternativa (`sinca-advanced`) queda
-  como pregunta abierta.
+- **Experimento MLflow (CERRADO)**: mismo `sinca-baseline`. El dashboard lee un
+  solo experimento (`load.EXPERIMENT_NAME`); uno separado exigiría soporte
+  multi-experimento fuera de alcance. Las corridas AE se distinguen por tags. El
+  nombre es engañoso pero cambiarlo rompería el flujo existente.
 - **Run AE (modelo conjunto)**: `sinca-zona-ae_{arq}-v{n}`; tags
   `modelo=ae-{arq}`, `tipo=entrenamiento`, `stage=ae-reconstruccion`,
   sin params `estacion`/`pollutant`. Params: `L`, `d`, `d_aux`, `w_mp`, `w_aux`,
@@ -302,6 +319,13 @@ GRU/Conv; solo triviales para `linear_decoder`).
   sin reconstruir.
 - Iteración local en Docker con la misma imagen (TF en Windows nativo es solo CPU
   y sensible a la versión de Python).
+- **`requirements.txt` fuera de `source_dir`**: el toolkit `sagemaker-training`
+  instala el `requirements.txt` que encuentra en `source_dir` (`pipeline/`),
+  arrastrando dependencias del scraper (`pandera`, `beautifulsoup4`, …) ajenas al
+  training. Verificado que nadie lo usa (`scraper.Dockerfile` instala sus
+  dependencias inline; ni el CI ni el README lo referencian): se mueve a la raíz
+  como `requirements-scraper.txt`. En el humo, el job loguea las versiones de
+  `tensorflow`, `numpy` y `pandas` al arrancar para confirmar que no cambian.
 
 ## Risks / Trade-offs
 
@@ -340,10 +364,12 @@ GRU/Conv; solo triviales para `linear_decoder`).
 
 ## Open Questions
 
-- **Experimento MLflow**: ¿mismo `sinca-baseline` (decidido provisionalmente) o
-  `sinca-advanced`? Confirmar antes de implementar el logging.
-- **Umbrales de la compuerta** y presupuesto de trials: se definen tras el humo.
-- **`d_aux`**: ¿proporción `d/4` o barrido propio?
+- **Umbrales numéricos de la compuerta** y presupuesto de trials: se definen tras
+  el humo (tarea 10.3).
+- **`d_aux`**: ¿se mantiene `max(2, d/4)` o se barre? Se decide tras el humo.
+- **Sesgo del early stopping del modelo final**: usa la última ventana `valid`
+  del rolling, que queda dentro del train final (igual que el baseline); sesgo
+  menor, se anota en `EXPERIMENT-LOG.md` al comparar.
 - **Pesos por magnitud en la reconstrucción**: ¿hace falta ponderar los picos en
   la loss o alcanza con los diagnósticos? Decisión para `ae-dmd`.
 - **Corrección del sesgo de `log1p`** al destransformar: decidir con los

@@ -60,6 +60,10 @@ El sistema SHALL evaluar la reconstrucción de MP en µg/m³ por serie y SHALL c
 - **WHEN** la reconstrucción de MP de un modelo no supera a PCA del mismo tamaño
 - **THEN** la compuerta lo marca como no aprobado y queda excluido del pase de DMD
 
+#### Scenario: Compuerta sin umbrales numéricos
+- **WHEN** aún no se han fijado umbrales numéricos para los diagnósticos de aplanamiento
+- **THEN** `gate_pass` se calcula igualmente con los criterios relativos (el AE supera al predictor del promedio y a PCA del mismo tamaño) y los umbrales numéricos se suman al criterio cuando se fijen
+
 #### Scenario: Ablación del bloque auxiliar
 - **WHEN** se evalúa un modelo con `z_aux` puesto en cero
 - **THEN** se registra el empeoramiento de la reconstrucción de MP como medida del aporte auxiliar
@@ -91,6 +95,10 @@ El sistema SHALL ajustar un DMD global estándar (mínimos cuadrados sobre pares
 #### Scenario: Modelo no aprobado
 - **WHEN** un AE no pasa la compuerta
 - **THEN** no se le aplica el pase de DMD
+
+#### Scenario: Pase encadenado al entrenamiento final
+- **WHEN** el entrenamiento final de un AE termina y la compuerta se aprueba
+- **THEN** el pase de DMD se ejecuta en el mismo job sin descargar artefactos, y un modo independiente puede repetirlo descargando `encoder.keras` y `decoder_mp.keras` del run
 
 #### Scenario: Operador persistido
 - **WHEN** se ajusta el DMD de un AE aprobado
