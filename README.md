@@ -211,6 +211,25 @@ Flujo:
 Los notebooks puntuales están en `.gitignore`; versioná el que quieras conservar
 con `git add -f`.
 
+### Notebooks de exploración del autoencoder
+
+Tres plantillas en `notebooks/` (change `ae-reconstruccion`, tarea 8.7):
+
+- `exploracion_datos_ae.ipynb`: huecos y cobertura, ventanas que sobreviven según `L`, rangos tras la transformación.
+- `exploracion_reconstruccion.ipynb`: real vs reconstruido, aplanamiento, comparación contra `ref-mean` y `ref-pca-d*`.
+- `exploracion_latente_dmd.ipynb`: latente y operador DMD. Nivel 1 sin TensorFlow; nivel 2 (decodificar) requiere TF.
+
+Reglas:
+
+- **Lectura desde MLflow vía `analysis/load.py`** (`ensure_state`, `artifact_path`): no duplicar la carga.
+- **Versionado con `git add -f`**: `*.ipynb` está en `.gitignore` (salvo `analisis_baseline.ipynb`).
+- **Sin outputs ni contadores de ejecución** al commitear: `jupyter nbconvert --clear-output --inplace notebooks/<nb>.ipynb`.
+- **Nivel 2**: instalar `requirements-notebooks-tf.txt` en el venv del Space solo cuando se use, y verificar antes si TF ya viene en la imagen (tarea 9.4).
+
+Flujo del Space (`sinca-dev`): **encender** (SageMaker Console → Studio → Spaces → `sinca-dev` →
+Open Studio), **trabajar** en JupyterLab, **apagar** (Spaces → `sinca-dev` → Stop). Con la app
+detenida no se paga cómputo.
+
 ## Servidor MLflow (on-demand)
 
 El tracking usa MLflow self-hosted: backend SQLite (`mlflow.sqlite`) persistido
