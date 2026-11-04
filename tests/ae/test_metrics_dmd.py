@@ -76,7 +76,7 @@ def test_compuerta_relativa_decide_sin_umbrales():
     gate = aem.gate_decision(ae, pca, mean, None)
     assert gate["relative"] is True and gate["gate_pass"] is True
     assert gate["beats_pca"] is True and gate["beats_mean"] is True
-    assert gate["numeric"] is None  # sin umbrales, la capa numérica no aplica
+    assert gate["numeric"] is True  # con los umbrales por defecto del código, la capa numérica aplica
 
 
 def test_compuerta_relativa_falla_si_no_supera_al_promedio():
@@ -111,7 +111,61 @@ def test_compuerta_numerica_se_suma_a_la_relativa():
     # Numérica exige la relativa: aunque las métricas numéricas pasen, sin superar PCA no hay aprobación.
     bad_rel = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.95, "slope": 1.0}}, {"s": {"rmse": 0.5}}, mean,
                                 {"min_var_ratio": 0.9, "slope_tol": 0.1})
-    assert bad_rel["numeric"] is True and bad_rel["gate_pass"] is False
+    # AE (1.0) peor que 1.02 × PCA (0.5): la capa numérica falla aunque las métricas de forma pasen.
+    assert bad_rel["numeric"] is False and bad_rel["gate_pass"] is False
+
+
+def test_compuerta_empate_dentro_de_2_por_ciento_pasa():
+    ae = {"s": {"rmse": 1.0, "var_ratio": 0.9, "slope": 1.0}}
+    pca = {"s": {"rmse": 1.015}}  # AE 1.5 % mejor: dentro de la tolerancia y gana en el agregado
+    mean = {"s": {"rmse": 3.0}}
+    gate = aem.gate_decision(ae, pca, mean, None)
+    assert gate["numeric"] is True and gate["gate_pass"] is True
+
+
+def test_compuerta_serie_3_por_ciento_peor_falla_aunque_agregado_gane():
+    ae = {"a": {"rmse": 1.0, "var_ratio": 0.9, "slope": 1.0}, "b": {"rmse": 1.03, "var_ratio": 0.9, "slope": 1.0}}
+    pca = {"a": {"rmse": 2.0}, "b": {"rmse": 1.0}}  # razones 0.5 y 1.03 → media 0.765 < 1
+    mean = {"a": {"rmse": 3.0}, "b": {"rmse": 3.0}}
+    gate = aem.gate_decision(ae, pca, mean, None)
+    assert gate["beats_pca"] is True and gate["relative"] is True
+    assert gate["numeric"] is False and gate["gate_pass"] is False
+
+
+def test_compuerta_razon_media_igual_o_mayor_a_uno_falla():
+    ae = {"a": {"rmse": 1.5, "var_ratio": 0.9, "slope": 1.0}, "b": {"rmse": 0.5, "var_ratio": 0.9, "slope": 1.0}}
+    pca = {"a": {"rmse": 1.0}, "b": {"rmse": 1.0}}  # media de razones = 1.0, no < 1
+    mean = {"a": {"rmse": 3.0}, "b": {"rmse": 3.0}}
+    gate = aem.gate_decision(ae, pca, mean, None)
+    assert gate["beats_pca"] is False and gate["gate_pass"] is False
+
+
+def test_compuerta_sin_pca_falla():
+    ae = {"s": {"rmse": 1.0, "var_ratio": 0.9, "slope": 1.0}}
+    gate = aem.gate_decision(ae, {}, {"s": {"rmse": 3.0}}, None)
+    assert gate["beats_pca"] is False and gate["numeric"] is False and gate["gate_pass"] is False
+
+
+def test_compuerta_umbrales_sobreescriben_solo_la_clave_dada():
+    ae = {"s": {"rmse": 1.0, "var_ratio": 0.85, "slope": 1.0}}
+    pca = {"s": {"rmse": 2.0}}
+    mean = {"s": {"rmse": 3.0}}
+    gate = aem.gate_decision(ae, pca, mean, {"min_var_ratio": 0.9})
+    assert gate["thresholds"] == {**aem.DEFAULT_GATE_THRESHOLDS, "min_var_ratio": 0.9}
+    assert gate["numeric"] is False  # 0.85 < 0.90
+    assert aem.gate_decision(ae, pca, mean, None)["numeric"] is True  # por defecto (0.80) sí pasa
+
+
+def test_score_window_razon_contra_pca():
+    rng = np.random.default_rng(7)
+    truth = rng.standard_normal((5, 24, 2))
+    pca = truth + 1.0  # RMSE_PCA = 1
+    ae = truth + 0.5   # RMSE_AE = 0.5 → razón 0.5 en cada canal
+    real = np.ones_like(truth, dtype=bool)
+    out = aem.score_window(truth, ae, pca, real)
+    assert np.isclose(out["score"], 0.5) and len(out["ratios"]) == 2
+    same = aem.score_window(truth, pca, pca, real)
+    assert np.isclose(same["score"], 1.0)
 
 
 # --- DMD (4.5) ---------------------------------------------------------------

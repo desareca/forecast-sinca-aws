@@ -112,8 +112,26 @@ def test_final_guarda_modelos_y_tablas(pipeline_run):
     config = json.loads((seed_dir / "config.json").read_text(encoding="utf-8"))
     assert config["cfg"]["d_aux"] == 2
     assert isinstance(config["gate"]["gate_pass"], bool)
-    assert config["gate"]["numeric"] is None  # sin umbrales: la capa numérica no aplica
+    assert isinstance(config["gate"]["numeric"], bool)  # la capa numérica siempre aplica (umbrales por defecto)
+    assert config["gate"]["thresholds"]["max_rmse_vs_pca"] == 1.02
     assert "beats_mean" in config["gate"]
+
+
+def test_final_registra_curva_de_aprendizaje(pipeline_run):
+    """5.8: loss/val_loss por epoch (con step), best_epoch y epochs_run consistentes."""
+    import mlflow
+    from mlflow.tracking import MlflowClient
+
+    tmp, _ = pipeline_run
+    run = _run_named(tmp, "sinca-zona-ae_mlp-v1")
+    mlflow.set_tracking_uri(f"sqlite:///{(tmp / 'mlflow' / 'mlflow.sqlite').as_posix()}")
+    client = MlflowClient()
+    epochs = int(run.data.metrics["epochs_run"])
+    loss = client.get_metric_history(run.info.run_id, "loss")
+    assert len(loss) == epochs and [m.step for m in loss] == list(range(1, epochs + 1))
+    assert len(client.get_metric_history(run.info.run_id, "val_loss")) == epochs  # hay valid en el fixture
+    assert 1 <= run.data.metrics["best_epoch"] <= epochs
+    assert "runtime_tensorflow" in run.data.params  # versiones de runtime registradas (10.1)
 
 
 def test_reference_registra_mean_y_pca(pipeline_run):
@@ -195,3 +213,42 @@ def test_search_devuelve_mejor_configuracion_por_arquitectura(tmp_path):
     assert best["mlp"]["best"] is not None
     assert "config" in best["mlp"]["best"]
     assert len(best["mlp"]["history"]) == 1
+    assert "rmse_abs" in best["mlp"]["history"][0] and "score" in best["mlp"]["history"][0]
+
+
+def test_search_tope_de_tiempo_no_lanza_trials_y_deja_json_valido(tmp_path):
+    """5.9 (d)-(e): con tope 0 no se lanza ningún trial y el JSON incremental queda válido."""
+    import pandas as pd
+
+    from ae import data as aed
+    from ae import run as aerun
+    from conftest import TZ
+
+    validated = synthetic_validated(start="2026-01-01", hours=24 * 120, gaps=False)
+    grid = aed.build_grid(validated["sinca"], validated["open_meteo"], validated["feriados"])
+    windows = [{
+        "train_start": pd.Timestamp("2026-01-01", tz=TZ), "train_end": pd.Timestamp("2026-02-15", tz=TZ),
+        "valid_start": pd.Timestamp("2026-02-15", tz=TZ), "valid_end": pd.Timestamp("2026-03-01", tz=TZ),
+    }]
+    args = aerun.parse_args(["--mode", "search", "--archs", "gru", "--search-windows", "1", "--search-time-budget", "0"])
+    out = tmp_path / "ae_search.json"
+    best = aerun.run_search(grid, args, windows=windows, out_path=str(out))
+    assert best["gru"]["best"] is None and best["gru"]["history"] == []
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["gru"]["history"] == [] and not (tmp_path / "ae_search.json.tmp").exists()
+
+
+def test_search_espacio_por_arquitectura_respeta_d6():
+    """5.9 (a)-(b): GRU solo L=24 y hidden ≤ 64; conv1d batch 128; trials por defecto de D6."""
+    import numpy as np
+
+    from ae import run as aerun
+
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        gru = aerun.sample_choice("gru", rng)
+        assert gru["length"] == 24 and gru["hidden"] in (32, 64) and gru["batch_size"] == 128
+        conv = aerun.sample_choice("conv1d", rng)
+        assert conv["batch_size"] == 128 and conv["length"] in (24, 72)
+        assert aerun.sample_choice("linear_decoder", rng)["length"] in (24, 72)
+    assert aerun.DEFAULT_SEARCH_TRIALS == {"linear_decoder": 12, "mlp": 12, "conv1d": 6, "gru": 4}

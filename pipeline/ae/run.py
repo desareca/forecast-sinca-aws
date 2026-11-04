@@ -30,6 +30,7 @@ import pathlib
 import shutil
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -228,13 +229,48 @@ def ablation_delta(models, cfg: AEConfig, ctx: Context, win: aed.Windows, z: np.
 # --- MLflow ------------------------------------------------------------------
 
 
-def _log_run(name: str, tags: dict, params: dict, metrics: dict, frames: dict[str, pd.DataFrame], files: dict[str, str] | None = None) -> str:
+def runtime_versions() -> dict[str, str]:
+    """Versiones del runtime (confirma que el toolkit de SageMaker no cambia TF/numpy/pandas)."""
+    import importlib
+
+    out: dict[str, str] = {}
+    for module in ("tensorflow", "keras", "numpy", "pandas"):
+        try:
+            out[module] = str(importlib.import_module(module).__version__)
+        except Exception as exc:  # noqa: BLE001 - se registra el fallo, no se corta el job
+            out[module] = f"no disponible ({exc.__class__.__name__})"
+    return out
+
+
+def peak_rss_mb() -> float:
+    """Memoria residente máxima del proceso en MB (Linux: ru_maxrss en KB)."""
+    try:
+        import resource
+    except ImportError:  # Windows: sin módulo resource
+        return float("nan")
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+
+def curve_metrics(history: dict[str, list[float]]) -> tuple[dict[str, list[float]], dict[str, float]]:
+    """Curva por epoch (`loss`, `val_loss`) y `best_epoch` (1-based; mínimo de val_loss o de loss)."""
+    curve = {k: [float(x) for x in v] for k, v in history.items() if k in ("loss", "val_loss") and v}
+    ref = curve.get("val_loss") or curve.get("loss") or []
+    best = {"best_epoch": float(int(np.nanargmin(ref)) + 1)} if ref and np.isfinite(ref).any() else {}
+    return curve, best
+
+
+def _log_run(name: str, tags: dict, params: dict, metrics: dict, frames: dict[str, pd.DataFrame], files: dict[str, str] | None = None,
+             step_metrics: dict[str, list[float]] | None = None) -> str:
     import mlflow
 
     with mlflow.start_run(run_name=name) as run:
         mlflow.set_tags({k: str(v) for k, v in tags.items()})
         mlflow.log_params({k: v for k, v in params.items() if v is not None})
         mlflow.log_metrics({k: float(v) for k, v in metrics.items() if v is not None and np.isfinite(v)})
+        for key, series in (step_metrics or {}).items():
+            for epoch, value in enumerate(series, start=1):
+                if np.isfinite(value):
+                    mlflow.log_metric(key, float(value), step=epoch)
         with tempfile.TemporaryDirectory(prefix="sinca-ae-") as tmp:
             for filename, frame in frames.items():
                 frame.to_parquet(os.path.join(tmp, filename), index=False)
@@ -266,7 +302,11 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
         raise RuntimeError("Sin muestras de train o test con esta L (revisar huecos y rango de datos).")
     log.info("Entrenando %s L=%d d=%d seed=%d: train=%d valid=%d test=%d", cfg.arch, cfg.length, cfg.d, cfg.seed,
              len(ctx.tr), len(ctx.va) if ctx.va is not None else 0, len(ctx.te))
+    t_fit = time.perf_counter()
     models, history = fit_context(ctx, cfg, args.epochs, args.patience)
+    fit_seconds = time.perf_counter() - t_fit
+    epochs_run = len(history.history.get("loss", []))
+    curve, curve_best = curve_metrics(history.history)
 
     results: dict[str, dict] = {}
     tables: dict[str, pd.DataFrame] = {}
@@ -317,7 +357,11 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
         "gate_relative": float(gate["relative"]),
         "gate_beats_pca": float(gate["beats_pca"]),
         "gate_beats_mean": float(gate["beats_mean"]),
-        "epochs_run": float(len(history.history.get("loss", []))),
+        "epochs_run": float(epochs_run),
+        **curve_best,
+        "fit_seconds": float(fit_seconds),
+        "seconds_per_epoch": float(fit_seconds / epochs_run) if epochs_run else float("nan"),
+        "peak_rss_mb": peak_rss_mb(),
         "train_loss_final": float(history.history["loss"][-1]) if history.history.get("loss") else float("nan"),
         **{f"latent_{k}": v for k, v in latent.items()},
     }
@@ -325,7 +369,8 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
         metrics["gate_numeric"] = float(gate["numeric"])
 
     tags = {"modelo": f"ae-{cfg.arch}", "tipo": "entrenamiento", "stage": "ae-reconstruccion", "seed": cfg.seed}
-    params = {**config_to_params(cfg, version), "gate_thresholds": json.dumps(args.gate_thresholds)}
+    params = {**config_to_params(cfg, version), "gate_thresholds": json.dumps(gate["thresholds"], sort_keys=True),
+              **{f"runtime_{k}": v for k, v in runtime_versions().items()}}
     frames = {
         "reconstruction.parquet": pd.concat(tables.values(), ignore_index=True) if tables else pd.DataFrame(),
         "latent.parquet": pd.concat(
@@ -336,7 +381,8 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
             [{"split": s, "serie": k, "metric": m, "value": v} for s, per in results.items() if s in ("valid", "test") for k, ms in per.items() for m, v in ms.items()]
         ),
     }
-    run_id = _log_run(name, tags, params, metrics, frames, files={"encoder.keras": enc_path, "decoder_mp.keras": dec_path})
+    run_id = _log_run(name, tags, params, metrics, frames, files={"encoder.keras": enc_path, "decoder_mp.keras": dec_path},
+                      step_metrics=curve)
     log.info("Run %s registrado (seed=%d, gate=%s)", run_id, cfg.seed, gate["gate_pass"])
     return {
         "run_id": run_id, "name": name, "seed": cfg.seed, "gate": gate,
@@ -499,51 +545,108 @@ def run_dmd_pass(grid: aed.HourlyGrid, cfg: AEConfig, args, ae_run_id: str, mode
 
 # --- Búsqueda ----------------------------------------------------------------
 
-SEARCH_SPACE: dict[str, list] = {
-    "d": list(LATENT_CHOICES),
-    "length": list(LENGTH_CHOICES),
-    "hidden": [32, 64, 128],
-    "dropout": [0.0, 0.1, 0.2],
-    "lr": [1e-3, 3e-3],
-    "batch_size": [64, 128],
+# Espacio por arquitectura y trials por defecto (design.md D6, punto de control 10.3).
+# `d` queda fijo en la búsqueda (`--d`); `d ∈ {8, 32}` se barre en 11.2. El GRU solo a L=24.
+SEARCH_SPACE: dict[str, dict[str, list]] = {
+    "linear_decoder": {"length": [24, 72], "hidden": [32, 64, 128], "dropout": [0.0, 0.1, 0.2],
+                       "lr": [1e-3, 3e-3], "batch_size": [64, 128]},
+    "mlp": {"length": [24, 72], "hidden": [32, 64, 128], "dropout": [0.0, 0.1, 0.2],
+            "lr": [1e-3, 3e-3], "batch_size": [64, 128]},
+    "conv1d": {"length": [24, 72], "hidden": [32, 64, 128], "dropout": [0.0, 0.1, 0.2],
+               "lr": [1e-3, 3e-3], "batch_size": [128]},
+    "gru": {"length": [24], "hidden": [32, 64], "dropout": [0.0, 0.1, 0.2],
+            "lr": [1e-3, 3e-3], "batch_size": [128]},
 }
+DEFAULT_SEARCH_TRIALS: dict[str, int] = {"linear_decoder": 12, "mlp": 12, "conv1d": 6, "gru": 4}
 
 
-def run_search(grid: aed.HourlyGrid, args, windows: list[dict] | None = None) -> dict:
-    """Búsqueda aleatoria por arquitectura; devuelve la mejor configuración de cada una."""
+def sample_choice(arch: str, rng: np.random.Generator) -> dict:
+    """Una muestra del espacio de `arch` (sin `d`, que viene de `--d`)."""
+    return {name: values[int(rng.integers(len(values)))] for name, values in SEARCH_SPACE[arch].items()}
+
+
+def _search_scores(grid: aed.HourlyGrid, cfg: AEConfig, models, ctx: Context) -> tuple[float, float]:
+    """Score de un trial sobre una ventana de valid: (razón RMSE_AE/RMSE_PCA media, RMSE absoluto medio)."""
     from ae import models as aeml
 
+    mp_z, _ = aeml.predict_mp_aux(models, cfg, ctx.va.x_mp, ctx.va.x_aux)
+    recon = aed.mp_to_ugm3(mp_z, ctx.norm)
+    pca = aed.mp_to_ugm3(reference_recon_z("pca", ctx, ctx.va, cfg.d), ctx.norm)
+    truth = grid.mp.to_numpy()[np.add.outer(ctx.va.end_positions - cfg.length + 1, np.arange(cfg.length))]
+    real = ctx.va.mp_real
+    ratio = aem.score_window(truth, recon, pca, real)["score"]
+    err = (recon - truth)[real]
+    rmse = float(np.sqrt(np.mean(err**2))) if err.size else float("nan")
+    return ratio, rmse
+
+
+def _write_search(best: dict, out_path: str) -> None:
+    """Escribe el JSON de búsqueda (historial completo) de forma atómica."""
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(best, handle, ensure_ascii=False, indent=2, default=str)
+    os.replace(tmp, out_path)
+
+
+def run_search(grid: aed.HourlyGrid, args, windows: list[dict] | None = None, out_path: str | None = None) -> dict:
+    """Búsqueda aleatoria por arquitectura (D6, punto de control 10.3).
+
+    - Score de selección: media sobre las ventanas de valid de `RMSE_AE / RMSE_PCA(d, L)`
+      (`< 1` = gana a PCA). Se registra junto al RMSE absoluto de cada trial.
+    - Trials por arquitectura: `--search-trials` si se pasa, si no `DEFAULT_SEARCH_TRIALS`.
+    - Tope de tiempo `--search-time-budget` (s): al excederlo no se lanzan más trials.
+    - Si `out_path` se pasa, el JSON se escribe tras cada trial (historial incremental).
+    """
     rng = np.random.default_rng(args.seed)
     windows = windows if windows is not None else make_rolling_windows()
     spans = aed.rolling_spans(grid.index, windows)
     pairs = [(w, s) for w, s in zip(windows, spans) if s["train"][1] > s["train"][0] and s["valid"][1] > s["valid"][0]]
     chosen = _select_windows(pairs, args.search_windows)
+    started = time.perf_counter()
     best: dict[str, dict] = {}
+
+    def snapshot() -> dict:
+        return {arch: _arch_summary(best[arch]) for arch in best}
+
     for arch in args.archs:
-        history = []
-        for trial in range(args.search_trials):
-            choice = {name: values[int(rng.integers(len(values)))] for name, values in SEARCH_SPACE.items()}
-            cfg = AEConfig(arch=arch, length=choice["length"], d=choice["d"], hidden=choice["hidden"], dropout=choice["dropout"],
+        trials = args.search_trials if args.search_trials is not None else DEFAULT_SEARCH_TRIALS[arch]
+        history: list[dict] = []
+        best[arch] = {"best": None, "history": history}
+        if out_path:
+            _write_search(snapshot(), out_path)  # el JSON existe aunque el tope corte antes del primer trial
+        for trial in range(trials):
+            if time.perf_counter() - started > args.search_time_budget:
+                log.warning("Tope de tiempo de búsqueda (%ss) alcanzado: %s se corta en trial %d/%d",
+                            args.search_time_budget, arch, trial, trials)
+                break
+            choice = sample_choice(arch, rng)
+            cfg = AEConfig(arch=arch, length=choice["length"], d=args.d, hidden=choice["hidden"], dropout=choice["dropout"],
                            lr=choice["lr"], batch_size=choice["batch_size"], w_mp=args.w_mp, w_aux=args.w_aux,
                            aux_input=args.aux_input, seed=args.seed + trial)
-            scores = []
+            ratios, rmses = [], []
             for _, span_pair in chosen:
                 ctx = make_context(grid, cfg.length, span_pair["train"], span_pair["valid"])
                 if len(ctx.tr) < 24 or ctx.va is None or len(ctx.va) == 0:
                     continue
                 models, _ = fit_context(ctx, cfg, args.search_epochs, args.patience)
-                mp_z, _ = aeml.predict_mp_aux(models, cfg, ctx.va.x_mp, ctx.va.x_aux)
-                recon = aed.mp_to_ugm3(mp_z, ctx.norm)
-                truth = grid.mp.to_numpy()[np.add.outer(ctx.va.end_positions - cfg.length + 1, np.arange(cfg.length))]
-                real = ctx.va.mp_real
-                err = (recon - truth)[real]
-                scores.append(float(np.sqrt(np.mean(err**2))) if err.size else float("nan"))
-            score = float(np.nanmean(scores)) if scores else float("nan")
-            history.append({"trial": trial, "config": cfg.to_dict(), "score": score})
-            log.info("  %s trial %d/%d score=%.4f %s", arch, trial + 1, args.search_trials, score, cfg.to_dict())
-        finite = [h for h in history if np.isfinite(h["score"])]
-        best[arch] = {"best": min(finite, key=lambda h: h["score"]) if finite else None, "history": history}
-    return best
+                ratio, rmse = _search_scores(grid, cfg, models, ctx)
+                ratios.append(ratio)
+                rmses.append(rmse)
+            score = float(np.nanmean(ratios)) if ratios else float("nan")
+            rmse_mean = float(np.nanmean(rmses)) if rmses else float("nan")
+            history.append({"trial": trial, "config": cfg.to_dict(), "score": score, "rmse_abs": rmse_mean})
+            log.info("  %s trial %d/%d score(razón PCA)=%.4f rmse=%.4f %s", arch, trial + 1, trials, score, rmse_mean, cfg.to_dict())
+            best[arch] = _arch_summary(best[arch])
+            if out_path:
+                _write_search(snapshot(), out_path)
+    return {arch: best[arch] for arch in best}
+
+
+def _arch_summary(entry: dict) -> dict:
+    """`{"best": mejor trial válido por score, "history": ...}` para una arquitectura."""
+    history = entry["history"]
+    finite = [h for h in history if np.isfinite(h["score"])]
+    return {"best": min(finite, key=lambda h: h["score"]) if finite else None, "history": history}
 
 
 # --- Orquestación ------------------------------------------------------------
@@ -574,15 +677,15 @@ def run(args) -> int:
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
+    log.info("Runtime: %s", runtime_versions())
     data = _load_data(args)
     grid = aed.build_grid(data["sinca"], data["open_meteo"], data["feriados"])
-    log.info("Grilla: %d horas, %d canales MP, %d auxiliares", len(grid.index), aed.N_MP, aed.N_AUX)
+    log.info("Grilla: %d horas, %d canales MP, %d auxiliares; RSS pico tras datos: %.0f MB",
+             len(grid.index), aed.N_MP, aed.N_AUX, peak_rss_mb())
 
     if args.mode == "search":
-        best = run_search(grid, args)
         path = os.path.join(output_dir, "ae_search.json")
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(best, handle, ensure_ascii=False, indent=2, default=str)
+        best = run_search(grid, args, out_path=path)
         log.info("Búsqueda escrita en %s", path)
         return 0
 
@@ -621,7 +724,19 @@ def _flag(name: str) -> list[str]:
 
 
 def _gate_thresholds(text: str | None) -> dict | None:
-    return json.loads(text) if text else None
+    """Sobreescribe umbrales de la compuerta: `k=v,k=v` (sin quoting) o JSON. Vacío = por defecto del código."""
+    if not text:
+        return None
+    text = text.strip()
+    if text.startswith("{"):
+        return json.loads(text)
+    out: dict[str, float] = {}
+    for pair in text.split(","):
+        key, sep, value = pair.partition("=")
+        if not sep or key.strip() not in aem.DEFAULT_GATE_THRESHOLDS:
+            raise argparse.ArgumentTypeError(f"Umbral desconocido o mal formado: {pair!r} (claves: {sorted(aem.DEFAULT_GATE_THRESHOLDS)})")
+        out[key.strip()] = float(value)
+    return out
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -638,7 +753,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(*_flag("arch"), choices=ARCHITECTURES, default="mlp")
     parser.add_argument(*_flag("archs"), nargs="*", choices=ARCHITECTURES, default=list(ARCHITECTURES))
     parser.add_argument(*_flag("length"), type=int, choices=LENGTH_CHOICES, default=24)
-    parser.add_argument(*_flag("d"), type=int, choices=LATENT_CHOICES, default=16)
+    # SageMaker pasa los hiperparámetros de una letra como `-d` (no `--d`): se aceptan ambas formas.
+    parser.add_argument("-d", "--d", type=int, choices=LATENT_CHOICES, default=16)
     parser.add_argument(*_flag("d-aux"), type=int, default=None)
     parser.add_argument(*_flag("hidden"), type=int, default=64)
     parser.add_argument(*_flag("dropout"), type=float, default=0.1)
@@ -654,7 +770,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(*_flag("epochs"), type=int, default=60)
     parser.add_argument(*_flag("search-epochs"), type=int, default=15)
     parser.add_argument(*_flag("patience"), type=int, default=8)
-    parser.add_argument(*_flag("search-trials"), type=int, default=6)
+    parser.add_argument(*_flag("search-trials"), type=int, default=None,
+                        help="Trials por arquitectura; sin valor usa DEFAULT_SEARCH_TRIALS (12/12/6/4).")
+    parser.add_argument(*_flag("search-time-budget"), type=float, default=10800.0,
+                        help="Tope de tiempo de la búsqueda en segundos (no lanza trials nuevos al excederlo).")
     parser.add_argument(*_flag("search-windows"), type=int, default=4)
     parser.add_argument(*_flag("search-report"), default=None, help="JSON de `search`: usa la mejor config de --arch.")
     parser.add_argument(*_flag("gate-thresholds"), type=_gate_thresholds, default=None, help="JSON con umbrales; vacío = solo reporta.")
