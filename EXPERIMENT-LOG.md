@@ -128,3 +128,32 @@ en el punto de control 10.3, no acá.
 - **Lectura**: `L = 168` tiene ~34 mil ventanas de train, más del doble de las ~17 mil que estimaba `design.md`. El criterio de parar no se cumple.
 - **Decisión / siguiente paso**: continuar con 10.1 (humo). Como hay más muestras que lo estimado, la memoria pico de `L = 168` en `ml.m5.large` (8 GB) hay que medirla de verdad.
 
+### Autoencoders — calibración de compuerta (10.4) y búsqueda (11.1), 2026-11-03
+
+**Búsqueda (11.1, `mode=search`, 4 ventanas, 15 epochs, patience 8, score = razón RMSE_AE/RMSE_PCA(16) en valid):**
+
+| Arquitectura | Trials | Score mejor | Config ganadora |
+|---|---|---|---|
+| conv1d | 6 | 1.02 | L=72, hidden 64, dropout 0.1, lr 1e-3, batch 128 |
+| linear_decoder | 12 | 1.04 | L=72, hidden 32, dropout 0, lr 1e-3, batch 64 |
+| mlp | 12 | 1.05 | L=72, hidden 32, dropout 0, lr 1e-3, batch 64 |
+| gru | 4 | 1.16 | L=24, hidden 64, dropout 0.1, lr 1e-3, batch 128 |
+
+Ningún trial gana a PCA(16) en valid. Arquitectura para 11.2: **conv1d** (menor score).
+
+**Calibración (10.4, L=24, d=16, hidden 64, dropout 0.1, lr 1e-3, batch 128, w_aux 0.1, 60 epochs, patience 8):**
+
+| Arq | Semillas | Razón media AE/PCA (valid) | Desv. entre semillas | Compuerta (semilla) | Mejora loss ep40→60 |
+|---|---|---|---|---|---|
+| conv1d | 0, 1, 2 | 0.880 / 0.915 / 0.890 (media 0.895) | 1.64 % | pasa en 0; falla en 1 y 2 (numérica) | 1.53 % / — / 1.84 % |
+| mlp | 0, 1, 2 | 1.091 / 1.075 / 1.078 | 0.63 % | no pasa | — (early stop) |
+| linear_decoder | 0, 1, 2 | 1.087 / 1.105 / 1.098 | 0.71 % | no pasa | — (early stop) |
+| gru | 0 | 1.024 | — | no pasa | 3.56 % |
+
+Notas para 10.5:
+- Pendiente de PCA(16) por debajo de `slope_tol = 0.20` (valor vigente en la calibración) en algunas series (nielol_pm25 0.740; las_encinas_pm10 0.797): el umbral era más estricto que PCA. Desde 10.5 `slope_tol = 0.30` y `min_var_ratio = 0.75` (tarea 3.9).
+- Fallos numéricos de conv1d: pendiente en las_encinas_pm10 (semillas 1 y 2) y var_ratio en las_encinas_pm10 (0.794, semilla 1).
+- DMD (conv1d semilla 0, único que pasó la compuerta): error de z a 1 paso 0.18 y a 24 pasos 0.97 en test.
+- Ablación de `z_aux` (empeoramiento de RMSE MP, µg/m³): conv1d 0.94–1.87, mlp 0.29–0.36, linear_decoder 0.31–0.33, gru 3.46.
+- Pico de RSS: conv1d ~1.8–2.2 GB, gru ~1.8 GB con L=24.
+
