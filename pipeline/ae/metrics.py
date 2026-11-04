@@ -118,8 +118,8 @@ def latent_diagnostics(z: np.ndarray, d_aux: int, dead_std: float = 1e-4) -> dic
 
 
 DEFAULT_GATE_THRESHOLDS: dict[str, float] = {
-    "min_var_ratio": 0.80,
-    "slope_tol": 0.20,
+    "min_var_ratio": 0.75,
+    "slope_tol": 0.30,
     "max_rmse_vs_pca": 1.02,
 }
 

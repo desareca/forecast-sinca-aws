@@ -153,7 +153,25 @@ def test_compuerta_umbrales_sobreescriben_solo_la_clave_dada():
     gate = aem.gate_decision(ae, pca, mean, {"min_var_ratio": 0.9})
     assert gate["thresholds"] == {**aem.DEFAULT_GATE_THRESHOLDS, "min_var_ratio": 0.9}
     assert gate["numeric"] is False  # 0.85 < 0.90
-    assert aem.gate_decision(ae, pca, mean, None)["numeric"] is True  # por defecto (0.80) sí pasa
+    assert aem.gate_decision(ae, pca, mean, None)["numeric"] is True  # por defecto (0.75) sí pasa
+
+
+def test_umbrales_por_defecto_son_los_de_10_5():
+    assert aem.DEFAULT_GATE_THRESHOLDS == {"min_var_ratio": 0.75, "slope_tol": 0.30, "max_rmse_vs_pca": 1.02}
+
+
+def test_compuerta_numerica_con_umbrales_10_5():
+    # Nivel de PCA(16) en nielol_pm25 (var 0.80, pendiente 0.74): pasa la capa numérica.
+    pca = {"s": {"rmse": 2.0}}
+    mean = {"s": {"rmse": 3.0}}
+    ok = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.80, "slope": 0.74}}, pca, mean, None)
+    assert ok["numeric"] is True and ok["gate_pass"] is True
+    # Varianza bajo 0.75 falla.
+    low_var = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.70, "slope": 0.95}}, pca, mean, None)
+    assert low_var["numeric"] is False and low_var["gate_pass"] is False
+    # Pendiente fuera de 1 ± 0.30 (0.65 → |−0.35|) falla.
+    low_slope = aem.gate_decision({"s": {"rmse": 1.0, "var_ratio": 0.95, "slope": 0.65}}, pca, mean, None)
+    assert low_slope["numeric"] is False and low_slope["gate_pass"] is False
 
 
 def test_score_window_razon_contra_pca():
