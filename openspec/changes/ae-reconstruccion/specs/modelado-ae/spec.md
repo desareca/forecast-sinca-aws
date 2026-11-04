@@ -57,12 +57,16 @@ El sistema SHALL minimizar `w_mp · E_mp + w_aux · E_aux`, donde cada término 
 El sistema SHALL evaluar la reconstrucción de MP en µg/m³ por serie y SHALL compararla contra un predictor del promedio y contra PCA del mismo tamaño de latente. El sistema SHALL calcular diagnósticos de aplanamiento (razón de varianza, pendiente real vs reconstruido, espectro de potencia, error y sesgo por tramos de concentración, captura de máximo y percentiles altos), diagnósticos del latente (dimensión efectiva, dimensiones muertas) y la ablación de `z_aux`. La compuerta SHALL ser dura sobre MP, con umbrales fijados tras la corrida de humo, y solo los modelos que la pasan SHALL ser elegibles para el pase de DMD y el ranking.
 
 #### Scenario: Modelo que no supera la referencia
-- **WHEN** la reconstrucción de MP de un modelo no supera a PCA del mismo tamaño
+- **WHEN** la reconstrucción de MP de un modelo no supera a PCA del mismo tamaño en el agregado (media de las razones `RMSE_AE/RMSE_PCA` por serie ≥ 1), o excede la tolerancia de 2 % frente a PCA en alguna serie
 - **THEN** la compuerta lo marca como no aprobado y queda excluido del pase de DMD
 
+#### Scenario: Empate con PCA dentro de la tolerancia
+- **WHEN** en una serie el RMSE del AE es igual o hasta 2 % mayor que el de PCA del mismo tamaño y en el agregado el AE supera a PCA
+- **THEN** esa serie no impide aprobar la compuerta
+
 #### Scenario: Compuerta sin umbrales numéricos
-- **WHEN** aún no se han fijado umbrales numéricos para los diagnósticos de aplanamiento
-- **THEN** `gate_pass` se calcula igualmente con los criterios relativos (el AE supera al predictor del promedio y a PCA del mismo tamaño) y los umbrales numéricos se suman al criterio cuando se fijen
+- **WHEN** no se aplican umbrales numéricos a los diagnósticos de aplanamiento
+- **THEN** `gate_pass` se calcula igualmente con los criterios relativos (el AE supera al predictor del promedio en todas las series y a PCA del mismo tamaño en el agregado) y los umbrales numéricos se suman al criterio cuando se aplican
 
 #### Scenario: Ablación del bloque auxiliar
 - **WHEN** se evalúa un modelo con `z_aux` puesto en cero
@@ -82,7 +86,7 @@ El sistema SHALL realizar una búsqueda de hiperparámetros por arquitectura sob
 
 #### Scenario: Mejor configuración por arquitectura
 - **WHEN** termina la búsqueda
-- **THEN** se dispone de la mejor configuración de cada arquitectura, no de un único ganador
+- **THEN** se dispone de la mejor configuración de cada arquitectura, no de un único ganador, elegida por la razón `RMSE_AE/RMSE_PCA` (comparable entre `L`) y no por el RMSE absoluto
 
 ### Requirement: Pase de DMD global sobre el latente congelado
 

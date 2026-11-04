@@ -102,6 +102,12 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 - Space `ml.t3.large`, EFS, SSH over SSM.
 - 6 series target (MP2.5/MP10 × 3 estaciones); ICAP_zona derivado en post-proceso.
 - No Secrets Manager en Fase 1 (fuentes públicas HTTP).
+- **Cómputo de `ae-reconstruccion` (2026-11-03)**: todo el change corre en CPU
+  `ml.m5.large` (imagen `tf-cpu-v1`), sin GPU. **Desviación** de la fila `compute` del
+  §3, que anticipaba GPU `ml.g4dn.xlarge` para AE+DMD. Motivo: con `L ∈ {24, 72}` y el
+  GRU solo a `L = 24` ningún job pasa de ~3 h (medido en el humo), y la GPU exigiría una
+  imagen nueva sin necesidad. `L = 168` queda fuera de la búsqueda (memoria). La GPU se
+  reevalúa en `ae-dmd` si hace falta el GRU a `L ≥ 72`. Cuota `ml.g4dn.xlarge` = 1.
 
 Ver `WORKFLOW.md` para el protocolo de coordinación entre Arquitecto,
 Implementador y operador humano.
