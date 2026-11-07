@@ -179,6 +179,11 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
 
 - AWS avisó que la v2 está en mantenimiento desde el 6-jul-2026 y termina soporte el 6-jul-2027. La v3 rompe la API de `launch.py`; requiere change propio. Se mantiene el pin v2. Decidir si y cuándo.
 
+### Ajustes 12.1 (dashboard)
+
+- **Filtros AE** (7.2, `streamlit_app.py`): selectores Familia y Versión antes del selector de run. Pendiente de revisión.
+- **Carga lenta:** `ensure_state` baja 370 objetos / 355 MiB en serie en cada arranque del contenedor. Pendiente decidir si se paraleliza o se persiste en volumen.
+
 ## Decisiones del Arquitecto
 
 - **Punto de control 10.3 (2026-11-03):**
