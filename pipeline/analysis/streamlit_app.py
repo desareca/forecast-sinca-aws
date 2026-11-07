@@ -98,14 +98,29 @@ def _metrics_table(runs: list[dict]) -> pd.DataFrame:
 AE_PARAM_KEYS = ("arch", "length", "d", "d_aux", "hidden", "dropout", "lr", "w_mp", "w_aux", "aux_input", "seed", "version")
 
 
+def _ae_arch(run: dict) -> str:
+    """Familia del AE: param `arch`, o tag `modelo` sin el prefijo `ae-`."""
+    return run["params"].get("arch") or run.get("tags", {}).get("modelo", "").removeprefix("ae-") or "—"
+
+
 def _ae_view(state_dir: str, runs: list[dict]) -> None:
     """Panel de un run conjunto de autoencoder: compuerta, reconstrucción, aplanamiento, DMD."""
     ae = load.ae_runs(runs)
     if not ae:
         st.info("No hay runs de autoencoder en el estado de MLflow.")
         return
-    labels = [f"{run['run_name']} · {run['run_id'][:8]}" for run in ae]
-    run = ae[labels.index(st.sidebar.selectbox("Run de autoencoder", labels))]
+    archs = sorted({_ae_arch(r) for r in ae})
+    arch_sel = st.sidebar.selectbox("Familia (arquitectura)", ["Todas", *archs], key="ae_arch")
+    pool = [r for r in ae if arch_sel == "Todas" or _ae_arch(r) == arch_sel]
+    versions = sorted({str(r["params"].get("version", "—")) for r in pool})
+    version_sel = st.sidebar.selectbox("Versión", ["Todas", *versions], key="ae_version")
+    if version_sel != "Todas":
+        pool = [r for r in pool if str(r["params"].get("version", "—")) == version_sel]
+    if not pool:
+        st.info("Ningún run de autoencoder coincide con los filtros.")
+        return
+    labels = [f"{run['run_name']} · {run['run_id'][:8]}" for run in pool]
+    run = pool[labels.index(st.sidebar.selectbox("Run de autoencoder", labels, key="ae_run"))]
     artifacts = _artifacts(state_dir, run["run_id"])
     metrics = run["metrics"]
 
