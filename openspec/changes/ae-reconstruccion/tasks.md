@@ -117,7 +117,7 @@ y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
 ## 11. Ejecución real — experimentos
 
 - [x] 11.1 Búsqueda por arquitectura según `design.md` D6, con los valores por defecto de 5.9: 4 Training Jobs `--mode search --archs <arq>` **en paralelo** (uno por arquitectura; el modo `search` no escribe en MLflow), 4 ventanas, 15 epochs de búsqueda, patience 8, `--max-run 14400`. Recuperar el `ae_search.json` de cada job desde el output en S3 y registrar en `EXPERIMENT-LOG.md` la mejor configuración, su score (razón vs PCA) y el historial de cada arquitectura. Puede lanzarse en paralelo con 10.4. Si un job termina por el tope de tiempo con menos de 3 trials válidos, o falla por memoria, volver al Arquitecto
-- [ ] 11.2 Sobre **conv1d** (menor score de 11.1), **a `L = 24`** y con los demás hiperparámetros del ganador (hidden 64, dropout 0.1, lr 1e-3, batch 128): una corrida a la vez, semilla 0, `--epochs 60`, `--dmd-after-final false`, `version = 2`. Corridas: control sin meteo (`aux_input` apagado), barrido `w_aux ∈ {0, 0.1, 0.5, 1}` y barrido `d ∈ {8, 32}` (con `d_aux = max(2, d/4)`), más las referencias `ref-mean` y `ref-pca-d{8,32}` a `L = 24` (`version = 2`). `d_aux` no se barre. Hacer antes la tarea 3.9 para que el `gate_pass` de estos runs ya sea el definitivo. Desviación documentada respecto de "la configuración ganadora" (que usa `L = 72`): ver `design.md` D6
+- [x] 11.2 Sobre **conv1d** (menor score de 11.1), **a `L = 24`** y con los demás hiperparámetros del ganador (hidden 64, dropout 0.1, lr 1e-3, batch 128): una corrida a la vez, semilla 0, `--epochs 60`, `--dmd-after-final false`, `version = 2`. Corridas: control sin meteo (`aux_input` apagado), barrido `w_aux ∈ {0, 0.1, 0.5, 1}` y barrido `d ∈ {8, 32}` (con `d_aux = max(2, d/4)`), más las referencias `ref-mean` y `ref-pca-d{8,32}` a `L = 24` (`version = 2`). `d_aux` no se barre. Hacer antes la tarea 3.9 para que el `gate_pass` de estos runs ya sea el definitivo. Desviación documentada respecto de "la configuración ganadora" (que usa `L = 72`): ver `design.md` D6
 - [ ] 11.3 Requiere 10.5 y 3.9. Entrenamiento final de **5 configuraciones**: la mejor de cada arquitectura según 11.1 (conv1d, linear_decoder y mlp a `L = 72`; gru a `L = 24`; pasar la configuración ganadora como `--hp`, el JSON queda como registro) **más conv1d a `L = 24`** con los mismos hiperparámetros del ganador (control de `L`). `--seeds 0,1,2`, `--epochs 60`, `--patience 8`, umbrales por defecto de 3.9, `--dmd-after-final true`, `version = 1`, `--max-run 14400`, una corrida a la vez (tiempo esperado, extrapolado del humo: conv1d `L = 72` ~48 min por semilla; gru ~43 min; conv1d `L = 24` ~16 min; mlp y linear_decoder pocos minutos). Correr `reference` (`version = 1`) para cada par `(L, d)` de los finalistas: `(24, 16)` y `(72, 16)`. Evaluación única en el test held-out y compuerta aplicada. **Antes de pasar a 11.4**, reportar por finalista la razón media AE/PCA en **test** y en valid (ver `design.md` D5, "Señal de alerta"): una compuerta aprobada en valid con razón de test ≥ 1 se anota como "aprobada solo en valid" y se lleva al Arquitecto. Si ningún finalista pasa la compuerta, no seguir a 11.4 y volver al Arquitecto
 - [ ] 11.4 Pase de DMD global (rango completo y truncado) sobre los AE aprobados, encadenado al entrenamiento final de 11.3 (tarea 5.7); si hace falta repetirlo sin reentrenar, usar el modo `dmd` con `--ae-run-id`. Registrar linealizabilidad y los runs `ae-{arq}-dmd` por serie
 - [ ] 11.5 Registrar un resumen por experimento en `EXPERIMENT-LOG.md` (reconstrucción, aplanamiento, aporte de `z_aux`, linealizabilidad, pronóstico informativo vs persistencia/LightGBM). Incluir: comparación de la compuerta en `valid` frente a `test` (el `valid` del final está dentro del train; ver D5), comparación por serie de `var_ratio` y pendiente de cada finalista contra `ref_pca_*` en valid y test (anotar series donde el AE aplane más que PCA(16) en más de 0.05), dispersión entre semillas y medición del sesgo de `log1p` por tramo de concentración (para decidir la corrección en la pregunta abierta de `design.md`)
@@ -300,3 +300,31 @@ Detalle en `design.md` (D5, D6, Riesgos, Open Questions). Resumen:
   - c) 11.4, 11.5 y grupo 12.
 - **Pendientes sin bloquear:** registrar en `EXPERIMENT-LOG.md` el historial por trial de la búsqueda de conv1d (`ae_search.json` en `s3://sinca-mlflow/model-artifacts/sinca-search-conv1d-20261103e/output/`). Limpiar los runs `version=0` y `version=99` de `sinca-baseline` antes de 12.1.
 - **Recordatorios:** perfil AWS personal explícito (`desareca_dev`, cuenta 549024266383) y verificar la cuenta antes de cualquier comando. MLflow, una corrida a la vez. El modo `search` sí puede correr en paralelo.
+
+### Preparación de 11.2 (2026-11-06, Implementador)
+
+- **Chequeos previos:** `tests/ae` → 68 passed. `launch.py --dry-run` con la config de conv1d L=24 → OK (imagen `tf-cpu-v1`, rol `sinca-training-role`, `ml.m5.large`, `max-run 14400`). `sts get-caller-identity --profile desareca_dev` → cuenta 549024266383.
+- **Alerta de entorno:** la variable `AWS_PROFILE` de la shell del implementador apunta a `evolet` (cuenta ajena a estos proyectos). Por eso todos los comandos de 11.2 usan `--profile desareca_dev` explícito y no `$env:AWS_PROFILE`. El README raíz (líneas 66–78) muestra `--profile $env:AWS_PROFILE`: conviene corregirlo o fijar la variable antes de usarlo.
+- **Nombres de run duplicados:** `run_name_ae` produce `sinca-zona-ae_conv1d-v2` para todas las corridas de 11.2 (barridos de `w_aux`, `d` y control sin meteo). Los runs se distinguen por sus params (`w_aux`, `d`, `aux_input`), no por nombre. Sin cambio de código; a revisar en 11.5 y 12.1.
+- **Referencias:** `reference` escribe `ref-mean` y `ref-pca-d{d}`; con dos jobs (`d=8`, `d=32`), `ref-mean` queda registrado dos veces con los mismos valores.
+- **Pendiente:** ejecución de los 9 Training Jobs por el operador, uno a la vez. Los jobs de 11.2 no se marcan hasta tener el output real.
+
+### Ejecución de 11.2 (2026-11-06, script `scripts/ae/run_11_2_serie.ps1`)
+
+- **Resultado:** 9 Training Jobs `Completed`, en serie, entre 19:46 y 21:52 (log `%TEMP%\sinca-ae-11-2-20261106-1946.log`). Ningún fallo ni relanzamiento.
+- **Verificación en MLflow** (copia local de `s3://sinca-mlflow/_mlflow/`, solo lectura): 7 runs `sinca-zona-ae_conv1d-v2` y 2 juegos de referencia (`ref-mean`, `ref-pca-d8`, `ref-mean`, `ref-pca-d32`), todos `FINISHED`.
+- **Compuerta** (`gate_pass`, con umbrales 0.75/0.30/1.02):
+
+| Run | w_aux | d | aux | gate_pass | beats_pca | beats_mean |
+|---|---|---|---|---|---|---|
+| base | 0.1 | 16 | on | 1 | 1 | 1 |
+| noaux (control sin meteo) | 0.1 | 16 | off | 0 | 1 | 1 |
+| waux0 | 0 | 16 | on | 1 | 1 | 1 |
+| waux05 | 0.5 | 16 | on | 0 | 1 | 1 |
+| waux1 | 1 | 16 | on | 0 | 1 | 1 |
+| d8 | 0.1 | 8 | on | 0 | 1 | 1 |
+| d32 | 0.1 | 32 | on | 0 | 1 | 1 |
+
+- **Lectura preliminar (sin decidir):** la compuerta relativa (`beats_pca`, `beats_mean`) pasa en todos; la numérica deja solo base y waux0 aprobados. Las métricas por serie (`var_ratio`, pendiente, razón AE/PCA en valid y test) quedan para 11.5.
+- **Nota:** `best_epoch` no aparece como param en el listado de la consulta (quizá se loguea solo como métrica); a revisar en 11.5.
+- **Nota:** `ref-mean` aparece dos veces en `version=2` (una por job de referencia, con los mismos valores), como se anticipó.
