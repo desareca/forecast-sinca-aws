@@ -102,7 +102,7 @@ Los notebooks son exploración scratch, no producción. Siguen `analisis_baselin
 
 ## 12. Verificación funcional
 
-- [ ] 12.1 Dashboard sobre el estado real de MLflow: runs AE con compuerta, diagnósticos y métricas `dmd_`; runs `ae-{arq}-dmd` comparables por serie contra persistencia y LightGBM; runs sin pronóstico no rompen el dashboard. Adjuntar salida o captura
+- [x] 12.1 Dashboard sobre el estado real de MLflow: runs AE con compuerta, diagnósticos y métricas `dmd_`; runs `ae-{arq}-dmd` comparables por serie contra persistencia y LightGBM; runs sin pronóstico no rompen el dashboard. Adjuntar salida o captura
 - [ ] 12.2 Notebooks de la tarea 8 en JupyterLab del Space con datos reales, `Run All`: cargan artefactos (`reconstruction.parquet`, `latent.parquet`, `dmd_operator.npz`) y generan figuras; celdas de nivel 2 cargan `encoder.keras`/`decoder_mp.keras` de un run real, decodifican y recorren una dimensión del latente. Limpiar outputs y **apagar el Space** (Spaces → `sinca-dev` → Stop)
 
 ## Notas de implementación
@@ -181,7 +181,8 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
 
 ### Ajustes 12.1 (dashboard)
 
-- **Filtros AE** (7.2, `streamlit_app.py`): selectores Familia y Versión antes del selector de run. Pendiente de revisión.
+- **Filtros AE** (7.2, `streamlit_app.py`): selectores Familia y Versión antes del selector de run. Verificado en navegador.
+- **12.1 cerrada** por aceptación del operador. Sin captura adjunta; verificación: 12 runs `ae-*-dmd` con contrato completo, sin excepciones en ambas vistas.
 - **Carga lenta:** `ensure_state` baja 370 objetos / 355 MiB en serie en cada arranque del contenedor. Pendiente decidir si se paraleliza o se persiste en volumen.
 
 ## Decisiones del Arquitecto
