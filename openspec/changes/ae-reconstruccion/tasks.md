@@ -328,3 +328,10 @@ Detalle en `design.md` (D5, D6, Riesgos, Open Questions). Resumen:
 - **Lectura preliminar (sin decidir):** la compuerta relativa (`beats_pca`, `beats_mean`) pasa en todos; la numérica deja solo base y waux0 aprobados. Las métricas por serie (`var_ratio`, pendiente, razón AE/PCA en valid y test) quedan para 11.5.
 - **Nota:** `best_epoch` no aparece como param en el listado de la consulta (quizá se loguea solo como métrica); a revisar en 11.5.
 - **Nota:** `ref-mean` aparece dos veces en `version=2` (una por job de referencia, con los mismos valores), como se anticipó.
+
+### Pendiente para Arquitecto (2026-11-06): SDK de SageMaker v2 → v3
+
+- AWS notificó (correo) que la v2 de sagemaker está en modo mantenimiento desde el 6-jul-2026 y termina soporte el **6-jul-2027**; recomienda migrar a v3.
+- Uso actual en el repo que depende de v2: `pipeline/train/launch.py` (`Estimator`, `Session`), pin `sagemaker>=2,<3` en `requirements-dev.txt` y README (~l. 389). Las imágenes de training usan `sagemaker-training` (paquete aparte; en `train-tf.Dockerfile` va con `--no-deps`) y deben revalidarse. El Space trae un SDK preinstalado en la imagen `sagemaker-distribution-cpu` (alias 3.2.0 fijado en Terraform); confirmar su versión.
+- Implicación: v3 rompe la API de `launch.py`; migrar requiere change propio (reescritura del lanzador, actualización de pins/README, humo de Training Job en entorno no productivo). No se actualizó nada; el pin v2 se mantiene.
+- Acción: que el Arquitecto decida si se propone el change de migración y cuándo.
