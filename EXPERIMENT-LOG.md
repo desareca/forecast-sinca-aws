@@ -155,5 +155,132 @@ Notas para 10.5:
 - Fallos numéricos de conv1d: pendiente en las_encinas_pm10 (semillas 1 y 2) y var_ratio en las_encinas_pm10 (0.794, semilla 1).
 - DMD (conv1d semilla 0, único que pasó la compuerta): error de z a 1 paso 0.18 y a 24 pasos 0.97 en test.
 - Ablación de `z_aux` (empeoramiento de RMSE MP, µg/m³): conv1d 0.94–1.87, mlp 0.29–0.36, linear_decoder 0.31–0.33, gru 3.46.
-- Pico de RSS: conv1d ~1.8–2.2 GB, gru ~1.8 GB con L=24.
+- Pico de RSS: conv1d ~1.8-2.2 GB, gru ~1.8 GB con L=24.
+
+---
+
+## 2026-11-07 - ae-reconstruccion 11.5: resumen de experimentos (finalistas, compuerta valid/test, aplanamiento, linealidad, pronóstico)
+
+- **Qué se revisó (solo lectura)**: copia local de `_mlflow/` (`sinca-mlflow-state`), alineada con S3 (`head-object` de `_mlflow/mlflow.sqlite`, `LastModified` 2026-11-07 20:06 UTC). Artefactos `reconstruction.parquet`, `diagnostics.parquet`, `latent.parquet` y `predictions.parquet`. Las métricas se recalcularon desde `reconstruction.parquet` con las definiciones del pipeline (`pipeline/ae/metrics.py`): `var_ratio = std(recon)/std(real)`; `slope = cov(real, recon)/var(real)`; tramos por `y_true`: `< 50`, `50 ≤ y < 100`, `≥ 100`. Se verificó contra `diagnostics.parquet` (var_ratio, slope, rmse y bias_lt50 coinciden; bias_gt100 solo coincide con el tramo `≥ 100`).
+- **Control de la compuerta**: la compuerta recalculada en `valid` coincide con `gate_pass` registrado en las 15 corridas finales (0 discrepancias). Umbrales: `min_var_ratio 0.75`, `slope_tol 0.30`, `max_rmse_vs_pca 1.02`.
+
+### 1. Compuerta en valid frente a test (finalistas de 11.3, `version = 1`)
+
+| Finalista | L | Semillas 0/1/2 | Compuerta valid (registrada) | Compuerta test (recalculada) | Razón AE/PCA(16) valid | Razón AE/PCA(16) test |
+|---|---|---|---|---|---|---|
+| conv1d | 24 | 0 / 1 / 2 | 1 / 1 / 1 | 1 / 1 / 1 | 0.904 (sd 0.004) | 0.916 (sd 0.012) |
+| gru | 24 | 0 / 1 / 2 | 1 / 1 / 0 | 0 / 0 / 1 | 0.953 (sd 0.007) | 0.976 (sd 0.003) |
+| conv1d | 72 | 0 / 1 / 2 | 0 / 0 / 0 | 0 / 0 / 1 | 0.854 (sd 0.009) | 0.945 (sd 0.010) |
+| mlp | 72 | 0 / 1 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 1.015 (sd 0.008) | 1.025 (sd 0.005) |
+| linear_decoder | 72 | 0 / 1 / 2 | 0 / 0 / 0 | 0 / 0 / 0 | 1.062 (sd 0.004) | 1.056 (sd 0.009) |
+
+- **conv1d L=24 es el único finalista que aprueba en las 3 semillas, tanto en valid como en test.**
+- **gru L=24 es inestable entre semillas.** En test, las semillas 0 y 1 fallan la capa numérica. La semilla 0 es la del pase DMD encadenado. Su razón media en test es 0.976 (< 1), así que no entra en la regla de "aprobada solo en valid" de D5.
+- **conv1d L=72** cumple la alerta de D5: brecha valid–test de 0.09 (0.854 frente a 0.945). Aprueba 0/3 en valid, pero en test aprueba 1/3 (semilla 2) porque la semilla 2 es la única que pasa la capa numérica ahí.
+- Ningún finalista queda en "aprobada solo en valid" con razón de test ≥ 1.
+
+### 2. Aplanamiento por serie frente a PCA(16) del mismo L
+
+Media de semillas. Δvar = `var_PCA − var_AE` y Δpendiente = `|pend_AE − 1| − |pend_PCA − 1|`. **FLAG** si el AE aplana más que PCA(16) en más de 0.05 en alguna de las dos. Valores negativos significan que el AE aplana menos.
+
+| Finalista | Split | Series con FLAG (Δvar / Δpend) |
+|---|---|---|
+| conv1d L=24 | valid | PLC II pm10 (0.053 / 0.027), PLC II pm25 (0.088 / 0.069) |
+| conv1d L=24 | **test** | **ninguna** (máx. PLC II pm25: 0.046 / 0.025) |
+| gru L=24 | valid | LE pm10 (0.056 / 0.047), PLC II pm25 (0.105 / 0.086) |
+| gru L=24 | test | PLC II pm25 (0.082 / 0.064) |
+| conv1d L=72 | valid | LE pm10 (0.075 / 0.048) |
+| conv1d L=72 | test | ninguna |
+| mlp L=72 | test | Nielol pm10 (0.071 / 0.072) |
+| linear_decoder L=72 | test | Nielol pm10 (0.083 / 0.090) |
+
+- Las pendientes de todos los modelos, AE y PCA, quedan entre 0.44 y 0.90. **El aplanamiento es común a AE y PCA(16)**, y la diferencia con PCA depende de la serie.
+- En valid, conv1d L=24 aplana más que PCA(16) en PLC II (pm10 y pm25); en test esa diferencia baja de 0.05 en las dos series, así que no hay FLAG en test.
+
+### 3. Dispersión entre semillas
+
+- Desviación estándar de la razón entre semillas: conv1d L=24 0.004 (valid) y 0.012 (test); gru 0.007 y 0.003; conv1d L=72 0.009 y 0.010; mlp 0.008 y 0.005; linear_decoder 0.004 y 0.009.
+- Coherente con la medición de 10.4 (1.64 % entre semillas de conv1d). El límite de 2 % de la tolerancia por serie (D5) sigue siendo razonable para conv1d L=24. Para gru, la inestabilidad entre semillas se da en la capa numérica por serie, no en el agregado.
+
+### 4. Sesgo y RMSE por tramo de concentración (test, media de las 6 series, µg/m³)
+
+| Modelo | Sesgo `< 50` | Sesgo `50–100` | Sesgo `≥ 100` | RMSE `≥ 100` |
+|---|---|---|---|---|
+| conv1d L=24 | +0.45 | −4.71 | −21.75 | 49.15 |
+| gru L=24 | +0.44 | −6.96 | −27.42 | 52.79 |
+| PCA(16) L=24 | +0.42 | −5.63 | −25.35 | 56.00 |
+| conv1d L=72 | +1.03 | −9.02 | −38.75 | 68.56 |
+| PCA(16) L=72 | +0.88 | −10.38 | −44.83 | 74.80 |
+| referencia promedio L=24 | +0.22 | −52.02 | −144.82 | 156.71 |
+
+- El patrón (sobreestima en tramo bajo, subestima en tramo alto) aparece igual en el AE y en PCA(16). Como PCA también trabaja en el espacio `log1p`, **el sesgo no se puede atribuir al `log1p` por separado de la contracción general hacia la media.** En tramo alto el conv1d L=24 subestima menos que PCA(16).
+- Esto no justifica por sí solo una corrección de sesgo en este change (ver Decisión).
+
+### 5. Aporte de `z_aux` (ablación: Δ RMSE de MP en test, µg/m³) y latente
+
+| Finalista | L | Semillas 0/1/2 | Dim. efectiva (PR de z, de 16) | Dimensiones muertas |
+|---|---|---|---|---|
+| conv1d | 24 | 1.24 / 1.54 / 0.52 | 8.2–8.6 | 0 |
+| gru | 24 | 3.47 / 2.57 / 2.77 | 7.1–8.0 | 0 |
+| conv1d | 72 | 2.13 / 1.69 / 1.86 | 10.9–12.4 | 0 |
+| mlp | 72 | 4.48 / 1.53 / 0.73 | 8.6–9.0 | 0 |
+| linear_decoder | 72 | 1.28 / 1.47 / 0.09 | 7.1–9.6 | 0 |
+
+- `z_aux` aporta algo en todos los modelos, pero el efecto es pequeño frente a un RMSE de 16–21 µg/m³. El aporte es mayor en gru, aunque su compuerta es inestable.
+
+### 6. Linealizabilidad del latente (pase DMD, semilla 0)
+
+| Modelo | Escala `z` (rms train) | Error a 1 paso | Error a 24 pasos | Truncado (rango 8): 1 paso / 24 pasos |
+|---|---|---|---|---|
+| conv1d L=24 | 0.90 | 0.147 (16 %) | 0.779 (86 %) | 0.480 / 0.813 |
+| gru L=24 | 0.46 | 0.057 (12 %) | 0.372 (81 %) | 0.192 / 0.386 |
+
+- A 1 paso el operador lineal es razonable. **A 24 pasos el error es del mismo orden que la escala del latente**: `K^24` no predice bien el latente en el horizonte de 24 h. El rango truncado es peor en ambos casos.
+- Desviación estándar de cada bloque del latente en train (contexto de escala): `z_mp` 0.85 y `z_aux` 1.03 en conv1d; `z_mp` 0.40 y `z_aux` 0.61 en gru.
+
+### 7. Pronóstico informativo frente a LightGBM v1 (test, mismas filas)
+
+Las filas comunes son la intersección de DMD, LightGBM v1 y `timestamp` UTC por serie. Los `n` del DMD (≈1 650–1 850 por serie) son menores que los del LightGBM registrado (≈1 800–2 000) porque el DMD solo predice donde la ventana decodificada está completa. Por eso la comparación se hizo sobre las filas comunes y no sobre los números reportados.
+
+| Modelo | RMSE media (6 series) | RMSE ponderado media (6 series) |
+|---|---|---|
+| LightGBM v1 | 21.25 | 28.17 |
+| DMD conv1d L=24 (semilla 0) | 20.97 | 33.28 |
+| DMD gru L=24 (semilla 0) | 20.69 | 31.09 |
+
+- Por serie, el DMD gana en RMSE en PLC II (pm10 y pm25) y pierde en las otras cuatro. En RMSE ponderado, pierde en 5 de 6 series. Pierde en los picos: el error de alta concentración es el que dispara el ponderado.
+- **Persistencia no entra en esta comparación.** Sus runs no guardaron `predictions.parquet`, así que no es posible reconstruir las mismas filas. Sus métricas por serie de MLflow están sobre `n = 10 319` (no comparables fila a fila).
+- Los runs `lightgbm` `version = 99` son de humo (9.2) y no se usan aquí. Están pendientes de limpieza antes de 12.1.
+
+### 8. Barrido de 11.2 (conv1d, L=24, `version = 2`, semilla 0)
+
+Nota: el barrido usó `lr = 0.001`, pero el ganador de 11.1 tiene `lr = 0.003`. Por eso estos runs no son idénticos al conv1d L=24 de 11.3 (ver discrepancia en 11.3). Razón AE/PCA con el PCA del mismo `d`:
+
+| Variante | `aux_input` | `w_aux` | `d` | Compuerta (valid) | Razón valid | Razón test | Δ ablación `z_aux` |
+|---|---|---|---|---|---|---|---|
+| control sin meteo | off | 0.1 | 16 | 0 | 0.950 | 0.932 | 2.17 |
+| base | on | 0.1 | 16 | 1 | 0.901 | 0.909 | 1.28 |
+| `w_aux = 0` | on | 0.0 | 16 | 1 | 0.909 | 0.935 | 1.82 |
+| `w_aux = 0.5` | on | 0.5 | 16 | 0 | 0.944 | 0.931 | 0.50 |
+| `w_aux = 1` | on | 1.0 | 16 | 0 | 0.967 | 0.961 | 0.44 |
+| `d = 8` | on | 0.1 | 8 | 0 | 0.893 | 0.906 | 1.51 |
+| `d = 32` | on | 0.1 | 32 | 0 | 0.994 | 1.028 | 1.04 |
+
+- Sin meteo (control) la compuerta falla y el MP empeora: la meteo aporta en el barrido. `w_aux = 0.1` es el mejor equilibrio. `w_aux` alto (0.5, 1) hace que el AE se parezca menos a PCA.
+- `d = 8` tiene la razón de valid más baja, pero falla la capa numérica. `d = 32` no gana a PCA(32) en test.
+- Este barrido es de una sola semilla, con `lr` distinto del finalista. Sirve para ordenar variantes, no para concluir sobre el final.
+
+### Observaciones para el Arquitecto (no decididas aquí)
+
+1. **conv1d L=24 es el AE de referencia del change**: única configuración que pasa la compuerta en las 3 semillas y en valid y test. Su pase DMD (semilla 0) es el resultado principal de linealizabilidad.
+2. **gru L=24 no es estable**: el pase DMD encadenado (semilla 0) corresponde a una semilla que falla la capa numérica en test. Su resultado debe leerse como exploratorio.
+3. **Sesgo de `log1p`**: no se puede separar del aplanamiento con este diseño (ver §4). Propuesta: no aplicar corrección en `ae-reconstruccion`; reabrirla en `ae-dmd`, junto con los pesos por magnitud (pregunta abierta de `design.md`).
+4. **Pronóstico DMD**: en RMSE está al nivel de LightGBM, con el mismo orden de magnitud; en RMSE ponderado es peor. No es evidencia de mejora sobre LightGBM.
+5. **Discrepancia de `lr` (11.2 frente a 11.3)** sin resolver: el barrido de 11.2 y el finalista de 11.3 no se pueden comparar directo.
+6. **Nombres de run duplicados**: `sinca-zona-ae_conv1d-v2` (11.2) y `ref-mean` repetido se distinguen solo por params. La consulta de este resumen los separó por `d`, `aux_input`, `w_aux` y `seed`.
+
+### Decisión / siguiente paso
+
+- 11.5 registrada con las cifras anteriores. Se entrega al Arquitecto para decidir: (a) confirmar conv1d L=24 como AE de referencia, (b) tratar gru L=24 como exploratorio, (c) el criterio de corrección de `log1p` (propuesta: no corregir aquí), (d) cómo registrar la discrepancia de `lr`.
+- No se modificó ningún run de MLflow ni se lanzó ningún Training Job en esta tarea.
 
