@@ -1,375 +1,201 @@
-> Orden: primero las tareas de **escritura de código/archivos** (grupos 1-8, no
-> requieren AWS); al final las de **ejecución real** (grupos 9-12), con el
-> operador corriendo los comandos y devolviendo el output real. La última tarea
-> es una verificación funcional explícita.
+> Orden: código (grupos 1–8, sin AWS) → ejecución real (9–12), donde el operador corre los comandos y devuelve el output. La última tarea de ejecución es una verificación funcional.
 
-## 1. Módulo de datos para red neuronal (`pipeline/ae/data.py`)
+## 1. Datos para red (`pipeline/ae/data.py`)
 
-- [x] 1.1 Cargar los datos validados con `features/build.load_validated` y armar la tabla horaria de las 6 series de MP sobre una grilla horaria completa
-- [x] 1.2 Armar los canales auxiliares: `pres`, `wspd`, `rain` × 3 estaciones, `temp` de Ñielol y Las Encinas, y `blh` (sin `rhum`, `glob` ni `temp` de Padre Las Casas II)
-- [x] 1.3 Armar los canales de calendario (Fourier diaria/semanal/anual sin/cos, `dow_sin/cos`, `is_holiday`, `gec_window`), reutilizando las constantes de `features/build.py`
-- [x] 1.4 Interpolar linealmente huecos de ≤ 6 h; conservar la máscara de valores reales; en aux dejar huecos > 6 h en 0 con columna de máscara de entrada
-- [x] 1.5 Cortar ventanas `[L × 6]` (`L ∈ {24, 72, 168}`), descartando las de MP con huecos > 6 h, y asignar cada muestra a train/valid/test solo si toda su ventana cae dentro del conjunto (reutilizar `make_rolling_windows`, `final_holdout_split`, `_select_windows`)
-- [x] 1.6 Transformación: `log1p` en `pm25`, `pm10`, `rain`, `blh`, `wspd`; z-score por canal con estadísticas solo del train de la partición; recorte ±5 solo en aux (nunca en MP); invertir la transformación para reportar en µg/m³
-- [x] 1.7 Reporte de rangos por canal (mínimo, máximo, percentiles, fracción recortada)
-- [x] 1.8 Tests unitarios con fixture sintético: interpolación, descarte de ventanas, máscaras, asignación por partición, estadísticas solo de train, no recorte de MP
+- [x] 1.1 Cargar validados con `features/build.load_validated`; tabla horaria de las 6 series MP sobre grilla horaria completa
+- [x] 1.2 Canales aux: `pres`, `wspd`, `rain` × 3 estaciones; `temp` de Ñielol y Las Encinas; `blh` (sin `rhum`, `glob`, `temp` de PLC II)
+- [x] 1.3 Calendario: Fourier diaria/semanal/anual sin/cos, `dow_sin/cos`, `is_holiday`, `gec_window` (constantes de `features/build.py`)
+- [x] 1.4 Interpolar huecos ≤ 6 h; máscara de valores reales; en aux, huecos > 6 h = 0 + columna de máscara
+- [x] 1.5 Ventanas `[L × 6]`, L ∈ {24, 72, 168}; descartar ventanas MP con huecos > 6 h; asignar a partición solo si la ventana completa cae en ella (`make_rolling_windows`, `final_holdout_split`, `_select_windows`)
+- [x] 1.6 `log1p` en pm25, pm10, rain, blh, wspd; z-score con estadísticas solo de train; recorte ±5 solo en aux; inversión a µg/m³
+- [x] 1.7 Reporte de rangos por canal (mín, máx, percentiles, fracción recortada)
+- [x] 1.8 Tests con fixture sintético: interpolación, descarte, máscaras, asignación, estadísticas solo de train, sin recorte de MP
 
-## 2. Modelos AE (`pipeline/ae/models.py`) y loss
+## 2. Modelos y loss (`pipeline/ae/models.py`)
 
-- [x] 2.1 Implementar el AE en Keras: encoder de MP, rama auxiliar, latente `z=[z_mp | z_aux]` (`d ∈ {8,16,32}`, `d_aux = d/4` por defecto, ≥ 2), decoder de MP que recibe el latente completo y decoder auxiliar; salida lineal
-- [x] 2.2 Variantes: `mlp`, `conv1d`, `gru` (con opción `lstm`) y `linear_decoder`
+- [x] 2.1 AE en Keras: encoder MP, rama aux, latente `z=[z_mp | z_aux]` (d ∈ {8,16,32}; d_aux = d/4 por defecto, ≥ 2); decoder MP sobre el latente completo; decoder aux; salida lineal
+- [x] 2.2 Variantes: `mlp`, `conv1d`, `gru` (opción `lstm`), `linear_decoder`
 - [x] 2.3 Interruptor `aux_input` (apagado = rama aux solo con calendario)
-- [x] 2.4 Loss `w_mp · E_mp + w_aux · E_aux` con MSE enmascarado y promedio por canal (calendario sin loss); `train_step`/`compile` según corresponda a Keras 3
-- [x] 2.5 Tests: formas de entrada/salida por variante, enmascarado de valores no reales, `w_aux = 0` anula el término aux
+- [x] 2.4 Loss `w_mp·E_mp + w_aux·E_aux`: MSE enmascarado, promedio por canal, calendario sin loss; compile/train_step según Keras 3
+- [x] 2.5 Tests: formas por variante, enmascarado, `w_aux = 0` anula el término aux
 
 ## 3. Referencias, métricas y compuerta (`pipeline/ae/metrics.py`)
 
-- [x] 3.1 Referencia predictor del promedio y referencia PCA con el mismo `d`, con las mismas métricas de reconstrucción
-- [x] 3.2 Métricas de reconstrucción por serie en µg/m³: RMSE, razón de varianza, pendiente real vs reconstruido, espectro de potencia, RMSE y sesgo por tramos de concentración (< 50, 50–100, > 100), captura de máximo y percentiles altos
-- [x] 3.3 Diagnósticos del latente: dimensión efectiva (razón de participación del PCA de `z`) y dimensiones muertas
-- [x] 3.4 Ablación de `z_aux` (poner el bloque en cero y medir el empeoramiento del MP)
-- [x] 3.5 Compuerta de reconstrucción dura sobre MP, con umbrales **parametrizables** (se fijan tras el humo; por defecto solo reporta sin decidir)
-- [x] 3.6 Tests con datos sintéticos conocidos (señal suavizada → razón de varianza < 1; reconstrucción perfecta → pendiente 1)
-- [x] 3.7 Compuerta en dos capas (ver `design.md` D5): `gate_pass` se calcula y se registra **siempre** con la capa relativa (el AE supera al predictor del promedio y a PCA(d) en la reconstrucción de MP; calcular `gate_beats_mean` además de `gate_beats_pca`); la capa numérica (`--gate-thresholds`) se suma al `gate_pass` cuando se fije en el punto de control. Actualizar `gate_decision` y los tests (con y sin umbrales)
-- [x] 3.8 Compuerta ajustada en el punto de control 10.3 (ver `design.md` D5): (a) capa relativa = `beats_mean` estricto en las 6 series **y** `beats_pca` en el agregado (media de las 6 razones `RMSE_AE/RMSE_PCA(d)` < 1); registrar siempre las razones por serie; (b) capa numérica con umbrales **por defecto en el código** `{"min_var_ratio": 0.80, "slope_tol": 0.20, "max_rmse_vs_pca": 1.02}` (constante única, registrada en el param `gate_thresholds`; `--gate-thresholds` solo los sobreescribe, sin quoting de JSON por `--hp`); `gate_pass = relative ∧ numeric`. Tests: empate dentro de 2 % pasa, una serie 3 % peor falla, razón media ≥ 1 falla, sin PCA/promedio falla
-- [x] 3.9 Umbrales fijados en el punto de control 10.5 (ver `design.md` D5): cambiar `DEFAULT_GATE_THRESHOLDS` a `{"min_var_ratio": 0.75, "slope_tol": 0.30, "max_rmse_vs_pca": 1.02}` y ajustar los tests (un AE con `var_ratio` 0.80 y pendiente 0.74 —el nivel de PCA(16) en `nielol_pm25`— pasa la capa numérica; uno con `var_ratio` 0.70 o pendiente 0.65 la falla). Sin otros cambios de código
+- [x] 3.1 Referencias: predictor del promedio y PCA con el mismo d, mismas métricas
+- [x] 3.2 Métricas por serie en µg/m³: RMSE, razón de varianza, pendiente real vs reconstruido, espectro, RMSE y sesgo por tramo (< 50, 50–100, > 100), captura de máximo, percentiles altos
+- [x] 3.3 Diagnósticos del latente: dimensión efectiva (participación de PCA de z) y dimensiones muertas
+- [x] 3.4 Ablación de `z_aux` (anular el bloque y medir el empeoramiento de MP)
+- [x] 3.5 Compuerta dura sobre MP con umbrales parametrizables (por defecto solo reporta)
+- [x] 3.6 Tests con datos conocidos (señal suavizada → razón de varianza < 1; reconstrucción perfecta → pendiente 1)
+- [x] 3.7 Compuerta en dos capas (D5): `gate_pass` siempre con la capa relativa (supera al promedio y a PCA(d)); registrar `gate_beats_mean` y `gate_beats_pca`; la capa numérica se suma al fijar umbrales en 10.3. Actualizar `gate_decision` y tests
+- [x] 3.8 Compuerta ajustada en 10.3 (D5): (a) relativa = `beats_mean` estricto en las 6 series y `beats_pca` en el agregado (media de razones RMSE_AE/RMSE_PCA < 1), con razones por serie registradas; (b) numérica con defaults en código `{min_var_ratio 0.80, slope_tol 0.20, max_rmse_vs_pca 1.02}`, registrados en el param `gate_thresholds`; `--gate-thresholds` solo sobreescribe (sin JSON por `--hp`); `gate_pass = relative ∧ numeric`. Tests: empate dentro de 2 % pasa, serie 3 % peor falla, razón media ≥ 1 falla, sin PCA/promedio falla
+- [x] 3.9 Umbrales de 10.5 (D5): `DEFAULT_GATE_THRESHOLDS = {min_var_ratio 0.75, slope_tol 0.30, max_rmse_vs_pca 1.02}`; tests: var 0.80 con pendiente 0.74 pasa; var 0.70 o pendiente 0.65 falla. Sin otros cambios
 
-## 4. Módulo DMD (`pipeline/ae/dmd.py`)
+## 4. DMD (`pipeline/ae/dmd.py`)
 
-- [x] 4.1 Extraer `z_t` del AE congelado para cada hora de la partición
-- [x] 4.2 DMD exacto global por mínimos cuadrados sobre pares `(z_t, z_{t+1})`, rango completo y variante truncada, con `numpy`/`tf.linalg`
-- [x] 4.3 Linealizabilidad: error de `z` a 1 y a 24 pasos (`K`, `K^24`) en valid/test
-- [x] 4.4 Pronóstico informativo: `K^24 z_t` → `decoder_mp` → promedio de las últimas 24 horas de la ventana decodificada, en µg/m³, alineado con el target de `features/build.py`
-- [x] 4.5 Tests con sistema lineal sintético (K recuperado, linealizabilidad ≈ 0) y verificación de que el promedio coincide con `mean(MP(t+1 … t+24h))` en un caso trivial
+- [x] 4.1 Extraer z_t del AE congelado para cada hora de la partición
+- [x] 4.2 DMD exacto global por mínimos cuadrados sobre (z_t, z_{t+1}); rango completo y truncado (`numpy`/`tf.linalg`)
+- [x] 4.3 Linealizabilidad: error de z a 1 y 24 pasos (K, K^24) en valid/test
+- [x] 4.4 Pronóstico informativo: K^24 z_t → decoder_mp → promedio de las últimas 24 h decodificadas, en µg/m³, alineado con el target de `features/build.py`
+- [x] 4.5 Tests: sistema lineal sintético (K recuperado, linealizabilidad ≈ 0); promedio = mean(MP(t+1…t+24h)) en caso trivial
 
-## 5. Entry point de entrenamiento y tracking (`pipeline/ae/run.py`)
+## 5. Entry point y tracking (`pipeline/ae/run.py`)
 
-- [x] 5.1 Entry point que acepte arquitectura, `L`, `d`, `w_mp`, `w_aux`, `aux_input`, semilla y modo (búsqueda, final, referencia, DMD)
-- [x] 5.2 Búsqueda aleatoria por arquitectura sobre pocas ventanas equiespaciadas (`_select_windows`), con early stopping; devolver la mejor configuración de cada arquitectura
-- [x] 5.3 Entrenamiento final con todo lo anterior al test, 3 semillas, evaluación única en el test held-out
-- [x] 5.4 Logging a MLflow: runs `sinca-zona-ae_{arq}-v{n}` con tags `modelo`, `tipo`, `stage` y sin `estacion`/`pollutant`; params, métricas `recon_*` y `gate_pass`; artefactos `reconstruction.parquet`, `latent.parquet` (latente `z` por hora y partición, con columnas por bloque `z_mp`/`z_aux`) y tabla de diagnósticos, más `encoder.keras` y `decoder_mp.keras` (por separado) como artefactos del run; sync de estado con `train/mlflow_log.py`
-- [x] 5.5 Runs de referencia (`ref-mean`, `ref-pca-d{d}`) y runs por serie del pase DMD (`ae-{arq}-dmd`) con `predictions.parquet`/`zone_icap.parquet`/`rolling_scores.parquet` (mismo contrato que LightGBM), tag `ae_run_id` y métricas `dmd_latent_rmse_1`/`dmd_latent_rmse_24` en el run AE; persistir el operador ajustado (`dmd_operator.npz`: `K`, rango, autovalores) como artefacto para explorarlo sin TensorFlow
-- [x] 5.6 Test del entry point con fixture local (corre de punta a punta sin AWS)
-- [x] 5.7 Acceso del pase DMD al AE (ver `design.md` D7.6): (a) camino principal: encadenar el pase de DMD en el mismo job del entrenamiento final, solo si `gate_pass` es verdadero (flag `--dmd-after-final`, activo por defecto); (b) respaldo: en el modo `dmd` independiente, `--ae-run-id` descarga `encoder.keras` y `decoder_mp.keras` desde `sinca-mlflow/_mlflow/` reutilizando `analysis/load.py` (`ensure_state`/`artifact_path`), manteniendo `--ae-dir` para pruebas. Test con fixture local para ambos caminos
-- [x] 5.8 Curva de aprendizaje en `run_final`: registrar en MLflow `loss` y `val_loss` por epoch (métricas con `step`) y `best_epoch`; mantener `epochs_run`. Sirve para decidir en 10.5 las epochs del final (D6) y para ver si el entrenamiento se estanca. Test con fixture local
-- [x] 5.9 Búsqueda por arquitectura según `design.md` D6: (a) espacio por arquitectura (tabla de D6: `d = 16` fijo, `L ∈ {24, 72}`, GRU solo `L = 24`, `hidden` del GRU {32, 64}, `batch` {128} para conv1d y GRU); `L = 168` sigue aceptado por el CLI y el módulo de datos pero fuera del espacio; (b) trials por defecto por arquitectura `{linear_decoder: 12, mlp: 12, conv1d: 6, gru: 4}` (`--search-trials` solo sobreescribe); (c) **score** = media sobre ventanas de la media por serie de `RMSE_AE / RMSE_PCA(d, L)` en valid (reutilizar `reference_recon_z("pca", …)` y `split_metrics`), registrado junto al RMSE absoluto; (d) `--search-time-budget` (s, default 10800): no lanzar más trials al excederlo; (e) escribir `ae_search.json` de forma incremental tras cada trial, con el historial completo y el score/RMSE por trial. Tests: el espacio respeta las restricciones por arquitectura, el score usa la razón vs PCA, el tope de tiempo corta y deja un JSON válido
+- [x] 5.1 Entry point: arquitectura, L, d, w_mp, w_aux, aux_input, semilla, modo (search, final, reference, dmd)
+- [x] 5.2 Búsqueda aleatoria por arquitectura sobre pocas ventanas equiespaciadas (`_select_windows`), con early stopping; mejor config por arquitectura
+- [x] 5.3 Entrenamiento final con todo lo anterior al test, 3 semillas, evaluación única en test
+- [x] 5.4 Logging MLflow: runs `sinca-zona-ae_{arq}-v{n}`, tags `modelo`, `tipo`, `stage`, sin `estacion`/`pollutant`; params, `recon_*`, `gate_pass`; artefactos `reconstruction.parquet`, `latent.parquet` (bloques z_mp/z_aux), tabla de diagnósticos, `encoder.keras` y `decoder_mp.keras` por separado; sync con `train/mlflow_log.py`
+- [x] 5.5 Referencias (`ref-mean`, `ref-pca-d{d}`) y runs DMD por serie (`ae-{arq}-dmd`) con `predictions.parquet`/`zone_icap.parquet`/`rolling_scores.parquet` (contrato LightGBM), tag `ae_run_id`, `dmd_latent_rmse_1/24` en el run AE, `dmd_operator.npz` (K, rango, autovalores)
+- [x] 5.6 Test del entry point con fixture local, sin AWS
+- [x] 5.7 Pase DMD: (a) encadenado al entrenamiento final solo si `gate_pass` (flag `--dmd-after-final`, activo por defecto); (b) respaldo: modo `dmd` con `--ae-run-id` descarga `encoder.keras`/`decoder_mp.keras` de `sinca-mlflow/_mlflow/` con `analysis/load.py` (`ensure_state`/`artifact_path`); `--ae-dir` para pruebas. Tests con fixture para ambos caminos
+- [x] 5.8 Curva de aprendizaje: `loss` y `val_loss` por epoch (con step) y `best_epoch`; mantener `epochs_run`. Test con fixture
+- [x] 5.9 Búsqueda según D6: espacio por arquitectura (d = 16; L ∈ {24, 72}; GRU solo L = 24, hidden {32, 64}; batch {128} en conv1d/GRU); L = 168 aceptado por CLI y datos pero fuera del espacio. Trials por defecto `{linear_decoder 12, mlp 12, conv1d 6, gru 4}` (`--search-trials` sobreescribe). Score = media por serie de RMSE_AE/RMSE_PCA(d, L) en valid, junto al RMSE absoluto. `--search-time-budget` (s, default 10800). `ae_search.json` incremental. Tests: restricciones del espacio, score como razón, tope de tiempo, JSON válido
 
 ## 6. Imagen y lanzador
 
-- [x] 6.1 Crear `docker/train-tf.Dockerfile` (solo runtime, `tensorflow-cpu`, patrón de `train.Dockerfile`; sin código ni `requirements.txt` ajeno en `source_dir`)
-- [x] 6.2 Ajustar `train/launch.py` para elegir imagen (tag explícito), tipo de instancia y entry point; sin `:latest`
-- [x] 6.3 Documentar en `docker/` el flujo de build/push con los tags `lgbm-v1` y `tf-cpu-v1`
-- [x] 6.4 Mover `pipeline/requirements.txt` fuera de `source_dir` (`git mv pipeline/requirements.txt requirements-scraper.txt`), de modo que el toolkit de SageMaker no instale deps del scraper en los Training Jobs; confirmar que ningún Dockerfile, workflow ni doc lo referencia y actualizar lo que corresponda (ver `design.md` D10)
+- [x] 6.1 `docker/train-tf.Dockerfile`: solo runtime, `tensorflow-cpu`, patrón de `train.Dockerfile`; sin código ni requirements ajenos en `source_dir`
+- [x] 6.2 `train/launch.py`: imagen con tag explícito, tipo de instancia y entry point; sin `:latest`
+- [x] 6.3 Documentar en `docker/` el build/push con tags `lgbm-v1` y `tf-cpu-v1`
+- [x] 6.4 `git mv pipeline/requirements.txt requirements-scraper.txt` (fuera de `source_dir`, D10); confirmar que nada lo referencia
 
 ## 7. Dashboard
 
-- [x] 7.1 `analysis/load.py`: tolerar runs sin `estacion`/`pollutant` y sin `feature_importance.parquet`; cargar `reconstruction.parquet` y las métricas `recon_*`/`dmd_*`. El filtro actual de runs de entrenamiento lee el **param** `tipo` (`!= "persistencia"`): excluir de las vistas por serie los runs de AE y de referencia (`ref-*`), y registrar `tipo` también como param en el logging de la tarea 5.4/5.5
-- [x] 7.2 `analysis/streamlit_app.py` y `analysis/plots.py`: el flujo actual elige primero la serie y luego sus runs, y los runs de AE no tienen serie → agregar una **sección aparte** (selector de runs de AE) con el panel de reconstrucción (real vs reconstruido, razón de varianza, pendiente, espectro, error por nivel, estado de la compuerta) y el panel de linealizabilidad; los runs `ae-{arq}-dmd` entran por el flujo por serie existente
-- [x] 7.3 Ampliar el fixture (`make_fixture.py`) con runs de AE y runs `ae-{arq}-dmd`; verificar degradación sin errores
+- [x] 7.1 `analysis/load.py`: tolerar runs sin `estacion`/`pollutant` y sin `feature_importance.parquet`; cargar `reconstruction.parquet` y métricas `recon_*`/`dmd_*`. Excluir de las vistas por serie los runs AE y `ref-*` (filtro por param `tipo`); registrar `tipo` como param en 5.4/5.5
+- [x] 7.2 `analysis/streamlit_app.py` y `analysis/plots.py`: sección aparte para runs AE (reconstrucción, razón de varianza, pendiente, espectro, error por nivel, compuerta, linealizabilidad); runs `ae-{arq}-dmd` por el flujo existente por serie
+- [x] 7.3 Ampliar `make_fixture.py` con runs AE y `ae-{arq}-dmd`; verificar que el dashboard degrada sin errores
 
-## 8. Notebooks de exploración y documentación del experimento
+## 8. Notebooks y documentación del experimento
 
-Los notebooks complementan al dashboard: el dashboard es la vista fija de
-resultados; los notebooks son para explorar libremente (scratch, no producción ni
-fuente de verdad). Siguen la convención de `notebooks/analisis_baseline.ipynb`:
-corren en JupyterLab del Space con `sinca-dev-role` (sin credenciales), leen los
-artefactos persistidos de `sinca-data/validated/` y `sinca-mlflow/_mlflow/`.
-Exploración en **dos niveles**: nivel 1 sin TensorFlow (parquet, numpy, plotly)
-y nivel 2 con TensorFlow para lo que pasa por el decoder (ver `design.md` D9).
-`requirements-analysis.txt` no suma TF; el nivel 2 usa `requirements-notebooks-tf.txt`.
+Los notebooks son exploración scratch, no producción. Siguen `analisis_baseline.ipynb` (JupyterLab del Space, `sinca-dev-role`, lee `validated/` y `_mlflow/`). Dos niveles (D9): nivel 1 sin TF; nivel 2 con TF. `requirements-analysis.txt` no incluye TF.
 
-- [x] 8.1 Crear `EXPERIMENT-LOG.md` con la plantilla de entrada por experimento (arquitectura, `L`, `d`, `w_aux`, métricas de compuerta, hallazgos)
-- [x] 8.2 Registrar en `README.md` de `pipeline/ae/` cómo correr un experimento local en Docker y en Training Job
-- [x] 8.3 `notebooks/exploracion_datos_ae.ipynb` (plantilla): explorar los datos de entrada del AE: cobertura y huecos por serie y canal, ventanas que sobreviven según `L`, rangos tras la transformación, efecto de la interpolación de ≤ 6 h y del recorte de aux
-- [x] 8.4 `notebooks/exploracion_reconstruccion.ipynb` (plantilla): elegir runs de AE y explorar `reconstruction.parquet` — real vs reconstruido con zoom a episodios, diagnósticos de aplanamiento (varianza, pendiente, espectro, error por nivel), comparación contra `ref-mean` y `ref-pca-d*`, efecto de la ablación de `z_aux`
-- [x] 8.5 `notebooks/exploracion_latente_dmd.ipynb` (plantilla), con dos secciones. **Nivel 1 (sin TF)**: `latent.parquet` y `dmd_operator.npz` — dimensiones activas, trayectoria de `z_mp` y `z_aux`, reajustar el DMD con otro rango, otra ventana temporal o regularización (numpy), espectro de `K` (autovalores → período y decaimiento), linealizabilidad por época del año. **Nivel 2 (con TF)**: cargar `encoder.keras`/`decoder_mp.keras` para llevar un pronóstico del DMD reajustado a µg/m³, recorrer una dimensión del latente y ver su efecto sobre las 6 series, y anular `z_aux` o un modo. Sirve de insumo exploratorio para `ae-dmd`
-- [x] 8.6 Crear `requirements-notebooks-tf.txt` con `tensorflow-cpu` fijado en la **misma versión** que `docker/train-tf.Dockerfile`, separado de `requirements-analysis.txt`; documentar en el README cómo instalarlo en el venv del Space solo cuando se use el nivel 2
-- [x] 8.7 Reutilizar `analysis/load.py` para leer el estado de MLflow desde los notebooks (sin duplicar la carga) y dejar los notebooks sin outputs ni execution counts (`jupyter nbconvert --clear-output --inplace`); documentar en `README.md` que se versionan con `git add -f` y el flujo encender/trabajar/apagar del Space
+- [x] 8.1 `EXPERIMENT-LOG.md` con plantilla por experimento
+- [x] 8.2 `pipeline/ae/README.md`: experimento local en Docker y Training Job
+- [x] 8.3 `notebooks/exploracion_datos_ae.ipynb`: cobertura y huecos, ventanas por L, rangos, efecto de interpolación y recorte aux
+- [x] 8.4 `notebooks/exploracion_reconstruccion.ipynb`: real vs reconstruido con zoom, aplanamiento, comparación con `ref-mean`/`ref-pca-d*`, ablación de `z_aux`
+- [x] 8.5 `notebooks/exploracion_latente_dmd.ipynb`: nivel 1 (latent, `dmd_operator.npz`, reajuste de DMD, espectro de K, linealizabilidad por época); nivel 2 (encoder/decoder: pronóstico a µg/m³, recorrer una dimensión del latente, anular z_aux o un modo)
+- [x] 8.6 `requirements-notebooks-tf.txt` con `tensorflow-cpu` en la misma versión que `train-tf.Dockerfile`; instalación en el README solo para nivel 2
+- [x] 8.7 Notebooks vía `analysis/load.py`, sin outputs (`nbconvert --clear-output`); README: versionado con `git add -f` y flujo encender/trabajar/apagar del Space
 
-## 9. Ejecución real — preparación (con el operador)
+## 9. Ejecución real — preparación (operador)
 
-- [x] 9.1 Verificar identidad AWS (`aws sts get-caller-identity --profile $AWS_PROFILE`), cuota `ml.g4dn.xlarge`/`ml.m5.large` for training job usage y existencia del repo ECR `sinca-train`
-- [x] 9.2 Retaggear la imagen LightGBM existente como `lgbm-v1` (sin reconstruir) y ajustar la referencia en el lanzador; confirmar con una corrida corta de LightGBM que sigue funcionando
-- [x] 9.3 Construir y subir la imagen `tf-cpu-v1` a `sinca-train`; confirmar el digest y que `lgbm-v1` sigue disponible
-- [x] 9.4 En el Space (imagen `sagemaker-distribution-cpu`), verificar con output real si TensorFlow ya viene instalado y en qué versión (`pip list | grep -i -E "tensorflow|keras"`), y revisar disco/RAM disponibles; si no está o la versión difiere de `tf-cpu-v1`, instalar `requirements-notebooks-tf.txt` en el venv del Space y confirmar `import tensorflow`. Registrar en `EXPERIMENT-LOG.md`
-- [x] 9.5 Medir con datos reales cuántas ventanas sobreviven por `L ∈ {24, 72, 168}` y generar el reporte de rangos por canal; registrar en `EXPERIMENT-LOG.md` (si con `L = 168` sobreviven muy pocas, parar y volver al Arquitecto)
+- [x] 9.1 Identidad AWS (`sts get-caller-identity --profile $AWS_PROFILE`), cuota `ml.g4dn.xlarge`/`ml.m5.large` para training, repo ECR `sinca-train`
+- [x] 9.2 Retag de la imagen LightGBM como `lgbm-v1` (sin reconstruir); ajustar lanzador; corrida corta de LightGBM
+- [x] 9.3 Build y push de `tf-cpu-v1` a `sinca-train`; confirmar digest y que `lgbm-v1` sigue disponible
+- [x] 9.4 Space: verificar TF preinstalado y su versión, disco y RAM; si difiere, instalar `requirements-notebooks-tf.txt` en un venv y confirmar `import tensorflow`. Registrar en `EXPERIMENT-LOG.md`
+- [x] 9.5 Ventanas que sobreviven por L ∈ {24, 72, 168} y reporte de rangos con datos reales; registrar. Si L = 168 deja muy pocas, parar y volver al Arquitecto
 
 ## 10. Ejecución real — humo y punto de control
 
-- [x] 10.1 Corrida de humo en CPU `ml.m5.large`: 1 ventana, pocas epochs, las 4 arquitecturas; medir tiempo por epoch y registrar métricas de reconstrucción y diagnósticos. Loguear al arrancar las versiones de `tensorflow`, `numpy` y `pandas` (confirmar que el toolkit no las cambia) y medir la memoria pico (`L = 168`, ~17 mil muestras; `ml.m5.large` tiene 8 GB). **Cerrada con hallazgo:** L=168 no corrió (OOM en `ml.m5.large`); ver notas.
-- [x] 10.2 Corridas de referencia (`ref-mean`, `ref-pca-d{d}`) sobre las mismas ventanas
-- [x] 10.3 **PUNTO DE CONTROL — decidido por el Arquitecto (la marca el Implementador al leer la respuesta)**. Decisiones, con su justificación en `design.md` D5/D6/D10 y Open Questions:
-  1. **Compuerta relativa**: con tolerancia. `beats_mean` estricto en todas las series; `beats_pca` en el agregado (media de razones < 1); tolerancia por serie `RMSE_AE ≤ 1.02 × RMSE_PCA` en la capa numérica (tarea 3.8).
-  2. **Umbrales numéricos**: `max_rmse_vs_pca = 1.02` fijo; `min_var_ratio = 0.80` y `slope_tol = 0.20` **provisionales**, se confirman en 10.5 tras la calibración 10.4 (conv1d, mlp, linear_decoder y GRU a `L = 24`, 60 epochs).
-  3. **`L = 168`**: fuera de la búsqueda (opción c); el módulo de datos lo sigue soportando.
-  4. **GRU**: solo `L = 24`, `hidden ≤ 64`, 4 trials.
-  5. **CPU/GPU**: todo en CPU `ml.m5.large`, sin GPU; desviación respecto de `project-decisions.md` §3 registrada en su §9.
-  6. **Presupuesto de búsqueda**: trials `{linear_decoder: 12, mlp: 12, conv1d: 6, gru: 4}`, 4 ventanas, 15 epochs; 4 jobs en paralelo (el modo `search` no usa MLflow).
-  7. **`d_aux`**: fijo `max(2, d/4)`; `d = 16` fijo en la búsqueda y `d ∈ {8, 32}` solo en el barrido de 11.2.
-  Antes de ejecutar 10.4 y 11.1 hay que cerrar las tareas de código 3.8, 5.8 y 5.9 (con sus tests). Los jobs de 10.4 y 11.1 no necesitan reconstruir imagen (el código viaja por `source_dir`)
-- [x] 10.4 **Calibración de la compuerta (humo largo, CPU `ml.m5.large`)**, `version = 0`, `L = 24`, `d = 16`, `hidden 64`, `dropout 0.1`, `lr 1e-3`, `batch 128`, `w_aux 0.1`, `--epochs 60 --patience 8`, con el código de 3.8 y 5.8. `conv1d`, `mlp` y `linear_decoder` con `--seeds 0,1,2`; `gru` con `--seeds 0` (~45 min). `--dmd-after-final true` solo en `conv1d`: si la compuerta aprueba, ejercita por primera vez el pase DMD de punta a punta en SageMaker (aún no probado con datos reales); si no aprueba, anotarlo. `--max-run 14400`. Una corrida a la vez (MLflow). Reportar al Arquitecto, por arquitectura y serie, en valid y test: RMSE del AE y de PCA(16) y su razón, `var_ratio`, `slope`, ablación de `z_aux`, desviación entre semillas de la razón (conv1d/mlp/linear_decoder), `best_epoch` y la mejora relativa de la loss de train entre las epochs 40 y 60, tiempo/epoch y RSS pico; y, si corrió, linealizabilidad y pronóstico del pase DMD
-- [x] 10.5 **PUNTO DE CONTROL CORTO — decidido por el Arquitecto (la marca el Implementador al leer la respuesta)**, con la tabla de 10.4 (justificación en `design.md` D5/D6 y Open Questions):
-  1. **Umbrales**: `min_var_ratio = 0.75` (era 0.80), `slope_tol = 0.30` (era 0.20), `max_rmse_vs_pca = 1.02` (sin cambio). PCA(16) queda por fuera de los valores a priori (`var_ratio` mínimo 0.800, pendiente 0.740 y 0.797); el umbral pasa a ser PCA(16) + margen ~0.05 (tarea 3.9).
-  2. **Epochs del final**: 60 (loss de train mejora 1.5–1.8 % en conv1d y 3.6 % en GRU entre las epochs 40 y 60; umbral 1 %).
-  3. **Tolerancia por serie de 2 %**: se mantiene (desviación entre semillas de conv1d 1.64 %; ningún fallo de conv1d fue por RMSE).
-  4. **11.2 puede arrancar ya**, con conv1d a `L = 24` (no al `L = 72` del ganador de 11.1) y 60 epochs; ver 11.2. **11.3 cambia**: suma conv1d a `L = 24` como quinto finalista y exige reportar la razón en test (ver 11.3). Requiere antes la tarea 3.9
+- [x] 10.1 Humo en CPU `ml.m5.large`: 1 ventana, pocas epochs, 4 arquitecturas; tiempo por epoch, métricas, diagnósticos; loguear versiones de tensorflow/numpy/pandas; medir RSS pico (L = 168). **Cerrada con hallazgo:** L = 168 no corrió (OOM); ver notas.
+- [x] 10.2 Referencias (`ref-mean`, `ref-pca-d{d}`) sobre las mismas ventanas
+- [x] 10.3 **PUNTO DE CONTROL** (decidido por el Arquitecto; lo marca el Implementador). Ver "Decisiones del Arquitecto"
+- [x] 10.4 **Calibración de la compuerta** (humo largo, CPU): `version = 0`, L = 24, d = 16, hidden 64, dropout 0.1, lr 1e-3, batch 128, w_aux 0.1, `--epochs 60 --patience 8`. conv1d, mlp y linear_decoder con seeds 0,1,2; gru con seed 0. DMD encadenado solo en conv1d. `--max-run 14400`, una corrida a la vez. Reportar por arquitectura y serie, en valid y test: RMSE AE vs PCA(16) y razón, var_ratio, pendiente, ablación de `z_aux`, dispersión entre semillas, `best_epoch`, mejora de loss entre epochs 40 y 60, tiempo por epoch, RSS; y linealizabilidad y pronóstico DMD si corrió
+- [x] 10.5 **PUNTO DE CONTROL CORTO** (decidido por el Arquitecto; lo marca el Implementador). Ver "Decisiones del Arquitecto"
 
 ## 11. Ejecución real — experimentos
 
-- [x] 11.1 Búsqueda por arquitectura según `design.md` D6, con los valores por defecto de 5.9: 4 Training Jobs `--mode search --archs <arq>` **en paralelo** (uno por arquitectura; el modo `search` no escribe en MLflow), 4 ventanas, 15 epochs de búsqueda, patience 8, `--max-run 14400`. Recuperar el `ae_search.json` de cada job desde el output en S3 y registrar en `EXPERIMENT-LOG.md` la mejor configuración, su score (razón vs PCA) y el historial de cada arquitectura. Puede lanzarse en paralelo con 10.4. Si un job termina por el tope de tiempo con menos de 3 trials válidos, o falla por memoria, volver al Arquitecto
-- [x] 11.2 Sobre **conv1d** (menor score de 11.1), **a `L = 24`** y con los demás hiperparámetros del ganador (hidden 64, dropout 0.1, lr 1e-3, batch 128): una corrida a la vez, semilla 0, `--epochs 60`, `--dmd-after-final false`, `version = 2`. Corridas: control sin meteo (`aux_input` apagado), barrido `w_aux ∈ {0, 0.1, 0.5, 1}` y barrido `d ∈ {8, 32}` (con `d_aux = max(2, d/4)`), más las referencias `ref-mean` y `ref-pca-d{8,32}` a `L = 24` (`version = 2`). `d_aux` no se barre. Hacer antes la tarea 3.9 para que el `gate_pass` de estos runs ya sea el definitivo. Desviación documentada respecto de "la configuración ganadora" (que usa `L = 72`): ver `design.md` D6
-- [x] 11.3 Requiere 10.5 y 3.9. Entrenamiento final de **5 configuraciones**: la mejor de cada arquitectura según 11.1 (conv1d, linear_decoder y mlp a `L = 72`; gru a `L = 24`; pasar la configuración ganadora como `--hp`, el JSON queda como registro) **más conv1d a `L = 24`** con los mismos hiperparámetros del ganador (control de `L`). `--seeds 0,1,2`, `--epochs 60`, `--patience 8`, umbrales por defecto de 3.9, `--dmd-after-final true`, `version = 1`, `--max-run 14400`, una corrida a la vez (tiempo esperado, extrapolado del humo: conv1d `L = 72` ~48 min por semilla; gru ~43 min; conv1d `L = 24` ~16 min; mlp y linear_decoder pocos minutos). Correr `reference` (`version = 1`) para cada par `(L, d)` de los finalistas: `(24, 16)` y `(72, 16)`. Evaluación única en el test held-out y compuerta aplicada. **Antes de pasar a 11.4**, reportar por finalista la razón media AE/PCA en **test** y en valid (ver `design.md` D5, "Señal de alerta"): una compuerta aprobada en valid con razón de test ≥ 1 se anota como "aprobada solo en valid" y se lleva al Arquitecto. Si ningún finalista pasa la compuerta, no seguir a 11.4 y volver al Arquitecto
-- [ ] 11.4 Pase de DMD global (rango completo y truncado) sobre los AE aprobados, encadenado al entrenamiento final de 11.3 (tarea 5.7); si hace falta repetirlo sin reentrenar, usar el modo `dmd` con `--ae-run-id`. Registrar linealizabilidad y los runs `ae-{arq}-dmd` por serie
-- [ ] 11.5 Registrar un resumen por experimento en `EXPERIMENT-LOG.md` (reconstrucción, aplanamiento, aporte de `z_aux`, linealizabilidad, pronóstico informativo vs persistencia/LightGBM). Incluir: comparación de la compuerta en `valid` frente a `test` (el `valid` del final está dentro del train; ver D5), comparación por serie de `var_ratio` y pendiente de cada finalista contra `ref_pca_*` en valid y test (anotar series donde el AE aplane más que PCA(16) en más de 0.05), dispersión entre semillas y medición del sesgo de `log1p` por tramo de concentración (para decidir la corrección en la pregunta abierta de `design.md`)
+- [x] 11.1 Búsqueda por arquitectura (D6, valores de 5.9): 4 Training Jobs `--mode search --archs <arq>` en paralelo; 4 ventanas, 15 epochs, patience 8, `--max-run 14400`. Recuperar `ae_search.json` de S3 y registrar en `EXPERIMENT-LOG.md` la mejor config, su score y el historial. Si un job termina por el tope con < 3 trials válidos o falla por memoria, volver al Arquitecto
+- [x] 11.2 Sobre conv1d (menor score de 11.1), L = 24, hidden 64, dropout 0.1, lr 1e-3, batch 128; seed 0; 60 epochs; `--dmd-after-final false`; `version = 2`. Corridas: control sin meteo (`aux_input` off), barrido `w_aux ∈ {0, 0.1, 0.5, 1}`, barrido `d ∈ {8, 32}` (d_aux = max(2, d/4)), referencias `ref-mean` y `ref-pca-d{8,32}` a L = 24. `d_aux` no se barre. Desviación respecto de la "ganadora" (L = 72): ver D6
+- [x] 11.3 Requiere 10.5 y 3.9. Entrenamiento final de 5 configuraciones: mejor de cada arquitectura de 11.1 (conv1d, linear_decoder y mlp a L = 72; gru a L = 24; ganador como `--hp`) más conv1d a L = 24 (control de L). `--seeds 0,1,2`, `--epochs 60`, `--patience 8`, umbrales de 3.9, `--dmd-after-final true`, `version = 1`, `--max-run 14400`, una corrida a la vez. Referencias `reference` (`version = 1`) para (L, d) ∈ {(24, 16), (72, 16)}. Evaluación única en test. **Antes de 11.4:** reportar por finalista la razón media AE/PCA en test y en valid (D5, "Señal de alerta"); si aprueba en valid con razón de test ≥ 1, anotar "aprobada solo en valid" y llevar al Arquitecto. Si ningún finalista pasa, volver al Arquitecto
+- [x] 11.4 Pase DMD global (rango completo y truncado) sobre los AE aprobados, encadenado a 11.3 (5.7); si hace falta repetir sin reentrenar, modo `dmd` con `--ae-run-id`. Registrar linealizabilidad y runs `ae-{arq}-dmd` por serie
+- [x] 11.5 Resumen por experimento en `EXPERIMENT-LOG.md`: reconstrucción, aplanamiento, aporte de `z_aux`, linealizabilidad, pronóstico vs persistencia y LightGBM. Incluir: compuerta en valid vs test; var_ratio y pendiente por serie vs `ref_pca_*` en valid y test (anotar series donde el AE aplane más que PCA(16) en más de 0.05); dispersión entre semillas; sesgo de `log1p` por tramo (para la pregunta abierta de D)
 
 ## 12. Verificación funcional
 
-- [ ] 12.1 Abrir el dashboard sobre el estado real de MLflow y confirmar con output real que: los runs de AE aparecen con compuerta, diagnósticos de aplanamiento y métricas `dmd_`; los runs `ae-{arq}-dmd` se comparan por serie contra persistencia y LightGBM; y los runs sin pronóstico no rompen el dashboard (adjuntar la salida/captura)
-- [ ] 12.2 Abrir los notebooks de la tarea 8 en JupyterLab del Space con datos reales y correr `Run All`, confirmando con output real que cargan los artefactos (`reconstruction.parquet`, `latent.parquet`, `dmd_operator.npz`) y generan sus figuras, y que las celdas de nivel 2 cargan `encoder.keras`/`decoder_mp.keras` de un run real, decodifican y recorren una dimensión del latente; limpiar outputs y **apagar el Space** al terminar (Spaces → `sinca-dev` → Stop)
+- [ ] 12.1 Dashboard sobre el estado real de MLflow: runs AE con compuerta, diagnósticos y métricas `dmd_`; runs `ae-{arq}-dmd` comparables por serie contra persistencia y LightGBM; runs sin pronóstico no rompen el dashboard. Adjuntar salida o captura
+- [ ] 12.2 Notebooks de la tarea 8 en JupyterLab del Space con datos reales, `Run All`: cargan artefactos (`reconstruction.parquet`, `latent.parquet`, `dmd_operator.npz`) y generan figuras; celdas de nivel 2 cargan `encoder.keras`/`decoder_mp.keras` de un run real, decodifican y recorren una dimensión del latente. Limpiar outputs y **apagar el Space** (Spaces → `sinca-dev` → Stop)
 
 ## Notas de implementación
 
-<!-- El implementador registra acá, por tarea: qué encontró y qué hizo, cuando algo no calce con el blueprint o con lo planificado y no sea un bloqueo. -->
+Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las decisiones del Arquitecto van en su sección.
 
-### Implementación (grupos 1–8 de código; ejecución real pendiente)
+### Grupos 1–8 (código)
 
-- **Alcance:** se implementó solo el código (grupos 1–8 de escritura). Quedan **sin marcar** las tareas de documentación `6.3`, `8.1`, `8.2` y la parte README de `8.7` (no son código), y todo el grupo 9–12 (AWS, Training Jobs, humo, punto de control, verificación en el Space). El punto de control `10.3` sigue siendo el corte para el Arquitecto.
-- **Interpretación de `d`** (tarea 2.1, D2): `d` es la dimensión **total** del latente; `z_mp` tiene `d − d_aux` dimensiones y `z_aux` tiene `d_aux` (default `max(2, d/4)`). Así la comparación contra PCA(d) es justa. Confirmar con el Arquitecto.
-- **Experimento MLflow** (5.4, Open Question): se usa `sinca-baseline` por defecto, configurable con `--experiment`. Pendiente de confirmación, como indica `design.md`.
-- **Compuerta** (3.5): sin umbrales (`--gate-thresholds` vacío) la compuerta solo **reporta**: `gate_pass` no se loguea y sí `gate_beats_pca`. El escenario del spec "lo marca como no aprobado" solo puede aplicarse cuando se fijen umbrales en el punto de control. Pide decisión.
-- **Nombres de archivo:** los encabezados de sección mencionan `ae/reference.py` y `ae/train.py`. Implementé las referencias y la compuerta en `ae/metrics.py`, y el entry point en `ae/run.py` (evita confundir con el paquete `train/`). Arquitecto: decidir si se renombra o se actualizan los encabezados.
-- **Partición held-out** (1.5): se usa `TEST_START`/`TEST_END` y `make_rolling_windows`/`_select_windows` de `features.build`, pero no `final_holdout_split` (opera sobre el DataFrame de features; el corte es el mismo).
-- **Early stopping del modelo final** (5.3): igual que el baseline, se usa la última ventana `valid` del rolling, que queda **dentro** del train del modelo final. Es un sesgo menor que conviene anotar al comparar.
-- **DMD truncado** (5.5): los runs por serie `ae-{arq}-dmd` usan solo el rango completo. La variante truncada se evalúa en linealizabilidad (`dmd_trunc_latent_rmse_*`) y se persiste en `dmd_operator_trunc.npz`. Los `rolling_scores.parquet` de esos runs van vacíos (el pase DMD no tiene búsqueda).
-- **Modo `dmd` y artefactos** (5.5, riesgo de diseño): el modo `dmd` lee `encoder.keras`/`decoder_mp.keras` desde un **directorio local** (`--ae-dir`). Los artefactos sí quedan en MLflow, pero un Training Job nuevo no los tiene en disco. Antes de 11.4 hay que decidir cómo se descargan (`load.artifact_path` o `mlflow.artifacts`).
-- **Memoria** (1.5/2.x): una muestra con `L = 168` y 34 canales auxiliares pesa ~22 KB en float32; con ~17 mil muestras son ~390 MB, más copias al indexar. Verificar en el humo (`ml.m5.large`, 8 GB).
-- **Dependencias en `source_dir`** (6.1): existe `pipeline/requirements.txt`. El toolkit de `sagemaker-training` lo instala dentro del contenedor al arrancar, y la imagen TF no lo necesita. Esto contradice la intención de 6.1 ("sin requirements.txt ajeno en source_dir") y ya afecta a la imagen LightGBM. No lo modifiqué: decidir si se mueve fuera de `pipeline/`.
-- **Tests:** el repo no tenía suite. Creé `tests/ae/` en la raíz (fuera de `source_dir`). Instalé `pytest` y `tensorflow-cpu==2.20.0` en el `.venv` local. **52 tests pasan** en Windows (Python 3.13, TF 2.20.0): datos (1.8), modelos (2.5), métricas/DMD (3.6, 4.5) y punta a punta sin AWS (5.6, incluye `search`, `final`, `reference` y `dmd`).
-- **Docker** (6.1): `docker/train-tf.Dockerfile` escrito, pero **no construido** (Docker no se ejecutó en esta sesión). Requiere verificación al hacer el build de `tf-cpu-v1` (9.3).
-- **Lanzador** (6.2): `train/launch.py` acepta `--entry-point` (`train/train.py` o `ae/run.py`) y `--hp CLAVE=VALOR`, y **rechaza** imágenes sin tag o con `:latest`. El comportamiento de LightGBM no cambia.
-- **Dashboard** (7.1–7.3): `load.is_series_run` excluye persistencia, referencias y runs conjuntos de AE de las vistas por serie. Se agregó la vista "Autoencoders (reconstrucción)" en `streamlit_app.py` y las figuras en `analysis/plots_ae.py` (módulo nuevo, `plots.py` intacto). El fixture se regeneró con 27 runs. Verificado con `AppTest` en ambas vistas, sin excepciones.
-- **Notebooks** (8.3–8.5): plantillas JSON sin outputs ni contadores, leen vía `analysis/load.py`. Las celdas de nivel 1 de 8.4 y 8.5 se ejecutaron contra el fixture. 8.3 necesita datos validados reales (S3), no ejecutado.
+- **Alcance:** código completo de 1–8, incluidas 3.7, 5.7, 6.3, 6.4, 8.1, 8.2 y la parte documental de 8.7.
+- **`d` total** (2.1, D2): `z_mp = d − d_aux`, `z_aux = d_aux = max(2, d/4)`. Aprobado.
+- **Compuerta** (3.5/3.7): sin umbrales solo reporta; `gate_pass` se registra siempre con la capa relativa; `numeric` es `None` sin umbrales. Commit `2fc3dfb`.
+- **Partición** (1.5): usa `TEST_START`/`TEST_END` y `make_rolling_windows`/`_select_windows` de `features.build`, no `final_holdout_split` (mismo corte).
+- **Early stopping** (5.3): usa la última ventana valid, que queda dentro del train final (sesgo menor, igual que el baseline).
+- **DMD truncado** (5.5): runs por serie solo con rango completo; truncado en `dmd_trunc_latent_rmse_*` y `dmd_operator_trunc.npz`. `rolling_scores.parquet` vacío en runs DMD.
+- **Modo `dmd`** (5.5/5.7): lee `encoder.keras`/`decoder_mp.keras` de `--ae-dir` o, con `--ae-run-id`, del estado de MLflow (`ensure_state(data_dir=--mlflow-dir)` + `artifact_path`). `ensure_state` no descarga por sí solo; con `--no-upload` el directorio debe existir. Rechaza el pase si `gate_pass` es falso.
+- **Dependencias** (6.4): `pipeline/requirements.txt` movido a `requirements-scraper.txt` con `git mv`; `git grep` confirma que nada lo referencia.
+- **Tests:** `tests/ae/` fuera de `source_dir`; 68 pasan.
+- **Docker/lanzador** (6.1–6.3): `train-tf.Dockerfile` escrito y construido en 9.3; `launch.py` acepta `--entry-point` y `--hp`, y rechaza imágenes sin tag o con `:latest`; `docker/README.md` documenta build, push y retag.
+- **Dashboard** (7.1–7.3): `load.is_series_run` excluye persistencia, referencias y runs AE; vista "Autoencoders" en `streamlit_app.py` y `analysis/plots_ae.py`. Fixture con 27 runs; verificado con `AppTest`.
+- **Notebooks** (8.3–8.5): plantillas sin outputs; celdas de nivel 1 de 8.4 y 8.5 ejecutadas sobre fixture; 8.3 pendiente de datos reales.
+- **8.2:** comandos del README derivados de los flags reales; no ejecutados contra AWS.
+- **Experimento MLflow** (5.4): `sinca-baseline`, configurable con `--experiment`.
 
-### Decisiones del Arquitecto (respuesta a las notas anteriores)
+### Grupo 9
 
-- **`d` total** (2.1): aprobado; `z_mp = d − d_aux`, `z_aux = d_aux` (`max(2, d/4)`). Reflejado en `design.md` D2.
-- **Experimento MLflow** (5.4): cerrado en `sinca-baseline`. Sin cambios de código.
-- **Compuerta** (3.5): `gate_pass` se registra siempre con la capa relativa (supera al promedio y a PCA(d)); la capa numérica se suma tras el punto de control 10.3. **Tarea nueva 3.7.**
-- **Modo `dmd` / artefactos** (5.5): camino principal encadenado en el mismo job tras el entrenamiento final si pasa la compuerta; respaldo con `--ae-run-id` descargando de `_mlflow/`. **Tarea nueva 5.7.**
-- **`pipeline/requirements.txt`** (6.1): se mueve fuera de `source_dir` a `requirements-scraper.txt` (verificado que nada lo referencia). **Tarea nueva 6.4.** En el humo (10.1) se loguean versiones de `tensorflow`/`numpy`/`pandas` y la memoria pico.
-- **Nombres de archivo**: aprobados `ae/metrics.py` (referencias y compuerta) y `ae/run.py` (entry point); encabezados de los grupos 3 y 5 actualizados.
-- **Sin acción**: early stopping con la última ventana `valid` dentro del train final (sesgo menor, igual que el baseline; anotar en `EXPERIMENT-LOG.md`); DMD truncado solo en linealizabilidad y `rolling_scores` vacíos en los runs DMD (reflejado en D7); no usar `final_holdout_split` (mismo corte); Docker sin construir (se cubre en 9.3).
+- **9.1:** cuenta `549024266383`; cuotas `ml.m5.large` = 20, `ml.g4dn.xlarge` = 1; repo `sinca-train` (MUTABLE).
+- **9.2:** retag `lgbm-v1` con `aws ecr put-image`. Digest del índice `sha256:492de5f7…` (los hijos son idénticos). Corrida corta de LightGBM `Completed` en 275 s. **Efecto colateral:** runs de prueba `version = 99` en `sinca-baseline`, pendientes de limpieza.
+- **9.3:** `tf-cpu-v1` con digest `sha256:351f5ed8…`. `sagemaker-training` con `--no-deps` porque `protobuf<=3.20.3` choca con `tensorflow-cpu` 2.20 (`protobuf>=5.28`); aprobado por el operador. `import tensorflow` OK (2.20.0).
+- **9.4:** la imagen del Space trae TF 2.18.0 y keras 3.10.0. Instalar sobre el Python base rompe dependencias y no persiste tras reiniciar. Solución: venv aislado `/home/sagemaker-user/venv-tf` con `requirements-notebooks-tf.txt` (tf 2.20.0, keras 3.15.1), que sí persiste. Falta registrar el kernel de JupyterLab (12.2).
+- **9.5:** ventanas train/test: L = 24 43.051/1.999; L = 72 39.414/1.761; L = 168 33.669/1.377.
+- **Incidente de cuenta:** la primera corrida usó `AWS_PROFILE` de otra cuenta (`457469184690`) y dio `AccessDenied`. No hubo lecturas ni escrituras; se repitió con `desareca_dev` verificado. El `AWS_PROFILE` de la shell apunta a una cuenta ajena: usar siempre `--profile desareca_dev`.
+- El tag `:latest` de `sinca-train` se conserva en LightGBM; la regla de no usarlo en lanzamientos sigue vigente.
 
-### Decisiones del Arquitecto aplicadas (3.7 y 5.7)
+### Grupo 10
 
-- **3.7 compuerta en dos capas**: `gate_pass` se registra siempre. Capa relativa = el AE supera en RMSE de MP, en **todas** las series, al predictor del promedio y a PCA(d) (sobre valid). Campos: `relative`, `beats_pca`, `beats_mean` (+ por serie). La capa numérica (`--gate-thresholds`) se suma solo si hay umbrales; sin umbrales `numeric` es `None` y no se loguea `gate_numeric`. Commit `2fc3dfb`.
-- **5.7 pase DMD encadenado** (D7.6, camino principal): tras el entrenamiento final, la semilla 0 encadena el pase DMD en el mismo job si `gate_pass` es verdadero. Flag `--dmd-after-final` (default `true`); si la compuerta no aprueba, se loguea y no se corre.
-- **5.7 modo `dmd` (respaldo)**: con `--ae-run-id` y sin `--ae-dir`, la configuración sale de los params del run, la compuerta de su métrica `gate_pass`, y `encoder.keras`/`decoder_mp.keras` se leen del estado de MLflow con `analysis.load` (`ensure_state(data_dir=--mlflow-dir)` + `artifact_path`). `--ae-dir` se mantiene para pruebas. Rechaza el pase si la compuerta no aprobó.
-- **Dependencia operativa a vigilar**: `ensure_state(data_dir=...)` no descarga; el estado lo baja `run()` desde `sinca-mlflow/_mlflow/` antes de usar `--mlflow-dir`. Con `--no-upload` el directorio debe existir con el estado previo. Un job `dmd` en SageMaker depende de que el descargue ocurra (solo si no hay `--no-upload`).
-- **Tests**: el AE de prueba (2 épocas) no supera al promedio ni a PCA, así que los tests que necesitan el pase fuerzan la aprobación con `monkeypatch` sobre `metrics.gate_decision`. El caso de rechazo usa la compuerta real. **57 tests pasan**.
-- **Sin cambios en `design.md`.**
+- **Bugs de CLI:** SageMaker pasa `-d 16`; `run.py` acepta forma corta y larga. Los nombres de job no admiten `_`: `linear_decoder` se lanza como `linear-decoder`.
+- **10.1 humo** (3 epochs, L = 24 salvo indicación):
 
-### Tareas 6.4 y documentación (cierre de código)
+  | Arq | s/epoch | Total | RSS pico | RMSE test medio |
+  |---|---|---|---|---|
+  | linear_decoder L=24 | 2.2 | 134 s | 1.8 GB | 19.4 |
+  | mlp L=24 | 3.0 | 119 s | 1.8 GB | 19.7 |
+  | conv1d L=24 | 16.0 | 162 s | 1.8 GB | 16.2 |
+  | gru L=24 | 42.7 | 245 s | 1.8 GB | 21.3 |
+  | gru L=72 | 121.3 | 506 s | 3.5 GB | 35.8 |
+  | gru L=168 | — | — | OOM (8 GB) | — |
 
-- **6.4**: `pipeline/requirements.txt` movido con `git mv` a `requirements-scraper.txt` (raíz). Verificado con `git grep` que nada lo referencia: ni workflows de `.github/`, ni Dockerfiles (`scraper.Dockerfile` instala sus deps inline y solo hace `COPY pipeline/`), ni README. Quedan menciones solo en documentación histórica (`archive/`, `modules/compute/blueprint.md`, `design.md`) que no se modifican. `requirements-dev.txt` tiene un comentario genérico sobre el comportamiento del toolkit, que sigue siendo válido.
+  Runtime: TF 2.20.0, Keras 3.15.1, NumPy 2.4.6, pandas 2.3.3. Compuerta 0 en todas (3 epochs, sin conclusiones de calidad).
+- **10.2:** RMSE test medio: promedio 44.8 (L = 24) / 45.6 (L = 72); PCA(16) 17.1 / 22.8.
+- **10.4:** conv1d (3 semillas, DMD en seed 0), mlp (3), linear_decoder (3), gru (1); todos `Completed`. Razón media AE/PCA(16) en valid: conv1d 0.895 (desv. entre semillas 1.64 %), mlp 1.081, linear_decoder 1.097, gru 1.024. Fallos de conv1d por pendiente o var_ratio, no por RMSE.
 
-- **6.3**: `docker/README.md` documenta build, push y retag con tags explícitos (`lgbm-v1`, `tf-cpu-v1`), la regla de no usar `:latest` y que `sinca-train` es `MUTABLE` (por eso no se reusa un tag publicado). El retag de la imagen LightGBM (9.2) queda descrito como paso del operador, sin ejecutarlo. En `README.md`, el bloque de build de entrenamiento dejó de publicar `:latest` y enlaza a esa guía; los comandos reales de AWS siguen pendientes de ejecución (grupo 9).
+### Grupo 11
 
-- **8.1**: `EXPERIMENT-LOG.md` ya tenía la plantilla general y la entrada de baseline. Se agregó la plantilla específica de autoencoders (arquitectura, `L`, `d`, `w_aux`, compuerta relativa y numérica, reconstrucción, latente, `z_aux`, DMD, comparación contra persistencia y LightGBM). No se anotan resultados: se llenan con valores reales de MLflow tras el humo y los experimentos.
+- **11.1** (score = razón vs PCA(16), valid): conv1d 1.02 (6 trials; L = 72, hidden 64, dropout 0.1, batch 128); linear_decoder 1.04 (12; L = 72, hidden 32, dropout 0, batch 64); mlp 1.05 (12; L = 72, hidden 32, dropout 0, batch 64); gru 1.16 (4; L = 24, hidden 64, dropout 0.1, batch 128). Ningún trial gana a PCA(16). Arquitectura para 11.2: conv1d. Todos dentro del tope de tiempo.
+- **Discrepancia de `lr` en conv1d:** la nota de 11.1 decía `1e-3`, pero `ae_search.json` dice `0.003`. 11.2 usó `0.001` y 11.3 usó `0.003`. Sin resolver (ver 11.5).
+- **11.2** (9 jobs en serie, `scripts/ae/run_11_2_serie.ps1`, todos `Completed`): `gate_pass` base 1, noaux 0, waux0 1, waux05 0, waux1 0, d8 0, d32 0. `ref-mean` queda registrado dos veces (una por job de referencia).
+- **Preparación de 11.2:** `AWS_PROFILE` de la shell apuntaba a una cuenta ajena; todos los comandos usaron `--profile desareca_dev`. El README raíz (líneas 66–78) muestra `--profile $env:AWS_PROFILE`: conviene corregirlo.
+- **11.3** (`scripts/ae/run_11_3_finales.ps1`, `lr 0.003` por decisión del operador): 7 jobs `Completed`, ~4 h 40 min. Un primer intento falló por el warning de deprecación del SDK leído como error en PowerShell; se corrigió validando por exit code.
 
-- **8.2**: `pipeline/ae/README.md` documenta los módulos, los tests sin AWS, el experimento local (con `--no-upload`), la ejecución en Docker con `--entrypoint python` sobre la imagen `tf-cpu-v1`, y el Training Job por `launch.py --entry-point ae/run.py --hp ...` con el orden search → final → dmd → reference. Los comandos se derivan de los flags reales de `run.py` y `launch.py`; no se ejecutaron contra AWS.
+  | Finalista | L | Compuerta s0/s1/s2 | Razón valid | Razón test |
+  |---|---|---|---|---|
+  | conv1d | 24 | 1/1/1 | 0.904 | 0.916 |
+  | gru | 24 | 1/1/0 | 0.953 | 0.976 |
+  | conv1d | 72 | 0/0/0 | 0.854 | 0.945 |
+  | mlp | 72 | 0/0/0 | 1.015 | 1.025 |
+  | linear_decoder | 72 | 0/0/0 | 1.062 | 1.056 |
 
-- **8.7 (parte documental)**: el README raíz tiene una sección de notebooks de exploración del autoencoder: lectura vía `analysis/load.py`, versionado con `git add -f` (porque `*.ipynb` está ignorado), notebooks sin outputs (`nbconvert --clear-output`), instalación de TF solo para nivel 2, y el flujo encender/trabajar/apagar del Space. La parte de código de 8.7 (reutilizar `load.py`, notebooks sin outputs) se había cumplido antes.
+  Ningún finalista queda como "aprobada solo en valid" (ninguno con razón de test ≥ 1). conv1d L = 72 tiene brecha valid–test de 0.09 y `best_epoch` en 52–60. gru L = 24 cambia de veredicto entre semillas.
+- **11.4:** cerrada con el pase encadenado de la semilla 0 (decisión del operador, D6). conv1d L = 24 (`8f348a…`) y gru L = 24 (`fcc939…`) tienen `dmd_operator.npz` y `dmd_operator_trunc.npz`. Linealizabilidad (1 paso / 24 pasos): conv1d 0.147 / 0.779 (truncado 0.480 / 0.813); gru 0.057 / 0.372 (truncado 0.192 / 0.386). Las semillas 1 y 2 no tienen DMD: repetirlo exige decidir el nombre de run (no lleva semilla) y probar el modo `dmd` con descarga desde `_mlflow/`, que aún no corrió en SageMaker.
+- **11.5:** resumen en `EXPERIMENT-LOG.md`. La compuerta recalculada coincide con MLflow en 15/15 corridas. En test: conv1d L = 24 aprueba 3/3; gru L = 24 aprueba 1/3; conv1d L = 72 aprueba 1/3. Sin FLAG de aplanamiento en test para conv1d L = 24. Sesgo por tramo de `log1p`: mismo patrón que PCA(16), no separable del aplanamiento general. Pronóstico DMD vs LightGBM v1 sobre filas comunes: RMSE media 20.97 (conv1d) y 20.69 (gru) frente a 21.25; RMSE ponderado peor (33.28 y 31.09 frente a 28.17). Persistencia no es comparable fila a fila: no guardó `predictions.parquet`.
+- **Pendientes para 12.1/12.2:** runs `lightgbm` `version = 99` a limpiar en `sinca-baseline`; discrepancia de `lr` (11.2 frente a 11.3).
 
-### Estado tras el cierre de código (supersede el bullet "Alcance" de arriba)
+### Pendiente para el Arquitecto: SDK SageMaker v2 → v3
 
-- Código y documentación de los grupos 1–8 completos, incluidas 3.7, 5.7, 6.3, 6.4, 8.1, 8.2 y la parte documental de 8.7.
-- **Pendiente solo el grupo 9–12** (AWS, Training Jobs, humo, punto de control 10.3, verificación en el Space). Son ejecución real con el operador.
-- Pendientes de operador anotados en las notas: retag `lgbm-v1` (9.2, procedimiento en `docker/README.md`), build y push de `tf-cpu-v1` (9.3), y verificación en el humo (10.1) de que el Training Job ya no instala dependencias del scraper y de las versiones de `tensorflow`/`numpy`/`pandas`.
+- AWS avisó que la v2 está en mantenimiento desde el 6-jul-2026 y termina soporte el 6-jul-2027. La v3 rompe la API de `launch.py`; requiere change propio. Se mantiene el pin v2. Decidir si y cuándo.
 
-### Ejecución real — grupo 9 (en curso)
+## Decisiones del Arquitecto
 
-- **9.1 (completa):** identidad `549024266383` (coincide con el bucket de tfstate de la cuenta personal). Cuotas: `ml.m5.large` = 20, `ml.g4dn.xlarge` = 1. Repo `sinca-train` existe (MUTABLE, scan on push).
-- **9.2 (completa):** corrida corta de LightGBM con `lgbm-v1` (`sinca-baseline-train-2026-11-02-20-25-47-337`): `Completed` en 275 s, 6 series entrenadas, persistencia calculada, artefactos y estado MLflow subidos (38 → 75 objetos). **Efecto colateral a limpiar:** los runs de prueba quedaron en `sinca-baseline` con versión `99`; borrarlos antes de 12.1 para que no aparezcan en el dashboard. Entorno: `.venv` del proyecto (SageMaker SDK 2.257.7), Python local.
-- **9.2 (detalle del retag):** confirmado con Docker local que `latest` = digest `sha256:31bbdf92…` (la imagen LightGBM). Se creó el tag `lgbm-v1` con `aws ecr put-image` sobre el manifest de ese digest. ECR re-serializa el índice multi-arquitectura al guardarlo, así que el digest del índice de `lgbm-v1` (`sha256:492de5f7…`) difiere del de `latest`. Los manifests hijos son idénticos en ambos (`amd64` `sha256:1c2c504…`, attestation `sha256:12c63cd…`). El tag `lgbm-v1` se sobrescribió 3 veces durante el intento; el estado final es el digest `492de5f7…`. No hizo falta cambiar código: `train/launch.py` ya recibe `--image-uri` con tag explícito y sus ejemplos usan `lgbm-v1`. Falta: corrida corta de LightGBM con `:lgbm-v1` para cerrar 9.2.
-- **9.3 (completa):** push de `tf-cpu-v1` OK, digest `sha256:351f5ed8…` (igual al manifest list del build local). `lgbm-v1` (`sha256:492de5f7…`) y `latest` (`sha256:31bbdf92…`) sin cambios. Detalle del diseño: `docker/train-tf.Dockerfile` no resolvía: `sagemaker-training` fija `protobuf<=3.20.3` y `tensorflow-cpu 2.20` exige `protobuf>=5.28`. Solución aplicada: `sagemaker-training` con `--no-deps` y sus deps de runtime sin protobuf (desviación de 6.1, aprobada por el operador). Build local OK; imports OK (tf 2.20.0, protobuf 7.36.2). `pip check` reporta solo ese conflicto, esperado. Falta: validar el entry point `train` en el humo 10.1 sobre SageMaker. Push y digest pendientes.
-- **9.5 (completa):** ventanas en train/test: L=24 43.051/1.999; L=72 39.414/1.761; L=168 33.669/1.377 (más que las ~17 mil estimadas en `design.md`; la memoria de 10.1 hay que medirla). Detalle y rangos en `EXPERIMENT-LOG.md`. **Incidente:** la primera corrida desde la shell del implementador usó un `AWS_PROFILE` de otra cuenta (`457469184690`); dio `AccessDenied` al listar S3 y se hizo una llamada `sts get-caller-identity` de diagnóstico. No se leyeron datos ni se escribió nada. La corrida válida se hizo con el profile personal, verificando antes la cuenta `549024266383`.
-- **Tag `:latest` de `sinca-train`:** se conserva apuntando a LightGBM sin cambios; la regla de no usar `:latest` en los lanzamientos sigue vigente.
-
-### Ejecución real — grupo 10 (humo, 10.1 cerrada)
-
-- **Bug de CLI (corregido):** SageMaker pasa los hiperparámetros de una letra como `-d 16`; `run.py` solo aceptaba `--d`. Se aceptan ambas formas. Los primeros intentos fallaron por esto (`mlp`, `conv1d`, `gru` L=24, `ae_run` con nombre inválido).
-- **Nombre de job:** SageMaker no admite `_` en el nombre; `linear_decoder` se lanza como `linear-decoder` (el `arch` sigue `linear_decoder`).
-- **Humo (3 epochs, semilla 0, L=24 salvo indicación; `version=0`, runs de limpieza pendiente):**
-
-| Arch | s/epoch | Tiempo total | RSS pico | RMSE test medio (µg/m³) |
-|---|---|---|---|---|
-| linear_decoder L=24 | 2.2 | 134 s | 1.8 GB | 19.4 |
-| mlp L=24 | 3.0 | 119 s | 1.8 GB | 19.7 |
-| conv1d L=24 | 16.0 | 162 s | 1.8 GB | 16.2 |
-| gru L=24 | 42.7 | 245 s | 1.8 GB | 21.3 |
-| gru L=72 | 121.3 | 506 s | 3.5 GB | 35.8 |
-| gru L=168 | — | — | — | OOM en `ml.m5.large` (8 GB) |
-
-- **Runtime (logueado en params):** TensorFlow 2.20.0, Keras 3.15.1, NumPy 2.4.6, pandas 2.3.3, iguales en todas las corridas. El toolkit no cambia las versiones.
-- **Compuerta:** `gate_pass = 0` en todas (3 epochs; ninguna supera a PCA(16) en `gate_beats_pca`). Sin conclusiones de calidad con este humo.
-- **Hallazgo para 10.3:** el GRU con L=168 no cabe en `ml.m5.large`. Con la tendencia observada (3.5 GB con L=72), el pico supera los 8 GB. Decidir: batch más chico, instancia con más RAM, o L=168 fuera del humo. Esta decisión va al punto de control.
-- **Limpieza pendiente antes de 12.1:** runs de humo en `sinca-baseline` con `version=0` y los de 9.2 con `version=99`.
-
-- **10.2 (completa):** `ref-mean` y `ref-pca-d16` para L=24 y L=72 (runs `sinca-smoke-ref-l{24,72}-20261103d`). RMSE medio test: promedio 44.8 (L=24) / 45.6 (L=72); PCA(16) 17.1 / 22.8. Frente al humo L=24: conv1d 16.2 (le gana a PCA), linear_decoder 19.4, mlp 19.7, gru 21.3. GRU L=72 35.8 frente a PCA 22.8. Ningún AE pasa la compuerta (`gate_pass = 0`; conv1d supera a PCA en la media, pero la compuerta exige superarlo en todas las series; falta revisar por serie).
-- Siguiente: 10.3, punto de control para el Arquitecto (umbrales de compuerta, presupuesto de trials, `d_aux`, CPU/GPU y decisión sobre L=168).
-
-### Código de 3.8, 5.8 y 5.9 (decisiones del 10.3 aplicadas)
-
-- **3.8** (`pipeline/ae/metrics.py`): `gate_decision` con capa relativa (`beats_mean` estricto por serie; `beats_pca` = media de razones RMSE_AE/RMSE_PCA < 1) y capa numérica por serie con `DEFAULT_GATE_THRESHOLDS = {min_var_ratio: 0.80, slope_tol: 0.20, max_rmse_vs_pca: 1.02}`. `gate_pass = relative ∧ numeric`. `--gate-thresholds` acepta `k=v,k=v` (o JSON) y sobreescribe solo las claves dadas. El param `gate_thresholds` registra los umbrales efectivos. `score_window` calcula la razón por ventana para el score de búsqueda.
-- **5.8** (`pipeline/ae/run.py`): `loss` y `val_loss` por epoch en MLflow con `step`, y `best_epoch` (argmin de val_loss, 1-based).
-- **5.9**: `SEARCH_SPACE` por arquitectura según D6 (GRU solo L=24, hidden {32,64}; conv1d batch 128); `DEFAULT_SEARCH_TRIALS = {linear_decoder: 12, mlp: 12, conv1d: 6, gru: 4}`; score = media de razones contra PCA(d, L) en valid; `--search-time-budget` (default 10800 s) corta sin lanzar trials nuevos; `ae_search.json` se escribe al inicio de cada arquitectura y tras cada trial (escritura atómica).
-- **Tests:** `pytest tests/ae` → 66 passed.
-- **Pendiente de la ejecución:** los runs de compuerta de los humos previos (sin umbrales) no son comparables con los nuevos; no se reescriben.
-
-### Cierre de 10.4 y 11.1
-
-- **10.4** (calibración 60 epochs, L=24, d=16, hidden 64, dropout 0.1, lr 1e-3, batch 128, w_aux 0.1, patience 8): conv1d (3 semillas, DMD en semilla 0), mlp (3), linear_decoder (3), gru (1). Todos Completed. Razón media AE/PCA(16) en valid: conv1d 0.895 (desv. entre semillas 1.64 %), mlp 1.081, linear_decoder 1.097, gru 1.024 (1 semilla). Solo conv1d gana a PCA en agregado; la compuerta pasa en la semilla 0 de conv1d.
-- **Para 10.5 (Arquitecto):** la pendiente de PCA(16) queda por debajo de `slope_tol = 0.20` en algunas series (nielol_pm25 0.740; las_encinas_pm10 0.797), así que el umbral es más estricto que PCA. Fallos de conv1d en semillas 1 y 2: pendiente en las_encinas_pm10 (0.744 y 0.792) y var en las_encinas_pm10 (0.794 en semilla 1). Loss de train mejora 1.5–1.8 % entre epochs 40 y 60 en conv1d y 3.6 % en gru: por la regla de 10.5, 60 epochs.
-- **11.1** (búsqueda, score = razón vs PCA): conv1d 1.02 (6 trials; mejor L=72, hidden 64, dropout 0.1, lr 1e-3, batch 128, seed 4); linear_decoder 1.04 (12 trials; L=72, hidden 32, dropout 0, batch 64, seed 7); mlp 1.05 (12 trials; L=72, hidden 32, dropout 0, batch 64, seed 7); gru 1.16 (4 trials; L=24, hidden 64, dropout 0.1, batch 128, seed 0). Ningún trial gana a PCA en valid. **Arquitectura para 11.2: conv1d** (menor score). Todos los jobs completaron sus trials dentro del tope de tiempo.
-
-### Ejecución en curso (10.4 y 11.1)
-
-- **11.1** (4 jobs `mode=search` en paralelo, sin MLflow): `sinca-search-{linear-decoder,mlp,conv1d,gru}-20261103e`, `--max-run 14400`, `search_time_budget=10800`. El resultado está en `s3://sinca-mlflow/model-artifacts/<job>/output/` (`ae_search.json`).
-- **10.4** (calibración en serie, `version=0`, L=24, 60 epochs, patience 8): `sinca-cal-{conv1d (dmd on), mlp, linear-decoder, gru}-l24-20261103e`, con seeds 0,1,2 salvo GRU (seed 0).
-
-#### Resumen para el punto de control 10.3 (pendiente de decisión del Arquitecto; 10.3 NO marcada)
-
-- **Compuerta relativa:** `gate_pass = 0` en todas. conv1d supera a PCA(16) en test en las 6 series y en valid en 5 de 6; en `las_encinas_pm10` valid queda empatada (21.96 vs 21.96 al segundo decimal). La regla exige estrictamente todas las series. Decidir: mantener el criterio o definir tolerancia.
-- **Umbrales numéricos** (`min_var_ratio`, `slope_tol`, `max_rmse_vs_pca`): sin calibrar; el humo de 3 epochs no sirve para fijarlos. Propuesta: calibrar con conv1d de 60 epochs antes de la búsqueda.
-- **Memoria L=168:** GRU L=72 pico 3.5 GB; L=168 excede los 8 GB de `ml.m5.large`. Opciones: batch más chico, `ml.m5.xlarge` (16 GB), excluir L=168 de la búsqueda, o medir conv1d/mlp con L=168.
-- **Tiempo GRU:** ~121 s/epoch con L=72. A 60 epochs supera el `max_run` de 2 h. Decidir: L más corto para GRU, más epochs con early stopping, o instancia más rápida.
-- **CPU frente a GPU:** `ml.g4dn.xlarge` (cuota 1). Decidir si GPU solo para GRU, con la desviación de `project-decisions.md` §3 registrada.
-- **Presupuesto de trials:** default 6 trials × 4 arquitecturas × 15 epochs de búsqueda. Confirmar o reducir.
-- **`d_aux`:** default `max(2, d/4)` = 4 con d=16. Fijar o barrer.
-- **Ablación de `z_aux`** (empeoramiento MP, µg/m³): conv1d 0.55, mlp 1.21, linear_decoder 0.35, gru 5.10.
-
-Humo (3 epochs, semilla 0, `version=0`):
-
-| Run | s/epoch | Total | RSS pico | RMSE test medio |
-|---|---|---|---|---|
-| ref-mean L=24 / L=72 | — | 117 / 124 s | — | 44.8 / 45.6 |
-| ref-pca-d16 L=24 / L=72 | — | — | — | 17.1 / 22.8 |
-| conv1d L=24 | 16.0 | 162 s | 1.8 GB | 16.2 |
-| linear_decoder L=24 | 2.2 | 134 s | 1.8 GB | 19.4 |
-| mlp L=24 | 3.0 | 119 s | 1.8 GB | 19.7 |
-| gru L=24 | 42.7 | 245 s | 1.8 GB | 21.3 |
-| gru L=72 | 121.3 | 506 s | 3.5 GB | 35.8 |
-| gru L=168 | — | — | >8 GB | OOM |
-
-Runtime: TF 2.20.0, Keras 3.15.1, NumPy 2.4.6, pandas 2.3.3.
-
-- **Limpieza pendiente antes de 12.1:** runs `version=0` y `version=99` en `sinca-baseline`.
-
-### Decisiones del Arquitecto — punto de control 10.3 (2026-11-03)
-
-Detalle y justificación en `design.md` (D2, D5, D6, D10, Riesgos, Open Questions). Resumen:
-
-- **Compuerta**: con tolerancia (agregado estricto + 2 % por serie). Tarea nueva **3.8**.
-- **Umbrales**: `max_rmse_vs_pca = 1.02` fijo; `min_var_ratio = 0.80` y `slope_tol = 0.20` provisionales hasta 10.5. Tareas nuevas **10.4** (calibración 60 epochs) y **10.5** (punto de control corto).
-- **`L = 168` fuera de la búsqueda**; **GRU solo a `L = 24`**; **todo en CPU `ml.m5.large`** (sin GPU; desviación registrada en `project-decisions.md` §9).
-- **Presupuesto**: trials `{linear_decoder: 12, mlp: 12, conv1d: 6, gru: 4}` × 4 ventanas × 15 epochs; 4 jobs de búsqueda en paralelo. Tarea nueva **5.9**.
-- **Hallazgo del Arquitecto al revisar el código** (no estaba en las notas): la búsqueda puntuaba por RMSE absoluto, que no es comparable entre `L` ni entre `d` y habría elegido siempre `L = 24` y `d = 32`. El score pasa a ser la razón `RMSE_AE/RMSE_PCA(d, L)` y `d = 16` queda fijo en la búsqueda (5.9); `d ∈ {8, 32}` se barre en 11.2.
-- **`d_aux`**: fijo `max(2, d/4)`; no se barre.
-- **Tarea nueva 5.8** (curva de aprendizaje por epoch) para fijar las epochs del final en 10.5.
-- **Orden**: código 3.8, 5.8, 5.9 → 10.4 (en paralelo con 11.1) → 10.5 (solo bloquea 11.3). 10.3 la marca el Implementador tras leer esto.
-
-### Decisiones del Arquitecto — punto de control 10.5 (2026-11-03)
-
-Detalle en `design.md` (D5, D6, Riesgos, Open Questions). Resumen:
-
-- **Umbrales**: `min_var_ratio` 0.80 → **0.75**; `slope_tol` 0.20 → **0.30**; `max_rmse_vs_pca` **1.02** se mantiene. Criterio: nivel de PCA(16) + margen ~0.05 (PCA(16) no pasaba los valores a priori). Tarea nueva **3.9** (dos constantes y tests).
-- **Epochs del final**: **60** (loss de train mejora 1.5–3.6 % entre las epochs 40 y 60). El veredicto del GRU vale con ese tope.
-- **Tolerancia de 2 %**: se mantiene (1.64 % entre semillas; los fallos de conv1d fueron de pendiente/varianza, no de RMSE).
-- **11.2 arranca ya**, con conv1d a **`L = 24`** (desviación de "la configuración ganadora", que usa `L = 72`), 60 epochs; conviene hacer 3.9 antes del primer lanzamiento.
-- **11.3 cambia**: 5 finalistas (los 4 de 11.1 más conv1d `L = 24` como control de `L`) y reporte obligatorio de la razón AE/PCA en **test** antes de 11.4.
-- **Alerta del Arquitecto**: ningún trial de la búsqueda (valid fuera del train) gana a PCA(16); la calibración da 0.895 en un valid que está dentro del train. No es contradicción demostrada (regímenes distintos), pero obliga a mirar test antes de dar por buena la compuerta. Pendiente para el Implementador, sin bloquear: registrar en `EXPERIMENT-LOG.md` el historial de la búsqueda de conv1d (score por trial y `L`).
-- 10.5 la marca el Implementador tras leer esto.
-
-### Estado para continuar (fin de sesión)
-
-- **Hecho:** 3.9 (umbrales 0.75 / 0.30 / 1.02, tests en verde: 68 passed) y 10.5 (decisión del Arquitecto aplicada). Commits: `c4b4f34` (3.8, 5.8, 5.9), `113d840` (3.9), `8b55764` (EXPERIMENT-LOG), y el commit de cierre de tasks.md.
-- **Próximos pasos, en orden:**
-  - a) 11.2: conv1d a `L = 24` (hidden 64, dropout 0.1, lr 1e-3, batch 128), 60 epochs, `version=2`, semilla 0, `--dmd-after-final false`. Control `aux_input` apagado; barrido `w_aux ∈ {0, 0.1, 0.5, 1}`; barrido `d ∈ {8, 32}`; más `ref-mean` y `ref-pca-d{8,32}` a L=24. Una corrida a la vez.
-  - b) 11.3 (requiere 10.5 y 3.9, ya cumplidos): 5 finalistas (conv1d, linear_decoder y mlp a L=72; gru a L=24; conv1d a L=24), `--seeds 0,1,2`, `--epochs 60`, `version=1`, `--max-run 14400`. Reportar la razón AE/PCA en test antes de 11.4.
-  - c) 11.4, 11.5 y grupo 12.
-- **Pendientes sin bloquear:** registrar en `EXPERIMENT-LOG.md` el historial por trial de la búsqueda de conv1d (`ae_search.json` en `s3://sinca-mlflow/model-artifacts/sinca-search-conv1d-20261103e/output/`). Limpiar los runs `version=0` y `version=99` de `sinca-baseline` antes de 12.1.
-- **Recordatorios:** perfil AWS personal explícito (`desareca_dev`, cuenta 549024266383) y verificar la cuenta antes de cualquier comando. MLflow, una corrida a la vez. El modo `search` sí puede correr en paralelo.
-
-### Preparación de 11.2 (2026-11-06, Implementador)
-
-- **Chequeos previos:** `tests/ae` → 68 passed. `launch.py --dry-run` con la config de conv1d L=24 → OK (imagen `tf-cpu-v1`, rol `sinca-training-role`, `ml.m5.large`, `max-run 14400`). `sts get-caller-identity --profile desareca_dev` → cuenta 549024266383.
-- **Alerta de entorno:** la variable `AWS_PROFILE` de la shell del implementador apunta a `evolet` (cuenta ajena a estos proyectos). Por eso todos los comandos de 11.2 usan `--profile desareca_dev` explícito y no `$env:AWS_PROFILE`. El README raíz (líneas 66–78) muestra `--profile $env:AWS_PROFILE`: conviene corregirlo o fijar la variable antes de usarlo.
-- **Nombres de run duplicados:** `run_name_ae` produce `sinca-zona-ae_conv1d-v2` para todas las corridas de 11.2 (barridos de `w_aux`, `d` y control sin meteo). Los runs se distinguen por sus params (`w_aux`, `d`, `aux_input`), no por nombre. Sin cambio de código; a revisar en 11.5 y 12.1.
-- **Referencias:** `reference` escribe `ref-mean` y `ref-pca-d{d}`; con dos jobs (`d=8`, `d=32`), `ref-mean` queda registrado dos veces con los mismos valores.
-- **Pendiente:** ejecución de los 9 Training Jobs por el operador, uno a la vez. Los jobs de 11.2 no se marcan hasta tener el output real.
-
-### Ejecución de 11.2 (2026-11-06, script `scripts/ae/run_11_2_serie.ps1`)
-
-- **Resultado:** 9 Training Jobs `Completed`, en serie, entre 19:46 y 21:52 (log `%TEMP%\sinca-ae-11-2-20261106-1946.log`). Ningún fallo ni relanzamiento.
-- **Verificación en MLflow** (copia local de `s3://sinca-mlflow/_mlflow/`, solo lectura): 7 runs `sinca-zona-ae_conv1d-v2` y 2 juegos de referencia (`ref-mean`, `ref-pca-d8`, `ref-mean`, `ref-pca-d32`), todos `FINISHED`.
-- **Compuerta** (`gate_pass`, con umbrales 0.75/0.30/1.02):
-
-| Run | w_aux | d | aux | gate_pass | beats_pca | beats_mean |
-|---|---|---|---|---|---|---|
-| base | 0.1 | 16 | on | 1 | 1 | 1 |
-| noaux (control sin meteo) | 0.1 | 16 | off | 0 | 1 | 1 |
-| waux0 | 0 | 16 | on | 1 | 1 | 1 |
-| waux05 | 0.5 | 16 | on | 0 | 1 | 1 |
-| waux1 | 1 | 16 | on | 0 | 1 | 1 |
-| d8 | 0.1 | 8 | on | 0 | 1 | 1 |
-| d32 | 0.1 | 32 | on | 0 | 1 | 1 |
-
-- **Lectura preliminar (sin decidir):** la compuerta relativa (`beats_pca`, `beats_mean`) pasa en todos; la numérica deja solo base y waux0 aprobados. Las métricas por serie (`var_ratio`, pendiente, razón AE/PCA en valid y test) quedan para 11.5.
-- **Nota:** `best_epoch` no aparece como param en el listado de la consulta (quizá se loguea solo como métrica); a revisar en 11.5.
-- **Nota:** `ref-mean` aparece dos veces en `version=2` (una por job de referencia, con los mismos valores), como se anticipó.
-
-### Pendiente para Arquitecto (2026-11-06): SDK de SageMaker v2 → v3
-
-- AWS notificó (correo) que la v2 de sagemaker está en modo mantenimiento desde el 6-jul-2026 y termina soporte el **6-jul-2027**; recomienda migrar a v3.
-- Uso actual en el repo que depende de v2: `pipeline/train/launch.py` (`Estimator`, `Session`), pin `sagemaker>=2,<3` en `requirements-dev.txt` y README (~l. 389). Las imágenes de training usan `sagemaker-training` (paquete aparte; en `train-tf.Dockerfile` va con `--no-deps`) y deben revalidarse. El Space trae un SDK preinstalado en la imagen `sagemaker-distribution-cpu` (alias 3.2.0 fijado en Terraform); confirmar su versión.
-- Implicación: v3 rompe la API de `launch.py`; migrar requiere change propio (reescritura del lanzador, actualización de pins/README, humo de Training Job en entorno no productivo). No se actualizó nada; el pin v2 se mantiene.
-- Acción: que el Arquitecto decida si se propone el change de migración y cuándo.
-
-### Preparación de 11.3 (2026-11-07, Implementador)
-
-- **Ganadores de 11.1** leídos de `ae_search.json` en `s3://sinca-mlflow/model-artifacts/sinca-search-*-20261103e/output/output.tar.gz` (solo lectura):
-  - conv1d (trial 4, score 1.0170): L=72, hidden 64, dropout 0.1, **lr 0.003**, batch 128.
-  - linear_decoder (trial 7, score 1.0448): L=72, hidden 32, dropout 0.0, lr 0.001, batch 64.
-  - mlp (trial 7, score 1.0530): L=72, hidden 32, dropout 0.0, lr 0.001, batch 64.
-  - gru (trial 0, score 1.1641): L=24, hidden 64, dropout 0.1, lr 0.003, batch 128.
-- **Discrepancia (no bloquea, requiere confirmación del Arquitecto):** la nota de 11.1 registra conv1d con `lr 1e-3`, pero el JSON dice `lr 0.003`. La tarea 11.2 se ejecutó con `lr 0.001` (`scripts/ae/run_11_2_serie.ps1`), así que sus barridos **no** corren sobre la configuración ganadora real. 11.3 usa `lr 0.003` (el valor del JSON, según la regla "pasar la configuración ganadora como `--hp`"), incluido el control conv1d `L = 24`. Decidir si 11.2 se repite con `lr 0.003` o se documenta la desviación en `EXPERIMENT-LOG.md`.
-- **Script:** `scripts/ae/run_11_3_finales.ps1` (7 Training Jobs en serie: ref-l24, ref-l72, mlp-l72, linear-decoder-l72, conv1d-l24, conv1d-l72, gru-l24; `seeds=0,1,2`, `version=1`, `--max-run 14400`). Verificado con `-DryRun` (cuenta 549024266383, argumentos correctos). Es idempotente: los jobs `Completed` se saltean al relanzar.
-- **Estimación de duración** (extrapolada del humo y de 11.2, donde 9 jobs tomaron ~126 min en serie): conv1d-l72 ~150 min, gru-l24 ~135 min, conv1d-l24 ~55 min, mlp-l72 y linear-decoder-l72 ~15 min cada uno, referencias ~10 min en total. Total ~6 h (rango 5,5–7,5 h). Riesgo: si conv1d-l72 o gru superan `max-run` (4 h) antes de la semilla 2, el job queda `Stopped` y el script se detiene.
-- **Tarea 11.3 no marcada:** falta el output real de los jobs y la razón AE/PCA en test (requisito antes de 11.4).
-
-### Ejecución de 11.3 (2026-11-07, script `scripts/ae/run_11_3_finales.ps1`)
-
-- **Decisión del operador:** se usa `lr 0.003` (valor real del ganador de 11.1) en 11.3, incluido el control conv1d L=24. La discrepancia con 11.2 (que usó `lr 0.001`) queda vigente: ver arriba.
-- **Primer intento:** falló al inicio por el warning de deprecación del SDK v2 leído como error en PowerShell (sin job creado). Corregido en el script validando por exit code. Relanzado sin sufijos `-r2`.
-- **Jobs:** 7 Training Jobs `Completed`. Duración real: conv1d L=72 98 min (3 semillas), gru L=24 121 min, mlp y linear_decoder ~10 min, referencias ~2 min. Serie total ~4 h 40 min.
-- **MLflow (`sinca-baseline`, `version=1`, lectura del estado en S3 con `sqlite3` en solo lectura):** 15 runs AE (5 finalistas × semillas 0,1,2), todos `FINISHED`, más `ref-mean`/`ref-pca-d16` para L=24 y L=72 y los runs `ae-*-dmd`.
-
-Razón AE/PCA(16) (media de las 6 series; RMSE AE / RMSE PCA con el mismo L):
-
-| Finalista | L | Compuerta (s0/s1/s2) | Razón valid | Razón test | Peor serie en test |
-|---|---|---|---|---|---|
-| conv1d | 24 | 1/1/1 | 0.904 (sd 0.004) | 0.916 (sd 0.012) | las_encinas_pm10 0.953 |
-| gru | 24 | 1/1/0 | 0.953 (sd 0.007) | 0.976 (sd 0.003) | las_encinas_pm10 1.027 (s2) |
-| conv1d | 72 | 0/0/0 | 0.854 (sd 0.009) | 0.945 (sd 0.010) | nielol_pm10 1.001 |
-| mlp | 72 | 0/0/0 | 1.015 (sd 0.008) | 1.025 (sd 0.005) | nielol_pm10 1.081 |
-| linear_decoder | 72 | 0/0/0 | 1.062 (sd 0.004) | 1.056 (sd 0.009) | nielol_pm10 1.108 |
-
-- **Criterio de alerta (11.3):** no hay finalista aprobado en valid con razón de test ≥ 1. conv1d L=24 y gru L=24 aprueban y tienen razón de test < 1. Nada se marca como "aprobada solo en valid".
-- **Observaciones para 11.4/11.5 (sin decidir):**
-  - conv1d L=72 tiene una brecha valid–test de 0.09 (0.854 vs 0.945), mayor que conv1d L=24 (0.012). El valid del final está dentro del train, así que la compuerta de L=72 es optimista. Además no aprueba la capa numérica.
-  - conv1d L=72 cerró con `best_epoch` en 52–60 (cap de 60 epochs), así que no convergió del todo. Se registra para 11.5.
-  - gru L=24 cambia de veredicto entre semillas (s2 falla en la capa numérica por RMSE vs PCA en `nielol_pm10`, aunque su razón media de test es 0.976).
-  - El pase DMD encadenado (semilla 0, solo si la compuerta aprueba) corrió en conv1d L=24 y gru L=24. Linealizabilidad (`dmd_latent_rmse_1 / _24`, rango completo): conv1d 0.147 / 0.779; gru 0.057 / 0.372. Truncado (rango 8): conv1d 0.480 / 0.813; gru 0.192 / 0.386. Estas cifras están en unidades del latente y no tienen escala de referencia todavía; 11.5 las comparará con `latent_std_z_*`. El DMD de las semillas 1 y 2 no se encadenó (diseño de 5.7); 11.4 decide si se repite.
-  - RSS pico: conv1d L=24 ~2 GB, gru L=24 ~2 GB, conv1d L=72 ~3.5–4.1 GB, mlp y linear_decoder ~3.5–3.9 GB; todos dentro de los 8 GB de `ml.m5.large`.
-- **Señal para el Arquitecto:** la compuerta aprobada (conv1d L=24, gru L=24) no depende de la brecha valid–test; ambos tienen razón de test < 1. Pasar a 11.4 solo si el Arquitecto confirma el criterio para el pase de DMD sobre semillas no encadenadas.
+- **Punto de control 10.3 (2026-11-03):**
+  1. Compuerta relativa con tolerancia: `beats_mean` estricto en todas las series; `beats_pca` en el agregado; tolerancia de 2 % por serie en la capa numérica (3.8).
+  2. Umbrales: `max_rmse_vs_pca = 1.02` fijo; `min_var_ratio = 0.80` y `slope_tol = 0.20` provisionales hasta 10.5.
+  3. `L = 168` fuera de la búsqueda; el módulo de datos lo sigue soportando.
+  4. GRU solo `L = 24`, `hidden ≤ 64`, 4 trials.
+  5. Todo en CPU `ml.m5.large` (desviación de `project-decisions.md` §3, registrada en §9).
+  6. Presupuesto de búsqueda `{linear_decoder 12, mlp 12, conv1d 6, gru 4}`, 4 ventanas, 15 epochs; 4 jobs en paralelo (`search` no usa MLflow).
+  7. `d_aux = max(2, d/4)` fijo; `d = 16` en la búsqueda; `d ∈ {8, 32}` solo en 11.2.
+  - **Hallazgo:** la búsqueda puntuaba por RMSE absoluto, que no es comparable entre L ni d. El score pasa a ser la razón RMSE_AE/RMSE_PCA(d, L), con `d = 16` fijo en la búsqueda.
+  - Antes de 10.4 y 11.1 se cierran 3.8, 5.8 y 5.9 con tests.
+- **Punto de control corto 10.5 (2026-11-03):**
+  1. Umbrales: `min_var_ratio` 0.80 → 0.75; `slope_tol` 0.20 → 0.30; `max_rmse_vs_pca` 1.02 sin cambio. Criterio: nivel de PCA(16) + margen ~0.05 (tarea 3.9).
+  2. Epochs del final: 60 (la loss de train mejora 1.5–3.6 % entre epochs 40 y 60).
+  3. Tolerancia de 2 % por serie se mantiene (desviación entre semillas de conv1d 1.64 %).
+  4. 11.2 arranca con conv1d a `L = 24`. 11.3 suma conv1d `L = 24` como quinto finalista y reporta la razón en test antes de 11.4.
+  - **Alerta:** ningún trial de búsqueda gana a PCA(16) en valid, pero la calibración da 0.895 en valid dentro del train. Por eso 11.3 reporta test antes de dar por buena la compuerta.
+- **Decisiones aplicadas en el código (3.7 y 5.7):** `gate_pass` siempre con capa relativa; la capa numérica se suma solo si hay umbrales. DMD encadenado en la semilla 0 si pasa la compuerta; modo `dmd` como respaldo con `--ae-run-id`.
+- **SDK v2 → v3:** pendiente de decisión del Arquitecto (ver grupo 11).
