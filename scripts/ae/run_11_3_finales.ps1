@@ -21,16 +21,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Profile   = 'desareca_dev'
 $Region    = 'us-east-1'
-$AccountId = '549024266383'
 $RoleArn   = "arn:aws:iam::${AccountId}:role/sinca-training-role"
 $Image     = "${AccountId}.dkr.ecr.us-east-1.amazonaws.com/sinca-train:tf-cpu-v1"
 $MaxRun    = 14400
 $PollSec   = 60
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$Py       = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+# Profile y cuenta esperada salen de .env (gitignored), nunca del script ni del entorno.
+$EnvFile = Join-Path $RepoRoot '.env'
+if (-not (Test-Path $EnvFile)) { throw "Falta $EnvFile. Copiar .env.example a .env y completar AWS_PROFILE y AWS_ACCOUNT_ID." }
+$cfg = @{}
+foreach ($line in Get-Content $EnvFile) {
+    if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$') { $cfg[$matches[1]] = $matches[2] }
+}
+$Profile   = $cfg['AWS_PROFILE']
+$AccountId = $cfg['AWS_ACCOUNT_ID']
+foreach ($v in @(@('AWS_PROFILE', $Profile), @('AWS_ACCOUNT_ID', $AccountId))) {
+    if (-not $v[1] -or $v[1] -match '[<>]') { throw "$($v[0]) sin valor real en $EnvFile." }
+}$Py       = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 $Launcher = 'pipeline/train/launch.py'
 $LogFile  = Join-Path $env:TEMP ("sinca-ae-11-3-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmm'))
 
