@@ -22,8 +22,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Region    = 'us-east-1'
-$RoleArn   = "arn:aws:iam::${AccountId}:role/sinca-training-role"
-$Image     = "${AccountId}.dkr.ecr.us-east-1.amazonaws.com/sinca-train:tf-cpu-v1"
 $MaxRun    = 14400
 $PollSec   = 60
 
@@ -39,7 +37,10 @@ $Profile   = $cfg['AWS_PROFILE']
 $AccountId = $cfg['AWS_ACCOUNT_ID']
 foreach ($v in @(@('AWS_PROFILE', $Profile), @('AWS_ACCOUNT_ID', $AccountId))) {
     if (-not $v[1] -or $v[1] -match '[<>]') { throw "$($v[0]) sin valor real en $EnvFile." }
-}$Py       = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+}
+$RoleArn   = "arn:aws:iam::${AccountId}:role/sinca-training-role"
+$Image     = "${AccountId}.dkr.ecr.us-east-1.amazonaws.com/sinca-train:tf-cpu-v1"
+$Py       = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 $Launcher = 'pipeline/train/launch.py'
 $LogFile  = Join-Path $env:TEMP ("sinca-ae-11-3-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmm'))
 
