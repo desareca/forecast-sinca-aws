@@ -74,7 +74,7 @@ Los notebooks son exploración scratch, no producción. Siguen `analisis_baselin
 - [x] 8.4 `notebooks/exploracion_reconstruccion.ipynb`: real vs reconstruido con zoom, aplanamiento, comparación con `ref-mean`/`ref-pca-d*`, ablación de `z_aux`
 - [x] 8.5 `notebooks/exploracion_latente_dmd.ipynb`: nivel 1 (latent, `dmd_operator.npz`, reajuste de DMD, espectro de K, linealizabilidad por época); nivel 2 (encoder/decoder: pronóstico a µg/m³, recorrer una dimensión del latente, anular z_aux o un modo)
 - [x] 8.6 `requirements-notebooks-tf.txt` con `tensorflow-cpu` en la misma versión que `train-tf.Dockerfile`; instalación en el README solo para nivel 2
-- [x] 8.7 Notebooks vía `analysis/load.py`, sin outputs (`nbconvert --clear-output`); README: versionado con `git add -f` y flujo encender/trabajar/apagar del Space
+- [x] 8.7 Notebooks vía `analysis/load.py`; README: versionado y flujo encender/trabajar/apagar del Space. **Modificada en el cierre (2026-11-10): se versionan CON outputs** (antes: sin outputs, `nbconvert --clear-output`). Ver "Decisiones del Arquitecto — cierre"
 
 ## 9. Ejecución real — preparación (operador)
 
@@ -103,7 +103,13 @@ Los notebooks son exploración scratch, no producción. Siguen `analisis_baselin
 ## 12. Verificación funcional
 
 - [x] 12.1 Dashboard sobre el estado real de MLflow: runs AE con compuerta, diagnósticos y métricas `dmd_`; runs `ae-{arq}-dmd` comparables por serie contra persistencia y LightGBM; runs sin pronóstico no rompen el dashboard. Adjuntar salida o captura
-- [ ] 12.2 Notebooks de la tarea 8 en JupyterLab del Space con datos reales, `Run All`: cargan artefactos (`reconstruction.parquet`, `latent.parquet`, `dmd_operator.npz`) y generan figuras; celdas de nivel 2 cargan `encoder.keras`/`decoder_mp.keras` de un run real, decodifican y recorren una dimensión del latente. Limpiar outputs y **apagar el Space** (Spaces → `sinca-dev` → Stop)
+- [x] 12.2 Notebooks de la tarea 8 en JupyterLab del Space con datos reales, `Run All`: cargan artefactos (`reconstruction.parquet`, `latent.parquet`, `dmd_operator.npz`) y generan figuras; celdas de nivel 2 cargan `encoder.keras`/`decoder_mp.keras` de un run real, decodifican y recorren una dimensión del latente. **Conservar los outputs** (excepción a 8.7) y **apagar el Space** (Spaces → `sinca-dev` → Stop)
+
+## 13. Cierre (acordado en la revisión de cierre, 2026-11-10)
+
+- [ ] 13.1 Limpieza de runs de humo en `sinca-baseline` (operador; verificar con output real). **7 runs**: los 6 `lightgbm-v99` (`36c7daa2…`, `9c3c061b…` nielol; `5fa97305…`, `acc31532…` las_encinas; `be6be304…`, `e86c1f6e…` padre_las_casas_ii) y el `sinca-persistence-baseline` duplicado del 2026-11-02 (`a29930ad…`; sus métricas son idénticas al oficial `49e477a3…` del 2026-10-26, que se conserva). Método: (a) comparar el `LastModified` de `_mlflow/mlflow.sqlite` en S3 con la copia local; si cambió, volver a descargar; (b) sobre la copia local, `delete_run` + `mlflow gc` de esos 7 IDs; (c) los artefactos tienen `artifact_uri` `file:///opt/ml/...` (ruta del contenedor), así que `gc` no los borra: listar con `aws s3 ls` el prefijo real de cada run bajo `_mlflow/mlruns/`, `--dryrun`, y recién entonces `aws s3 rm --recursive`; (d) subir el sqlite; (e) confirmar con la misma consulta que quedan 0 runs `version = 99` y 1 de persistencia. Los runs `v1` no se tocan (2 runs por serie es estructural)
+- [ ] 13.2 Higiene de profile: (a) `train/launch.py`: `--profile` obligatorio, sin default de `AWS_PROFILE` del entorno; error claro si falta; test; (b) `scripts/ae/run_11_2_serie.ps1` y `run_11_3_finales.ps1`: leer profile y cuenta esperada de `.env` (gitignored) con un `.env.example` con placeholders; sin valores reales en el script; (c) `grep` final en archivos versionados que no queden `desareca_dev` ni el Account ID fuera del historial. Nota: la historia ya empujada de `origin` conserva los valores anteriores; reescribirla es decisión del operador
+- [ ] 13.3 Verificación final: tests (`tests/ae/` y el resto) en verde; el dashboard no lista `v99` ni persistencia duplicada; `openspec status --change ae-reconstruccion` sin pendientes. Después, `/opsx/archive ae-reconstruccion`
 
 ## Notas de implementación
 
@@ -122,18 +128,18 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
 - **Tests:** `tests/ae/` fuera de `source_dir`; 68 pasan.
 - **Docker/lanzador** (6.1–6.3): `train-tf.Dockerfile` escrito y construido en 9.3; `launch.py` acepta `--entry-point` y `--hp`, y rechaza imágenes sin tag o con `:latest`; `docker/README.md` documenta build, push y retag.
 - **Dashboard** (7.1–7.3): `load.is_series_run` excluye persistencia, referencias y runs AE; vista "Autoencoders" en `streamlit_app.py` y `analysis/plots_ae.py`. Fixture con 27 runs; verificado con `AppTest`.
-- **Notebooks** (8.3–8.5): plantillas sin outputs; celdas de nivel 1 de 8.4 y 8.5 ejecutadas sobre fixture; 8.3 pendiente de datos reales.
+- **Notebooks** (8.3–8.5): plantillas; celdas de nivel 1 de 8.4 y 8.5 ejecutadas sobre fixture; 8.3 pendiente de datos reales. **Cierre:** en el commit `d77d812` los tres pasaron de Plotly a **matplotlib** (las figuras interactivas tardaban demasiado en el Space); el dashboard sigue en Plotly. Corridos con `Run All` en el Space con datos reales (12.2).
 - **8.2:** comandos del README derivados de los flags reales; no ejecutados contra AWS.
 - **Experimento MLflow** (5.4): `sinca-baseline`, configurable con `--experiment`.
 
 ### Grupo 9
 
-- **9.1:** cuenta `549024266383`; cuotas `ml.m5.large` = 20, `ml.g4dn.xlarge` = 1; repo `sinca-train` (MUTABLE).
-- **9.2:** retag `lgbm-v1` con `aws ecr put-image`. Digest del índice `sha256:492de5f7…` (los hijos son idénticos). Corrida corta de LightGBM `Completed` en 275 s. **Efecto colateral:** runs de prueba `version = 99` en `sinca-baseline`, pendientes de limpieza.
+- **9.1:** cuenta personal verificada; cuotas `ml.m5.large` = 20, `ml.g4dn.xlarge` = 1; repo `sinca-train` (MUTABLE).
+- **9.2:** retag `lgbm-v1` con `aws ecr put-image`. Digest del índice `sha256:492de5f7…` (los hijos son idénticos). Corrida corta de LightGBM `Completed` en 275 s. **Efecto colateral:** 6 runs `lightgbm-v99` y 1 `sinca-persistence-baseline` duplicado en `sinca-baseline` → limpieza en 13.1. Lección (blueprint `tracking-experimentos`, nota local): los humos van a un `--experiment` aparte.
 - **9.3:** `tf-cpu-v1` con digest `sha256:351f5ed8…`. `sagemaker-training` con `--no-deps` porque `protobuf<=3.20.3` choca con `tensorflow-cpu` 2.20 (`protobuf>=5.28`); aprobado por el operador. `import tensorflow` OK (2.20.0).
 - **9.4:** la imagen del Space trae TF 2.18.0 y keras 3.10.0. Instalar sobre el Python base rompe dependencias y no persiste tras reiniciar. Solución: venv aislado `/home/sagemaker-user/venv-tf` con `requirements-notebooks-tf.txt` (tf 2.20.0, keras 3.15.1), que sí persiste. Falta registrar el kernel de JupyterLab (12.2).
 - **9.5:** ventanas train/test: L = 24 43.051/1.999; L = 72 39.414/1.761; L = 168 33.669/1.377.
-- **Incidente de cuenta:** la primera corrida usó `AWS_PROFILE` de otra cuenta (`457469184690`) y dio `AccessDenied`. No hubo lecturas ni escrituras; se repitió con `desareca_dev` verificado. El `AWS_PROFILE` de la shell apunta a una cuenta ajena: usar siempre `--profile desareca_dev`.
+- **Incidente de cuenta:** la primera corrida usó el `AWS_PROFILE` de la shell, que apunta a **otra cuenta**, y dio `AccessDenied`. No hubo lecturas ni escrituras; se repitió con el profile personal verificado. Causa raíz: `launch.py` toma por defecto `AWS_PROFILE` del entorno. **Resuelto en 13.2** (`--profile` obligatorio) y en los README (placeholder + advertencia).
 - El tag `:latest` de `sinca-train` se conserva en LightGBM; la regla de no usarlo en lanzamientos sigue vigente.
 
 ### Grupo 10
@@ -157,9 +163,9 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
 ### Grupo 11
 
 - **11.1** (score = razón vs PCA(16), valid): conv1d 1.02 (6 trials; L = 72, hidden 64, dropout 0.1, batch 128); linear_decoder 1.04 (12; L = 72, hidden 32, dropout 0, batch 64); mlp 1.05 (12; L = 72, hidden 32, dropout 0, batch 64); gru 1.16 (4; L = 24, hidden 64, dropout 0.1, batch 128). Ningún trial gana a PCA(16). Arquitectura para 11.2: conv1d. Todos dentro del tope de tiempo.
-- **Discrepancia de `lr` en conv1d:** la nota de 11.1 decía `1e-3`, pero `ae_search.json` dice `0.003`. 11.2 usó `0.001` y 11.3 usó `0.003`. Sin resolver (ver 11.5).
+- **Discrepancia de `lr` en conv1d:** la nota de 11.1 decía `1e-3`, pero `ae_search.json` dice `0.003`. 11.2 usó `0.001` y 11.3 usó `0.003`. **Resuelta en el cierre:** el valor correcto es `0.003`; la nota era un error de transcripción. La referencia es el finalista de 11.3 (lr 0.003); los barridos de 11.2 (lr 0.001, semilla 0) solo ordenan variantes. Efecto pequeño: base de 11.2 0.901/0.909 frente a finalista 0.904/0.916 (valid/test). No se re-corren.
 - **11.2** (9 jobs en serie, `scripts/ae/run_11_2_serie.ps1`, todos `Completed`): `gate_pass` base 1, noaux 0, waux0 1, waux05 0, waux1 0, d8 0, d32 0. `ref-mean` queda registrado dos veces (una por job de referencia).
-- **Preparación de 11.2:** `AWS_PROFILE` de la shell apuntaba a una cuenta ajena; todos los comandos usaron `--profile desareca_dev`. El README raíz (líneas 66–78) muestra `--profile $env:AWS_PROFILE`: conviene corregirlo.
+- **Preparación de 11.2:** `AWS_PROFILE` de la shell apuntaba a una cuenta ajena; todos los comandos usaron `--profile` explícito del profile personal. Los README mostraban `--profile $env:AWS_PROFILE`: **corregido en el cierre** (README raíz línea 254, `docker/README.md`, `pipeline/ae/README.md`).
 - **11.3** (`scripts/ae/run_11_3_finales.ps1`, `lr 0.003` por decisión del operador): 7 jobs `Completed`, ~4 h 40 min. Un primer intento falló por el warning de deprecación del SDK leído como error en PowerShell; se corrigió validando por exit code.
 
   | Finalista | L | Compuerta s0/s1/s2 | Razón valid | Razón test |
@@ -173,17 +179,21 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
   Ningún finalista queda como "aprobada solo en valid" (ninguno con razón de test ≥ 1). conv1d L = 72 tiene brecha valid–test de 0.09 y `best_epoch` en 52–60. gru L = 24 cambia de veredicto entre semillas.
 - **11.4:** cerrada con el pase encadenado de la semilla 0 (decisión del operador, D6). conv1d L = 24 (`8f348a…`) y gru L = 24 (`fcc939…`) tienen `dmd_operator.npz` y `dmd_operator_trunc.npz`. Linealizabilidad (1 paso / 24 pasos): conv1d 0.147 / 0.779 (truncado 0.480 / 0.813); gru 0.057 / 0.372 (truncado 0.192 / 0.386). Las semillas 1 y 2 no tienen DMD: repetirlo exige decidir el nombre de run (no lleva semilla) y probar el modo `dmd` con descarga desde `_mlflow/`, que aún no corrió en SageMaker.
 - **11.5:** resumen en `EXPERIMENT-LOG.md`. La compuerta recalculada coincide con MLflow en 15/15 corridas. En test: conv1d L = 24 aprueba 3/3; gru L = 24 aprueba 1/3; conv1d L = 72 aprueba 1/3. Sin FLAG de aplanamiento en test para conv1d L = 24. Sesgo por tramo de `log1p`: mismo patrón que PCA(16), no separable del aplanamiento general. Pronóstico DMD vs LightGBM v1 sobre filas comunes: RMSE media 20.97 (conv1d) y 20.69 (gru) frente a 21.25; RMSE ponderado peor (33.28 y 31.09 frente a 28.17). Persistencia no es comparable fila a fila: no guardó `predictions.parquet`.
-- **Pendientes para 12.1/12.2:** runs `lightgbm` `version = 99` a limpiar en `sinca-baseline`; discrepancia de `lr` (11.2 frente a 11.3).
+- **Pendientes para 12.1/12.2:** limpieza de `version = 99` → 13.1; discrepancia de `lr` → resuelta (ver arriba).
 
-### Pendiente para el Arquitecto: SDK SageMaker v2 → v3
+### SDK SageMaker v2 → v3 (resuelta en el cierre)
 
-- AWS avisó que la v2 está en mantenimiento desde el 6-jul-2026 y termina soporte el 6-jul-2027. La v3 rompe la API de `launch.py`; requiere change propio. Se mantiene el pin v2. Decidir si y cuándo.
+- v2 en mantenimiento desde el 2026-07-06; fin de soporte 2027-07-06 (doc oficial). La v3 rompe la API de `launch.py` (`Estimator` → `ModelTrainer`). **Destino: change nuevo `sagemaker-sdk-v3`, a planificar antes de `productivizacion`**; se mantiene el pin v2 mientras tanto. Registrado en `project-decisions.md` §8 y como nota local en `modules/compute/blueprint.md`.
 
 ### Ajustes 12.1 (dashboard)
 
 - **Filtros AE** (7.2, `streamlit_app.py`): selectores Familia y Versión antes del selector de run. Verificado en navegador.
 - **12.1 cerrada** por aceptación del operador. Sin captura adjunta; verificación: 12 runs `ae-*-dmd` con contrato completo, sin excepciones en ambas vistas.
-- **Carga lenta:** `ensure_state` baja 370 objetos / 355 MiB en serie en cada arranque del contenedor. Pendiente decidir si se paraleliza o se persiste en volumen.
+- **Carga lenta:** `ensure_state` baja 370 objetos / 355 MiB en serie en cada arranque del contenedor. **Resuelta en el cierre:** no justifica change propio; va como tarea previa de `ae-dmd` (descarga selectiva —sqlite más los artefactos de los runs pedidos— y/o en paralelo; un volumen no aplica a contenedores efímeros). Ver `openspec/changes/ae-dmd/design.md`.
+
+### Nota 12.2 (cierre)
+
+- Los 3 notebooks de exploración se corrieron con `Run All` en el Space con datos reales (reportado por el operador). El apagado del Space no se verificó desde esta revisión. El venv de nivel 2 (`/home/sagemaker-user/venv-tf`) es entorno local del Space, sin documentación adicional.
 
 ## Decisiones del Arquitecto
 
@@ -204,4 +214,12 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
   4. 11.2 arranca con conv1d a `L = 24`. 11.3 suma conv1d `L = 24` como quinto finalista y reporta la razón en test antes de 11.4.
   - **Alerta:** ningún trial de búsqueda gana a PCA(16) en valid, pero la calibración da 0.895 en valid dentro del train. Por eso 11.3 reporta test antes de dar por buena la compuerta.
 - **Decisiones aplicadas en el código (3.7 y 5.7):** `gate_pass` siempre con capa relativa; la capa numérica se suma solo si hay umbrales. DMD encadenado en la semilla 0 si pasa la compuerta; modo `dmd` como respaldo con `--ae-run-id`.
-- **SDK v2 → v3:** pendiente de decisión del Arquitecto (ver grupo 11).
+- **SDK v2 → v3:** change nuevo `sagemaker-sdk-v3`, antes de `productivizacion` (ver notas).
+- **Cierre (2026-11-10), conclusión de 11.5 vigente:**
+  1. **AE de referencia para `ae-dmd`:** conv1d, `L = 24`, `d = 16` (`d_aux = 4`), hidden 64, dropout 0.1, **lr 0.003**, batch 128, `w_aux 0.1`, `aux_input` on, 60 epochs, patience 8 (11.3, `version = 1`, semillas 0/1/2). Única configuración que aprueba la compuerta en las 3 semillas en valid y test (razón AE/PCA test 0.916, sd 0.012).
+  2. **gru `L = 24` es exploratorio** (inestable entre semillas; el DMD encadenado salió de una semilla que falla la capa numérica en test).
+  3. **Sin corrección del sesgo de `log1p` en este change:** no se separa del aplanamiento (PCA muestra el mismo patrón). Se reabre en `ae-dmd` junto con los pesos por magnitud.
+  4. **Matices:** la ganancia sobre PCA(16) es modesta (~8 %); el aplanamiento es común a AE y PCA; PLC II pm25 queda justo bajo el umbral de 0.05 en test (0.046/0.025); el DMD global rinde poco (error a 24 pasos 0.779, RMSE ponderado 33.28 frente a 28.17 de LightGBM), lo que motiva `ae-dmd`. `d = 8` es una palanca a evaluar (razón test 0.906, pero falla la capa numérica).
+  5. **Outputs de notebooks (excepción a 8.7):** los notebooks de exploración se versionan **con outputs** de la última corrida con datos reales; sin credenciales, IDs de cuenta ni ARNs. Guarda antes de commitear: `git grep -nE "[0-9]{12}|desareca|arn:aws" -- notebooks/`. `git add -f` solo hace falta para notebooks nuevos (`*.ipynb` está en `.gitignore`). Documentado aquí, en D9, en el delta spec y en el README; no se toca `WORKFLOW.md` (protocolo compartido).
+  6. **Heredado por `ae-dmd`:** comparación fila a fila con persistencia (sus runs no guardaron `predictions.parquet`); DMD de las semillas 1 y 2 y modo `dmd` desde `_mlflow/` sin probar en SageMaker; nombres de run duplicados (incluir la semilla); descarga selectiva de `ensure_state`.
+  7. **Hueco conocido, sin tarea:** `requirements-notebooks-tf.txt` solo lista `tensorflow-cpu`; `matplotlib` e `ipykernel` del venv de nivel 2 no están en ningún requirements.

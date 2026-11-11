@@ -75,6 +75,29 @@ Fase 4 del proyecto `forecast-sinca-aws`. Lo que hay hoy:
    `_mlflow/*` y `model-artifacts/*`). Sin managed policies amplias.
 8. **Región/profile**: `us-east-1`, `AWS_PROFILE` explícito.
 
+## Punto de partida y pendientes heredados de `ae-reconstruccion` (cerrado 2026-11-10)
+
+**AE de partida**: conv1d, `L = 24`, `d = 16` (`d_aux = 4`), hidden 64, dropout 0.1,
+lr 0.003, batch 128, `w_aux` 0.1, `aux_input` on, 60 epochs (run `sinca-zona-ae_conv1d-v1`,
+semillas 0/1/2; DMD de la semilla 0). Referencia en `EXPERIMENT-LOG.md` (11.5 y decisión de
+cierre). Lo medido: razón AE/PCA(16) en test 0.916; el DMD global tiene error a 24 pasos
+0.779 (86 % de la escala de `z`) y RMSE ponderado 33.28 frente a 28.17 de LightGBM.
+
+**Al rehacer este borrador**: PA-3 (cómputo: CPU `ml.m5.large` medido, GPU diferida; §9 de
+`project-decisions.md`), PA-4 (huecos: regla de 6 h aplicada), PA-5 (`L` ∈ {24, 72} medido,
+168 fuera por memoria) y PA-8 (imagen `tf-cpu-v1`) ya están respondidos o parcialmente
+respondidos.
+
+**Pendientes heredados**:
+- Descarga selectiva (y/o paralela) de `analysis/load.py::ensure_state`: hoy baja 370
+  objetos / 355 MiB en serie en cada arranque y crecerá. Tarea previa.
+- Comparación fila a fila con persistencia: sus runs no guardaron `predictions.parquet`.
+- DMD de las semillas 1 y 2 y modo `dmd` con descarga desde `_mlflow/`, sin probar en SageMaker.
+- Nombres de run duplicados (`ref-mean`, `ae_conv1d-v2`): incluir la semilla.
+- Sesgo de `log1p` y pesos por magnitud en la reconstrucción: reabrir aquí.
+- `d = 8` como palanca (razón test 0.906, falla la capa numérica); GRU a `L ≥ 72` solo
+  si se justifica (GPU o `ml.m5.xlarge`); PLC II pm25 (aplanamiento en el límite).
+
 ## Puntos de ajuste (abiertos)
 
 ### PA-1 — Formulación y escalera interna de la línea AE+DMD

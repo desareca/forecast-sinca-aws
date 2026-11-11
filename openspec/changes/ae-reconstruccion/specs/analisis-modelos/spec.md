@@ -24,9 +24,9 @@ El sistema SHALL disponer de plantillas de notebook en `notebooks/` para explora
 - **WHEN** el operador ejecuta las celdas de nivel 2 (reajustar el DMD y decodificar a µg/m³, o recorrer una dimensión del latente)
 - **THEN** el notebook carga `encoder.keras` y `decoder_mp.keras` del run, decodifica y muestra el efecto sobre las 6 series
 
-#### Scenario: Plantillas sin salidas
-- **WHEN** se versiona una plantilla de notebook
-- **THEN** se guarda sin outputs ni contadores de ejecución
+#### Scenario: Notebooks versionados con outputs
+- **WHEN** se versiona un notebook de exploración tras ejecutarlo con datos reales
+- **THEN** se guarda con los outputs de esa corrida y sin credenciales, IDs de cuenta ni ARNs
 
 ### Requirement: Tolerancia a runs sin métricas de pronóstico
 

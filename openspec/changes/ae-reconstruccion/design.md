@@ -309,7 +309,7 @@ conv1d a `L = 24`: en el humo de 3 epochs ganó a PCA(16) en test en las 6 serie
 - **Finalistas (11.3)**: la mejor configuración de cada arquitectura según la
   búsqueda (conv1d, linear_decoder y mlp a `L = 72`; gru a `L = 24`) **más conv1d a
   `L = 24`** con los mismos hiperparámetros del ganador (hidden 64, dropout 0.1, lr
-  1e-3, batch 128), como control de `L`. Motivo: la búsqueda (valid fuera del train,
+  **3e-3** (corregido en el cierre: `ae_search.json` dice 0.003; el texto decía 1e-3 por error de transcripción y 11.2 usó 1e-3), batch 128), como control de `L`. Motivo: la búsqueda (valid fuera del train,
   15 epochs, 2 años) no encontró ningún trial que le gane a PCA(16), pero conv1d a
   `L = 24` es la única configuración con evidencia a favor (60 epochs, razón 0.895
   en valid en-muestra; 6/6 series en test en el humo de 3 epochs). Sin este control no
@@ -390,12 +390,16 @@ ventanas que sobreviven según `L`, rangos), `exploracion_reconstruccion`
 `exploracion_latente_dmd` (dimensiones activas, trayectoria de `z`, espectro de
 `K`, linealizabilidad por época, pronóstico). Convención heredada de
 `analisis_baseline.ipynb`: JupyterLab del Space con `sinca-dev-role` (sin
-credenciales), lectura de `validated/` y `_mlflow/`, outputs limpios y versionado
-con `git add -f`; son scratch, no producción ni fuente de verdad.
+credenciales), lectura de `validated/` y `_mlflow/` y versionado con `git add -f` (solo
+notebooks nuevos); son scratch, no producción ni fuente de verdad. **Cierre
+(2026-11-10):** (i) los gráficos usan **matplotlib** (commit `d77d812`): Plotly
+tardaba demasiado en el Space; el dashboard sigue en Plotly. (ii) Los notebooks de
+exploración se versionan **con outputs** de la última corrida con datos reales (antes:
+outputs limpios); sin credenciales, IDs de cuenta ni ARNs.
 
 **Decisión**: exploración en **dos niveles**, según si hace falta el decoder.
 
-- **Nivel 1, sin TensorFlow** (numpy/pandas/plotly sobre artefactos persistidos
+- **Nivel 1, sin TensorFlow** (numpy/pandas/matplotlib sobre artefactos persistidos
   `reconstruction.parquet`, `latent.parquet`, `dmd_operator.npz`): datos de
   entrada, diagnósticos de reconstrucción, y casi todo el análisis del DMD sobre
   el latente — reajustar el DMD con otro rango, otra ventana temporal o
@@ -570,8 +574,8 @@ GRU/Conv; solo triviales para `linear_decoder`).
   menor, se anota en `EXPERIMENT-LOG.md` al comparar (ver D5).
 - **Pesos por magnitud en la reconstrucción**: ¿hace falta ponderar los picos en
   la loss o alcanza con los diagnósticos? Decisión para `ae-dmd`.
-- **Corrección del sesgo de `log1p`** al destransformar: el humo de 3 epochs no
-  sirve para medirlo; se decide en 11.5 con los modelos finales (sesgo por tramo de
-  concentración ya registrado).
+- **Corrección del sesgo de `log1p`** al destransformar: **cerrada en el cierre** (2026-11-10):
+  no se corrige en este change; el sesgo por tramo es igual en AE y PCA(16) y no se
+  separa del aplanamiento. Se reabre en `ae-dmd` junto con los pesos por magnitud.
 - **GRU a `L ≥ 72` y `L = 168`** (GPU o `ml.m5.xlarge`): decisión para `ae-dmd`, solo
   si los resultados de `L ∈ {24, 72}` muestran que el contexto largo aporta.

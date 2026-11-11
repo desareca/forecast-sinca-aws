@@ -1,7 +1,7 @@
 # Predicción Calidad del Aire (SINCA) — Plan de arquitectura (contexto para OpenSpec)
 
 **Fecha:** 2026-09-21
-**Estado:** Planificación — Fase 1 (Setup) en progreso
+**Estado:** Fase 4 en progreso — `ae-reconstruccion` cerrado; `ae-dmd` por replanificar (actualizado 2026-11-10)
 
 Este documento es la fuente de verdad de arquitectura del proyecto. Las
 decisiones acá cerradas no se re-discuten salvo que cambien explícitamente, y
@@ -79,14 +79,18 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 2. `setup-mlflow-ci-cd` — MLflow self-hosted (Fargate), OIDC + 3 workflows. **(completado)**
 3. `data-pipeline` (Fase 2) — scraper SINCA/Open-Meteo/feriados + ICAP + pandera. **(completado)**
 4. `baseline` (Fase 3) — persistencia + modelo simple (LightGBM lags). **(completado)**
-5. `analisis-modelos` (Fase 3.5) — dashboard Streamlit + persistencia de diagnósticos por run.
+5. `analisis-modelos` (Fase 3.5) — dashboard Streamlit + persistencia de diagnósticos por run. **(completado)**
 6. `ae-reconstruccion` (Fase 4, parte 1) — autoencoders sobre las 6 series de MP con
    auxiliares al latente, compuerta de reconstrucción y primer pase de DMD global
-   sin optimizar.
+   sin optimizar. **(completado)** AE de referencia: conv1d `L = 24`, `d = 16`.
 7. `ae-dmd` (Fase 4, parte 2) — dinámica sobre el latente: parámetros del DMD,
    localización (catálogo PA-14), control, Koopman end-to-end, loss conjunta ICAP.
-   (Borrador en `openspec/changes/ae-dmd/`; se rehace con los resultados del
-   change anterior.)
+   **Parte de conv1d `L = 24`** (ver §9). (Borrador en `openspec/changes/ae-dmd/`; se
+   rehace con los resultados del change anterior; pendientes heredados en su `design.md`.)
+
+Deuda técnica registrada: migración del SDK de SageMaker v2 → v3 (change
+`sagemaker-sdk-v3`, a planificar **antes de `productivizacion`**; v2 termina soporte el
+2027-07-06).
 8. `evaluacion` (Fase 5) — comparar baseline + referencia pública.
 9. `productivizacion` (Fase 6) — reentrenamiento semanal + inferencia diaria.
 
@@ -108,6 +112,13 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
   GRU solo a `L = 24` ningún job pasa de ~3 h (medido en el humo), y la GPU exigiría una
   imagen nueva sin necesidad. `L = 168` queda fuera de la búsqueda (memoria). La GPU se
   reevalúa en `ae-dmd` si hace falta el GRU a `L ≥ 72`. Cuota `ml.g4dn.xlarge` = 1.
+- **AE de referencia para `ae-dmd` (2026-11-10)**: conv1d, `L = 24`, `d = 16`
+  (`d_aux = 4`), hidden 64, dropout 0.1, lr 0.003, batch 128, `w_aux` 0.1, `aux_input`
+  on. Única configuración que aprueba la compuerta en 3 semillas, en valid y test. gru
+  `L = 24` es exploratorio. Sin corrección del sesgo de `log1p` en `ae-reconstruccion`
+  (se reabre en `ae-dmd`). Detalle en `EXPERIMENT-LOG.md` y `tasks.md` del change.
+- **Notebooks de exploración (2026-11-10)**: matplotlib (el dashboard sigue en Plotly) y
+  versionados **con outputs**, sin credenciales ni IDs de cuenta.
 
 Ver `WORKFLOW.md` para el protocolo de coordinación entre Arquitecto,
 Implementador y operador humano.

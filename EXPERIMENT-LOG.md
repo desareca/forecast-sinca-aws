@@ -112,7 +112,7 @@ en el punto de control 10.3, no acá.
 ## 2026-11-02 — ae-reconstruccion 9.5: ventanas por L y rangos por canal (datos reales)
 
 - **Hipótesis**: con la regla de descarte (ventana de MP sin huecos > 6 h) sobreviven ventanas suficientes también para `L = 168`. Si no, se para y se vuelve al Arquitecto.
-- **Qué se corrió**: grilla horaria de 50.471 h (2021-01-01 → 2026-10-04), particiones held-out (train = posiciones [0, 48168), test = [48168, 50471)), normalización ajustada solo con train. Lectura de `sinca-data/validated/` y cómputo local; no se escribió nada en AWS. Cuenta verificada antes de correr: `549024266383`.
+- **Qué se corrió**: grilla horaria de 50.471 h (2021-01-01 → 2026-10-04), particiones held-out (train = posiciones [0, 48168), test = [48168, 50471)), normalización ajustada solo con train. Lectura de `sinca-data/validated/` y cómputo local; no se escribió nada en AWS. Cuenta personal verificada antes de correr.
 - **Ventanas que sobreviven** (`survival_counts`):
 
   | L | train | test |
@@ -134,7 +134,7 @@ en el punto de control 10.3, no acá.
 
 | Arquitectura | Trials | Score mejor | Config ganadora |
 |---|---|---|---|
-| conv1d | 6 | 1.02 | L=72, hidden 64, dropout 0.1, lr 1e-3, batch 128 |
+| conv1d | 6 | 1.02 | L=72, hidden 64, dropout 0.1, lr **3e-3** (corregido el 2026-11-10 según `ae_search.json`; antes decía 1e-3), batch 128 |
 | linear_decoder | 12 | 1.04 | L=72, hidden 32, dropout 0, lr 1e-3, batch 64 |
 | mlp | 12 | 1.05 | L=72, hidden 32, dropout 0, lr 1e-3, batch 64 |
 | gru | 4 | 1.16 | L=24, hidden 64, dropout 0.1, lr 1e-3, batch 128 |
@@ -283,4 +283,12 @@ Nota: el barrido usó `lr = 0.001`, pero el ganador de 11.1 tiene `lr = 0.003`. 
 
 - 11.5 registrada con las cifras anteriores. Se entrega al Arquitecto para decidir: (a) confirmar conv1d L=24 como AE de referencia, (b) tratar gru L=24 como exploratorio, (c) el criterio de corrección de `log1p` (propuesta: no corregir aquí), (d) cómo registrar la discrepancia de `lr`.
 - No se modificó ningún run de MLflow ni se lanzó ningún Training Job en esta tarea.
+
+### Decisión del Arquitecto (cierre, 2026-11-10)
+
+- **(a)** conv1d L=24 es el **AE de referencia** y el punto de partida de `ae-dmd`: d=16 (d_aux=4), hidden 64, dropout 0.1, **lr 0.003**, batch 128, `w_aux` 0.1, `aux_input` on, 60 epochs, patience 8 (`version = 1`, semillas 0/1/2).
+- **(b)** gru L=24 queda como **exploratorio**.
+- **(c)** **No se corrige** el sesgo de `log1p` en este change; se reabre en `ae-dmd` con los pesos por magnitud.
+- **(d)** El `lr` correcto del ganador de 11.1 es **0.003** (la fila de la tabla de 11.1 estaba mal transcripta). La referencia es el finalista de 11.3; los barridos de 11.2 (lr 0.001, semilla 0) solo ordenan variantes. La base de 11.2 (0.901/0.909) y el finalista (0.904/0.916) difieren poco; no se re-corren.
+- **Matices para `ae-dmd`:** ganancia modesta sobre PCA(16) (~8 %); aplanamiento común a AE y PCA; PLC II pm25 justo bajo el umbral de 0.05 en test; el DMD global no mejora a LightGBM en RMSE ponderado (33.28 frente a 28.17), lo que motiva `ae-dmd`; `d = 8` como palanca a evaluar.
 
