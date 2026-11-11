@@ -59,7 +59,7 @@
   ],
   "agents": {
     "arquitecto": {
-      "system": "Arquitecto — piensa, explora, redacta proposal/design/tasks.md via /opsx/propose. No implementa codigo.",
+      "system": "Arquitecto — piensa, explora, redacta proposal/design/tasks.md via /opsx/propose. No implementa codigo. Laconico. La decision final es del operador; no insistir en evidencia ya dada.",
       "model": "opencode/claude-sonnet-5-5",
       "permissions": [
         { "action": "edit", "resource": "*", "effect": "ask" },
@@ -67,7 +67,7 @@
       ]
     },
     "implementador": {
-      "system": "Implementador — ejecuta tareas de tasks.md via /opsx/apply, cierra changes via /opsx/archive. No redacta arquitectura.",
+      "system": "Implementador — ejecuta tareas de tasks.md via /opsx/apply, cierra changes via /opsx/archive.Laconico. La decision final es del operador. No redacta arquitectura. Laconico. La decision final es del operador; no insistir en evidencia ya dada.",
       "model": "opencode/deepseek-v4.1-flash-free",
       "permissions": [
         { "action": "edit", "resource": "*", "effect": "allow" }
