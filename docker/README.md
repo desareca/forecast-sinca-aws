@@ -67,15 +67,17 @@ la imagen original, y luego correr una corrida corta de LightGBM para validarla 
 
 ## Lanzar un Training Job con la imagen elegida
 
-`pipeline/train/launch.py` toma el tag como argumento explícito:
+`pipeline/train/launch.py` toma el tag como argumento explícito. Reemplazá `<AWS_PROFILE>` por
+el nombre del profile de la cuenta personal. **No uses `$env:AWS_PROFILE`**: la shell puede
+traer el profile de otra cuenta.
 
 ```powershell
 # Baseline LightGBM
-python pipeline/train/launch.py --profile $env:AWS_PROFILE --role-arn <training_role_arn> `
+python pipeline/train/launch.py --profile <AWS_PROFILE> --role-arn <training_role_arn> `
     --image-uri "$reg/sinca-train:lgbm-v1" --dry-run
 
 # Autoencoders (entry point ae/run.py)
-python pipeline/train/launch.py --profile $env:AWS_PROFILE --role-arn <training_role_arn> `
+python pipeline/train/launch.py --profile <AWS_PROFILE> --role-arn <training_role_arn> `
     --image-uri "$reg/sinca-train:tf-cpu-v1" --entry-point ae/run.py `
     --hp mode=final --hp arch=gru --hp d=16 --hp length=72 --dry-run
 ```

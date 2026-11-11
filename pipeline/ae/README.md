@@ -62,8 +62,11 @@ docker run --rm --entrypoint python `
 El lanzador (`pipeline/train/launch.py`) empaqueta `pipeline/` como `source_dir` y usa el
 entry point `ae/run.py`. Los hiperparámetros se pasan con `--hp CLAVE=VALOR`:
 
+`<AWS_PROFILE>` es el profile de la cuenta personal. **No uses `$env:AWS_PROFILE`**: la shell
+puede traer el profile de otra cuenta.
+
 ```powershell
-python pipeline/train/launch.py --profile $env:AWS_PROFILE --role-arn <training_role_arn> `
+python pipeline/train/launch.py --profile <AWS_PROFILE> --role-arn <training_role_arn> `
     --image-uri <repo>/sinca-train:tf-cpu-v1 --entry-point ae/run.py `
     --hp mode=final --hp arch=gru --hp d=16 --hp length=72 --hp w_aux=0.1 --wait
 ```
