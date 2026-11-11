@@ -121,6 +121,87 @@ def _log_run(
             mlflow.log_artifacts(tmp)
 
 
+def _add_ae_runs() -> None:
+    """Runs de autoencoder (change `ae-reconstruccion`): AE conjunto, referencia y DMD por serie.
+
+    Usa su propio generador (semilla 11) para no alterar los runs LightGBM de arriba.
+    """
+    import mlflow
+
+    rng = np.random.default_rng(11)
+    arch, version, d, d_aux = "gru", 1, 16, 4
+    name = f"sinca-zona-ae_{arch}-v{version}"
+    ts = pd.date_range(TEST_START, periods=TEST_HOURS, freq="h", tz=TZ)
+
+    recon_frames, diag_rows = [], []
+    for station in STATIONS:
+        for pollutant in ("pm10", "pm25"):
+            base = 60.0 if pollutant == "pm10" else 24.0
+            y_true = np.clip(base + 10 * np.sin(np.arange(TEST_HOURS) / 24 * 2 * np.pi) + rng.normal(0, 6, TEST_HOURS), 1, None)
+            y_recon = np.clip(0.9 * y_true + 0.1 * y_true.mean() + rng.normal(0, 2, TEST_HOURS), 0, None)
+            serie = f"{station}|{pollutant}"
+            recon_frames.append(pd.DataFrame({"timestamp": ts, "serie": serie, "y_true": y_true, "y_recon": y_recon, "split": "test"}))
+            diag = {"var_ratio": float(np.std(y_recon) / np.std(y_true)), "slope": 0.92, "rmse": float(np.sqrt(np.mean((y_true - y_recon) ** 2))),
+                    "rmse_lt50": 4.0, "bias_lt50": 0.5, "rmse_50_100": 6.0, "bias_50_100": -1.0, "rmse_gt100": 12.0, "bias_gt100": -6.0}
+            diag_rows.extend({"split": "test", "serie": serie, "metric": k, "value": v} for k, v in diag.items())
+
+    z = rng.normal(0, 1, (TEST_HOURS, d))
+    latent = pd.DataFrame(z, columns=[f"z_mp_{i}" for i in range(d - d_aux)] + [f"z_aux_{j}" for j in range(d_aux)])
+    latent.insert(0, "timestamp", ts)
+    latent.insert(1, "split", "test")
+
+    metrics = {
+        "recon_rmse_mean_test": 4.8, "recon_rmse_mean_valid": 5.1,
+        "gate_beats_pca": 1.0, "ablation_zaux_delta_rmse_test": 0.37,
+        "latent_eff_dim_pr": 9.1, "latent_dead_dims": 0.0,
+        "dmd_latent_rmse_1": 0.12, "dmd_latent_rmse_24": 0.61,
+        "dmd_valid_latent_rmse_1": 0.13, "dmd_valid_latent_rmse_24": 0.66,
+        "dmd_trunc_latent_rmse_1": 0.19, "dmd_trunc_latent_rmse_24": 0.88,
+    }
+    params = {"arch": arch, "L": 72, "d": d, "d_aux": d_aux, "hidden": 64, "dropout": 0.1, "lr": 0.001,
+              "w_mp": 1.0, "w_aux": 0.1, "aux_input": True, "seed": 0, "version": version, "tipo": "entrenamiento",
+              "gate_thresholds": "null"}
+    tags = {"modelo": f"ae-{arch}", "stage": "ae-reconstruccion"}
+
+    with mlflow.start_run(run_name=name) as run:
+        mlflow.set_tags(tags)
+        mlflow.log_params(params)
+        mlflow.log_metrics(metrics)
+        with tempfile.TemporaryDirectory(prefix="sinca-fixture-ae-") as tmp:
+            tmp_path = pathlib.Path(tmp)
+            pd.concat(recon_frames, ignore_index=True).to_parquet(tmp_path / "reconstruction.parquet", index=False)
+            latent.to_parquet(tmp_path / "latent.parquet", index=False)
+            pd.DataFrame(diag_rows).to_parquet(tmp_path / "diagnostics.parquet", index=False)
+            mlflow.log_artifacts(tmp)
+        ae_run_id = run.info.run_id
+
+    # Referencia PCA(d) del mismo tamaño (sin pronóstico): `tipo=referencia`.
+    with mlflow.start_run(run_name=f"ref-pca-d{d}"):
+        mlflow.set_tags({"modelo": f"ref-pca-d{d}", "tipo": "referencia", "stage": "ae-reconstruccion"})
+        mlflow.log_params({"tipo": "referencia", "L": 72, "d": d, "version": version})
+        mlflow.log_metrics({"recon_rmse_mean_test": 5.4, "recon_rmse_mean_valid": 5.6})
+
+    # Pase DMD por serie: `ae-<arq>-dmd`, mismo contrato que LightGBM, tag `ae_run_id`.
+    for station in STATIONS:
+        for pollutant in ("pm10", "pm25"):
+            test = _synthetic(station, pollutant, TEST_START, TEST_HOURS, rng, 9.0)
+            test["split"] = "test"
+            name_dmd = mlflow_log.run_name(station, f"ae-{arch}-dmd", version)
+            with mlflow.start_run(run_name=name_dmd):
+                mlflow.set_tags({"serie": f"{station}|{pollutant}", "modelo": f"ae-{arch}-dmd",
+                                 "stage": "ae-dmd", "tipo": "entrenamiento", "ae_run_id": ae_run_id})
+                mlflow.log_params({"estacion": station, "pollutant": pollutant, "version": version,
+                                   "tipo": "entrenamiento", "rank": "full"})
+                mlflow.log_metrics({f"test_{k}": float(v) for k, v in evaluate_predictions(test).items()
+                                    if np.isfinite(v)})
+                with tempfile.TemporaryDirectory(prefix="sinca-fixture-dmd-") as tmp:
+                    test.to_parquet(pathlib.Path(tmp) / "predictions.parquet", index=False)
+                    zone_icap(test).to_parquet(pathlib.Path(tmp) / "zone_icap.parquet", index=False)
+                    pd.DataFrame({"window_index": [], "rmse": []}).astype({"window_index": int, "rmse": float}).to_parquet(
+                        pathlib.Path(tmp) / "rolling_scores.parquet", index=False)
+                    mlflow.log_artifacts(tmp)
+
+
 def main() -> int:
     import mlflow
 
@@ -204,6 +285,8 @@ def main() -> int:
         persistence_metrics,
         {},
     )
+
+    _add_ae_runs()
 
     print("Fixture generado en:", FIXTURE_DIR)
     print("Runs:", len(mlflow.search_runs(experiment_names=[mlflow_log.EXPERIMENT_NAME])))

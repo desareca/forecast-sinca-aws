@@ -45,3 +45,7 @@ runs/
 Thumbs.db
 .vscode/
 .idea/
+
+# Copias locales de estado MLflow y de búsquedas bajadas de S3 (no versionar)
+mlflow-smoke-review/
+search-review/

@@ -15,31 +15,86 @@ Requiere **SageMaker Python SDK v2** (`sagemaker>=2,<3`): la v3 (3.x) eliminó
 Uso:
 
     python pipeline/train/launch.py \
-        --profile $AWS_PROFILE \
+        --profile <AWS_PROFILE> \
         --role-arn <arn de training_role_arn (output de Terraform)> \
-        --image-uri <url de train_ecr_repository_url>:latest \
+        --image-uri <url de train_ecr_repository_url>:lgbm-v1 \
+        --wait
+
+    # Autoencoders (change ae-reconstruccion): imagen TF y entry point propio.
+    python pipeline/train/launch.py \
+        --profile <AWS_PROFILE> \
+        --role-arn <training_role_arn> \
+        --image-uri <train_ecr_repository_url>:tf-cpu-v1 \
+        --entry-point ae/run.py \
+        --hp mode=final --hp arch=gru --hp d=16 --hp length=72 \
         --wait
 
 Los ARNs salen de los outputs de Terraform (`training_role_arn`,
-`train_ecr_repository_url`).
+`train_ecr_repository_url`). La imagen SIEMPRE lleva tag explícito (nunca
+`:latest`): ver `docker/`.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
-ENTRY_POINT = "train/train.py"
+ENTRY_POINT = "train/train.py"  # baseline LightGBM (default)
+ENTRY_POINTS = ("train/train.py", "ae/run.py")
+_TAG_RE = re.compile(r"^[^@\s]+:(?!latest$)[A-Za-z0-9_.\-]+$")
+
+
+def validate_image_uri(image_uri: str) -> str:
+    """Exige un tag explícito (no `:latest` ni sin tag)."""
+    if not _TAG_RE.match(image_uri):
+        raise SystemExit(
+            f"Imagen sin tag explícito o con :latest: {image_uri!r}. "
+            "Usar p. ej. <repo>:lgbm-v1 o <repo>:tf-cpu-v1."
+        )
+    return image_uri
+
+
+def base_hyperparameters(entry_point: str, args: argparse.Namespace) -> dict:
+    """Hiperparámetros base según el entry point (cada script acepta solo los suyos)."""
+    common = {
+        "data-bucket": args.data_bucket,
+        "mlflow-bucket": args.mlflow_bucket,
+        "mlflow-prefix": args.mlflow_prefix,
+    }
+    if entry_point == "ae/run.py":
+        return common
+    return {
+        **common,
+        "search-trials": args.search_trials,
+        "search-windows": args.search_windows,
+        "version": args.version,
+    }
+
+
+def parse_hp(pairs: list[str] | None) -> dict:
+    out: dict[str, str] = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            raise SystemExit(f"--hp espera CLAVE=VALOR, recibido: {pair!r}")
+        key, _, value = pair.partition("=")
+        out[key.strip()] = value.strip()
+    return out
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Lanza el Training Job del baseline (Fase 3).")
-    parser.add_argument("--profile", default=os.environ.get("AWS_PROFILE"))
+    parser = argparse.ArgumentParser(description="Lanza un Training Job de SageMaker (baseline o autoencoders).")
+    # Sin default: NO se toma AWS_PROFILE del entorno (puede apuntar a otra cuenta).
+    parser.add_argument("--profile", default=None, help="Named profile de la cuenta personal (obligatorio).")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
     parser.add_argument("--role-arn", default=os.environ.get("TRAINING_ROLE_ARN"))
     parser.add_argument("--image-uri", default=os.environ.get("TRAIN_IMAGE_URI"))
+    parser.add_argument("--entry-point", default=ENTRY_POINT, choices=ENTRY_POINTS,
+                        help="Script dentro de pipeline/: train/train.py (LightGBM) o ae/run.py (autoencoders).")
+    parser.add_argument("--hp", action="append", default=[], metavar="CLAVE=VALOR",
+                        help="Hiperparámetro extra para el entry point (repetible).")
     parser.add_argument("--instance-type", default=os.environ.get("TRAIN_INSTANCE_TYPE", "ml.m5.large"))
     parser.add_argument("--data-bucket", default=os.environ.get("DATA_BUCKET", "sinca-data"))
     parser.add_argument("--mlflow-bucket", default=os.environ.get("MLFLOW_BUCKET", "sinca-mlflow"))
@@ -62,39 +117,40 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args(argv)
+    if not args.profile:
+        raise SystemExit(
+            "Falta --profile (named profile de la cuenta personal). "
+            "No se usa AWS_PROFILE del entorno: puede apuntar a otra cuenta."
+        )
     if not args.role_arn:
         raise SystemExit("Falta --role-arn (o la env TRAINING_ROLE_ARN).")
     if not args.image_uri:
         raise SystemExit("Falta --image-uri (o la env TRAIN_IMAGE_URI).")
+    validate_image_uri(args.image_uri)
 
     import boto3
     from sagemaker.estimator import Estimator
     from sagemaker.session import Session
 
-    boto_session = boto3.Session(profile_name=args.profile or None, region_name=args.region)
+    boto_session = boto3.Session(profile_name=args.profile, region_name=args.region)
     session = Session(boto_session=boto_session)
 
     code_location = f"s3://{args.mlflow_bucket}/{args.mlflow_prefix}/code"
     output_path = f"s3://{args.mlflow_bucket}/model-artifacts"
+    hyperparameters = {**base_hyperparameters(args.entry_point, args), **parse_hp(args.hp)}
+    base_job_name = "sinca-zona-ae-train" if args.entry_point == "ae/run.py" else "sinca-baseline-train"
 
     estimator = Estimator(
         image_uri=args.image_uri,
         role=args.role_arn,
         instance_count=1,
         instance_type=args.instance_type,
-        entry_point=ENTRY_POINT,
+        entry_point=args.entry_point,
         source_dir=str(PIPELINE_DIR),
         code_location=code_location,
         output_path=output_path,
-        base_job_name="sinca-baseline-train",
-        hyperparameters={
-            "data-bucket": args.data_bucket,
-            "mlflow-bucket": args.mlflow_bucket,
-            "mlflow-prefix": args.mlflow_prefix,
-            "search-trials": args.search_trials,
-            "search-windows": args.search_windows,
-            "version": args.version,
-        },
+        base_job_name=base_job_name,
+        hyperparameters=hyperparameters,
         max_run=args.max_run,
         volume_size=30,
         disable_profiler=True,
@@ -105,9 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  code_location={code_location} output_path={output_path}")
 
     if args.dry_run:
-        hyperparameters = estimator.hyperparameters()
         print("  role_arn=" + args.role_arn)
-        print("  entry_point=" + ENTRY_POINT + f"  source_dir={PIPELINE_DIR}")
+        print("  entry_point=" + args.entry_point + f"  source_dir={PIPELINE_DIR}")
         print("  hyperparameters=" + str(hyperparameters))
         print("  max_run=" + str(args.max_run))
         print("(--dry-run: no se lanzó el job)")

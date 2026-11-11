@@ -1,0 +1,795 @@
+"""Entry point de los autoencoders y del pase de DMD (change `ae-reconstruccion`).
+
+Modos (`--mode`):
+
+- `search`: búsqueda aleatoria por arquitectura sobre pocas ventanas equiespaciadas
+  (`_select_windows`), con early stopping; devuelve la mejor configuración de cada
+  arquitectura en un JSON (tarea 5.2).
+- `final`: entrena cada arquitectura con todo lo anterior al test, evalúa una vez
+  en el test held-out con 3 semillas, y registra un run por semilla en MLflow
+  (tarea 5.3–5.4). Incluye compuerta, diagnósticos y ablación de `z_aux`.
+- `reference`: runs `ref-mean` y `ref-pca-d{d}` sobre las mismas ventanas (5.5).
+- `dmd`: pase de DMD global sobre el latente de un AE congelado, por serie, con
+  runs `ae-{arq}-dmd` y el operador como artefacto del run AE (5.5).
+
+Uso (SageMaker Training Job, código vía `source_dir`/`entry_point`):
+
+    python ae/run.py --mode final --arch gru --d 16 --L 72 --data-bucket sinca-data
+
+Uso local (sin escribir en S3):
+
+    python pipeline/ae/run.py --mode final --local-validated-dir ./validated --no-upload
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import pathlib
+import shutil
+import sys
+import tempfile
+import time
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
+# El pipeline es la raíz de importación (`config`, `features`, `ae`, ...).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from ae import data as aed  # noqa: E402
+from ae import dmd as dmdm  # noqa: E402
+from ae import metrics as aem  # noqa: E402
+from ae.models import ARCHITECTURES, LATENT_CHOICES, LENGTH_CHOICES, AEConfig  # noqa: E402
+from evaluate.evaluate import evaluate_predictions, zone_icap  # noqa: E402
+from features.build import build_features, load_validated, make_rolling_windows  # noqa: E402
+from train import mlflow_log  # noqa: E402
+from train.train import _select_windows  # noqa: E402
+
+log = logging.getLogger("ae")
+
+MODEL_BASE = "sinca-zona-ae"
+DEFAULT_EXPERIMENT = mlflow_log.EXPERIMENT_NAME  # `sinca-baseline` (provisional, design Open Questions)
+SEEDS_DEFAULT = (0, 1, 2)
+DMD_SEED = 0
+VALID_FALLBACK_HOURS = 24 * 30
+
+
+# --- Contexto de entrenamiento -----------------------------------------------
+
+
+@dataclass
+class Context:
+    """Normalización y ventanas de una configuración de L y de particiones."""
+
+    grid: aed.HourlyGrid
+    norm: aed.Normalizer
+    ng: aed.NormalizedGrid
+    tr: aed.Windows
+    va: aed.Windows | None
+    te: aed.Windows | None
+
+
+def _span_mask(n: int, lo: int, hi: int) -> np.ndarray:
+    mask = np.zeros(n, dtype=bool)
+    mask[lo:hi] = True
+    return mask
+
+
+def make_context(
+    grid: aed.HourlyGrid,
+    length: int,
+    train_span: tuple[int, int],
+    valid_span: tuple[int, int] | None,
+    test_span: tuple[int, int] | None = None,
+) -> Context:
+    """Normaliza con el train de la partición y corta las ventanas de cada conjunto."""
+    norm = aed.fit_normalizer(grid, _span_mask(len(grid.index), *train_span))
+    ng = aed.apply_normalizer(grid, norm)
+    tr = aed.select_samples(grid, ng, length, *train_span)
+    va = None
+    if valid_span is not None and valid_span[1] > valid_span[0]:
+        va = aed.select_samples(grid, ng, length, *valid_span)
+    te = aed.select_samples(grid, ng, length, *test_span) if test_span is not None else None
+    return Context(grid=grid, norm=norm, ng=ng, tr=tr, va=va, te=te)
+
+
+def default_valid_span(grid: aed.HourlyGrid, train_span: tuple[int, int]) -> tuple[int, int]:
+    """Validación para early stopping: último bloque de la ventana deslizante dentro del train.
+
+    Igual que el baseline (LightGBM usa la última ventana de valid). Si no hay
+    ventana deslizante disponible, se usan los últimos 30 días del train.
+    """
+    lo, hi = train_span
+    for window in reversed(make_rolling_windows()):
+        v_lo, v_hi = aed.span(grid.index, window["valid_start"], window["valid_end"])
+        if lo <= v_lo and v_hi <= hi and v_hi > v_lo:
+            return v_lo, v_hi
+    return max(lo, hi - VALID_FALLBACK_HOURS), hi
+
+
+def _arrays(win: aed.Windows):
+    return (win.x_mp, win.x_aux, win.x_mp, win.mp_real, win.y_aux, win.aux_real)
+
+
+def fit_context(ctx: Context, cfg: AEConfig, epochs: int, patience: int):
+    from ae import models as aeml
+
+    models = aeml.build_models(cfg, aed.N_MP, aed.N_AUX, aed.AUX_INPUT_DIM, aed.CAL_DIM)
+    valid = _arrays(ctx.va) if ctx.va is not None and len(ctx.va) else None
+    history = aeml.fit(models, cfg, _arrays(ctx.tr), valid, epochs=epochs, patience=patience)
+    return models, history
+
+
+# --- Reconstrucción y métricas -----------------------------------------------
+
+
+def stitch(values: np.ndarray, end_positions: np.ndarray, length: int, total: int) -> tuple[np.ndarray, np.ndarray]:
+    """Promedio por hora de las ventanas que la cubren. Devuelve `(serie [T,C], cubierta [T])`."""
+    n, _, channels = values.shape
+    starts = np.asarray(end_positions) - length + 1
+    idx = (starts[:, None] + np.arange(length)[None, :]).ravel()
+    acc = np.zeros((total, channels))
+    cnt = np.zeros(total)
+    np.add.at(acc, idx, values.reshape(-1, channels))
+    np.add.at(cnt, idx, 1.0)
+    covered = cnt > 0
+    out = np.zeros_like(acc)
+    out[covered] = acc[covered] / cnt[covered, None]
+    return out, covered
+
+
+def _longest_run(mask: np.ndarray) -> slice:
+    best, start = (0, 0), None
+    for i, flag in enumerate(list(mask) + [False]):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if i - start > best[1] - best[0]:
+                best = (start, i)
+            start = None
+    return slice(*best)
+
+
+def split_metrics(grid: aed.HourlyGrid, win: aed.Windows, mp_ugm3: np.ndarray) -> tuple[dict, pd.DataFrame]:
+    """Métricas por serie (µg/m³) y tabla de reconstrucción por hora de la partición."""
+    total = len(grid.index)
+    stitched, covered = stitch(mp_ugm3, win.end_positions, win.length, total)
+    truth = grid.mp.to_numpy(dtype=float)
+    real = grid.mp_real.to_numpy(dtype=bool)
+    out: dict[str, dict[str, float]] = {}
+    frames = []
+    seg = _longest_run(covered)
+    for c, (_, station, pollutant) in enumerate(aed.mp_channels()):
+        key = f"{aed.station_slug(station)}_{pollutant}"
+        label = f"{station}|{pollutant}"
+        mask = covered & real[:, c]
+        metrics = aem.recon_metrics(truth[:, c], stitched[:, c], mask)
+        metrics.update(aem.spectral_ratio(truth[seg, c], stitched[seg, c]))
+        out[key] = metrics
+        pos = np.where(covered)[0]
+        frames.append(pd.DataFrame({
+            "timestamp": grid.index[pos],
+            "serie": label,
+            "y_true": np.where(real[pos, c], truth[pos, c], np.nan),
+            "y_recon": stitched[pos, c],
+        }))
+    table = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return out, table
+
+
+def _flatten_metrics(prefix: str, per_series: dict[str, dict[str, float]]) -> dict[str, float]:
+    flat: dict[str, float] = {}
+    for key, metrics in per_series.items():
+        for name, value in metrics.items():
+            if value is not None and np.isfinite(value):
+                flat[f"{prefix}{name}_{key}"] = float(value)
+    return flat
+
+
+def _mean_metric(per_series: dict[str, dict[str, float]], name: str = "rmse") -> float:
+    values = [m[name] for m in per_series.values() if name in m and np.isfinite(m[name])]
+    return float(np.mean(values)) if values else float("nan")
+
+
+def reference_recon_z(kind: str, ctx: Context, win: aed.Windows, d: int) -> np.ndarray:
+    """Reconstrucción en espacio z de las referencias: `mean` o PCA(d) sobre el MP de train."""
+    if kind == "mean":
+        return np.zeros_like(win.x_mp)  # el train tiene media 0 en espacio z
+    flat_tr = ctx.tr.x_mp.reshape(len(ctx.tr), -1).astype(float)
+    mean, comp = aem.pca_fit(flat_tr, d)
+    flat = win.x_mp.reshape(len(win), -1).astype(float)
+    return aem.pca_reconstruct(flat, mean, comp).reshape(win.x_mp.shape)
+
+
+# --- Latente y ablación ------------------------------------------------------
+
+
+def latent_table(z: np.ndarray, win: aed.Windows, d_aux: int, split: str) -> pd.DataFrame:
+    d = z.shape[1]
+    cols = [f"z_mp_{i}" for i in range(d - d_aux)] + [f"z_aux_{j}" for j in range(d_aux)]
+    frame = pd.DataFrame(z, columns=cols)
+    frame.insert(0, "timestamp", win.index)
+    frame.insert(1, "split", split)
+    return frame
+
+
+def ablation_delta(models, cfg: AEConfig, ctx: Context, win: aed.Windows, z: np.ndarray, base: dict) -> float:
+    """Empeoramiento del RMSE medio de MP al poner `z_aux` en cero (aporte auxiliar)."""
+    from ae import models as aeml
+
+    z_ab = aeml.ablate_z_aux(z, models.d_aux)
+    mp_ab = aed.mp_to_ugm3(aeml.decode_mp(models, z_ab), ctx.norm)
+    per_series, _ = split_metrics(ctx.grid, win, mp_ab)
+    return _mean_metric(per_series) - _mean_metric(base)
+
+
+# --- MLflow ------------------------------------------------------------------
+
+
+def runtime_versions() -> dict[str, str]:
+    """Versiones del runtime (confirma que el toolkit de SageMaker no cambia TF/numpy/pandas)."""
+    import importlib
+
+    out: dict[str, str] = {}
+    for module in ("tensorflow", "keras", "numpy", "pandas"):
+        try:
+            out[module] = str(importlib.import_module(module).__version__)
+        except Exception as exc:  # noqa: BLE001 - se registra el fallo, no se corta el job
+            out[module] = f"no disponible ({exc.__class__.__name__})"
+    return out
+
+
+def peak_rss_mb() -> float:
+    """Memoria residente máxima del proceso en MB (Linux: ru_maxrss en KB)."""
+    try:
+        import resource
+    except ImportError:  # Windows: sin módulo resource
+        return float("nan")
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+
+def curve_metrics(history: dict[str, list[float]]) -> tuple[dict[str, list[float]], dict[str, float]]:
+    """Curva por epoch (`loss`, `val_loss`) y `best_epoch` (1-based; mínimo de val_loss o de loss)."""
+    curve = {k: [float(x) for x in v] for k, v in history.items() if k in ("loss", "val_loss") and v}
+    ref = curve.get("val_loss") or curve.get("loss") or []
+    best = {"best_epoch": float(int(np.nanargmin(ref)) + 1)} if ref and np.isfinite(ref).any() else {}
+    return curve, best
+
+
+def _log_run(name: str, tags: dict, params: dict, metrics: dict, frames: dict[str, pd.DataFrame], files: dict[str, str] | None = None,
+             step_metrics: dict[str, list[float]] | None = None) -> str:
+    import mlflow
+
+    with mlflow.start_run(run_name=name) as run:
+        mlflow.set_tags({k: str(v) for k, v in tags.items()})
+        mlflow.log_params({k: v for k, v in params.items() if v is not None})
+        mlflow.log_metrics({k: float(v) for k, v in metrics.items() if v is not None and np.isfinite(v)})
+        for key, series in (step_metrics or {}).items():
+            for epoch, value in enumerate(series, start=1):
+                if np.isfinite(value):
+                    mlflow.log_metric(key, float(value), step=epoch)
+        with tempfile.TemporaryDirectory(prefix="sinca-ae-") as tmp:
+            for filename, frame in frames.items():
+                frame.to_parquet(os.path.join(tmp, filename), index=False)
+            for dest, src in (files or {}).items():
+                shutil.copy(src, os.path.join(tmp, dest))
+            mlflow.log_artifacts(tmp)
+        return run.info.run_id
+
+
+def run_name_ae(arch: str, version: int) -> str:
+    return f"{MODEL_BASE}_{arch}-v{version}"
+
+
+def config_to_params(cfg: AEConfig, version: int) -> dict:
+    return {**cfg.to_dict(), "version": version, "tipo": "entrenamiento"}
+
+
+# --- Modos -------------------------------------------------------------------
+
+
+def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir: str) -> dict:
+    """Entrena una configuración (una semilla), evalúa en valid y test, registra el run."""
+    from ae import models as aeml
+
+    spans = aed.holdout_spans(grid.index)
+    valid_span = default_valid_span(grid, spans["train"])
+    ctx = make_context(grid, cfg.length, spans["train"], valid_span, spans["test"])
+    if len(ctx.tr) == 0 or ctx.te is None or len(ctx.te) == 0:
+        raise RuntimeError("Sin muestras de train o test con esta L (revisar huecos y rango de datos).")
+    log.info("Entrenando %s L=%d d=%d seed=%d: train=%d valid=%d test=%d", cfg.arch, cfg.length, cfg.d, cfg.seed,
+             len(ctx.tr), len(ctx.va) if ctx.va is not None else 0, len(ctx.te))
+    t_fit = time.perf_counter()
+    models, history = fit_context(ctx, cfg, args.epochs, args.patience)
+    fit_seconds = time.perf_counter() - t_fit
+    epochs_run = len(history.history.get("loss", []))
+    curve, curve_best = curve_metrics(history.history)
+
+    results: dict[str, dict] = {}
+    tables: dict[str, pd.DataFrame] = {}
+    zs: dict[str, np.ndarray] = {"train": aeml.encode(models, cfg, ctx.tr.x_mp, ctx.tr.x_aux)}
+    for split, win in (("valid", ctx.va), ("test", ctx.te)):
+        if win is None or len(win) == 0:
+            continue
+        mp_z, _ = aeml.predict_mp_aux(models, cfg, win.x_mp, win.x_aux)
+        per_series, table = split_metrics(grid, win, aed.mp_to_ugm3(mp_z, ctx.norm))
+        zs[split] = aeml.encode(models, cfg, win.x_mp, win.x_aux)
+        results[split] = per_series
+        tables[split] = table.assign(split=split)
+        pca_metrics, _ = split_metrics(grid, win, aed.mp_to_ugm3(reference_recon_z("pca", ctx, win, cfg.d), ctx.norm))
+        results[f"{split}_pca"] = pca_metrics
+        mean_metrics, _ = split_metrics(grid, win, aed.mp_to_ugm3(reference_recon_z("mean", ctx, win, cfg.d), ctx.norm))
+        results[f"{split}_mean"] = mean_metrics
+
+    gate = aem.gate_decision(
+        results.get("valid", {}), results.get("valid_pca", {}), results.get("valid_mean", {}), args.gate_thresholds,
+    )
+    latent = aem.latent_diagnostics(zs["test"], models.d_aux) if "test" in zs else {}
+    ablation = float("nan")
+    if "test" in zs:
+        ablation = ablation_delta(models, cfg, ctx, ctx.te, zs["test"], results["test"])
+
+    name = run_name_ae(cfg.arch, version)
+    seed_dir = os.path.join(model_dir, f"{name}-s{cfg.seed}")
+    os.makedirs(seed_dir, exist_ok=True)
+    enc_path = os.path.join(seed_dir, "encoder.keras")
+    dec_path = os.path.join(seed_dir, "decoder_mp.keras")
+    models.encoder.save(enc_path)
+    models.decoder_mp.save(dec_path)
+    with open(os.path.join(seed_dir, "config.json"), "w", encoding="utf-8") as handle:
+        json.dump({"cfg": cfg.to_dict(), "gate": gate, "version": version}, handle, ensure_ascii=False, indent=2, default=str)
+
+    metrics = {
+        **_flatten_metrics("recon_", results.get("test", {})),
+        **_flatten_metrics("valid_recon_", results.get("valid", {})),
+        **_flatten_metrics("ref_pca_test_", results.get("test_pca", {})),
+        **_flatten_metrics("ref_pca_valid_", results.get("valid_pca", {})),
+        **_flatten_metrics("ref_mean_valid_", results.get("valid_mean", {})),
+        **_flatten_metrics("ref_mean_test_", results.get("test_mean", {})),
+        "recon_rmse_mean_test": _mean_metric(results.get("test", {})),
+        "recon_rmse_mean_valid": _mean_metric(results.get("valid", {})),
+        "ablation_zaux_delta_rmse_test": ablation,
+        # Compuerta en dos capas (D5): gate_pass se registra siempre (capa relativa y, si hay umbrales, numérica).
+        "gate_pass": float(gate["gate_pass"]),
+        "gate_relative": float(gate["relative"]),
+        "gate_beats_pca": float(gate["beats_pca"]),
+        "gate_beats_mean": float(gate["beats_mean"]),
+        "epochs_run": float(epochs_run),
+        **curve_best,
+        "fit_seconds": float(fit_seconds),
+        "seconds_per_epoch": float(fit_seconds / epochs_run) if epochs_run else float("nan"),
+        "peak_rss_mb": peak_rss_mb(),
+        "train_loss_final": float(history.history["loss"][-1]) if history.history.get("loss") else float("nan"),
+        **{f"latent_{k}": v for k, v in latent.items()},
+    }
+    if gate["numeric"] is not None:
+        metrics["gate_numeric"] = float(gate["numeric"])
+
+    tags = {"modelo": f"ae-{cfg.arch}", "tipo": "entrenamiento", "stage": "ae-reconstruccion", "seed": cfg.seed}
+    params = {**config_to_params(cfg, version), "gate_thresholds": json.dumps(gate["thresholds"], sort_keys=True),
+              **{f"runtime_{k}": v for k, v in runtime_versions().items()}}
+    frames = {
+        "reconstruction.parquet": pd.concat(tables.values(), ignore_index=True) if tables else pd.DataFrame(),
+        "latent.parquet": pd.concat(
+            [latent_table(zs[s], w, models.d_aux, s) for s, w in (("train", ctx.tr), ("valid", ctx.va), ("test", ctx.te)) if s in zs],
+            ignore_index=True,
+        ),
+        "diagnostics.parquet": pd.DataFrame(
+            [{"split": s, "serie": k, "metric": m, "value": v} for s, per in results.items() if s in ("valid", "test") for k, ms in per.items() for m, v in ms.items()]
+        ),
+    }
+    run_id = _log_run(name, tags, params, metrics, frames, files={"encoder.keras": enc_path, "decoder_mp.keras": dec_path},
+                      step_metrics=curve)
+    log.info("Run %s registrado (seed=%d, gate=%s)", run_id, cfg.seed, gate["gate_pass"])
+    return {
+        "run_id": run_id, "name": name, "seed": cfg.seed, "gate": gate,
+        "test_rmse_mean": metrics["recon_rmse_mean_test"], "model_dir": seed_dir,
+        "models": models,
+    }
+
+
+def run_reference(grid: aed.HourlyGrid, cfg: AEConfig, version: int) -> None:
+    spans = aed.holdout_spans(grid.index)
+    valid_span = default_valid_span(grid, spans["train"])
+    ctx = make_context(grid, cfg.length, spans["train"], valid_span, spans["test"])
+    kinds = {"ref-mean": "mean", f"ref-pca-d{cfg.d}": "pca"}
+    for name, kind in kinds.items():
+        metrics: dict[str, float] = {}
+        tables = {}
+        for split, win in (("valid", ctx.va), ("test", ctx.te)):
+            if win is None or len(win) == 0:
+                continue
+            per_series, table = split_metrics(grid, win, aed.mp_to_ugm3(reference_recon_z(kind, ctx, win, cfg.d), ctx.norm))
+            prefix = "recon_" if split == "test" else "valid_recon_"
+            metrics.update(_flatten_metrics(prefix, per_series))
+            metrics[f"recon_rmse_mean_{split}"] = _mean_metric(per_series)
+            tables[split] = table.assign(split=split)
+        tags = {"modelo": name, "tipo": "referencia", "stage": "ae-reconstruccion"}
+        params = {"tipo": "referencia", "L": cfg.length, "d": cfg.d, "version": version, "referencia": name}
+        frames = {"reconstruction.parquet": pd.concat(tables.values(), ignore_index=True) if tables else pd.DataFrame()}
+        _log_run(name, tags, params, metrics, frames)
+        log.info("Referencia %s registrada", name)
+
+
+def _cfg_from_run_params(params: dict) -> AEConfig:
+    """Reconstruye la configuración del AE desde los params de su run en MLflow (strings)."""
+    def as_bool(value) -> bool:
+        return str(value).lower() in ("true", "1", "yes")
+
+    return AEConfig(
+        arch=params["arch"], length=int(params["length"]), d=int(params["d"]), d_aux=int(params["d_aux"]),
+        hidden=int(params["hidden"]), dropout=float(params["dropout"]), lr=float(params["lr"]),
+        batch_size=int(params["batch_size"]), w_mp=float(params["w_mp"]), w_aux=float(params["w_aux"]),
+        aux_input=as_bool(params["aux_input"]), seed=int(params["seed"]),
+    )
+
+
+def load_ae_for_dmd(args, ae_run_id: str):
+    """Carga encoder/decoder del AE para el pase de DMD. Devuelve `(cfg, models, gate_pass)`.
+
+    - Con `--ae-dir` (pruebas): lee `encoder.keras`, `decoder_mp.keras` y `config.json`
+      de ese directorio local.
+    - Sin `--ae-dir` (camino de respaldo, tarea 5.7): usa el estado de MLflow ya
+      descargado en `--mlflow-dir` (desde `sinca-mlflow/_mlflow/`) con `analysis/load.py`,
+      toma la configuración de los params del run y la compuerta de su métrica `gate_pass`.
+    """
+    import keras
+    from ae import models as aeml
+
+    if args.ae_dir:
+        with open(os.path.join(args.ae_dir, "config.json"), encoding="utf-8") as handle:
+            saved = json.load(handle)
+        cfg = AEConfig(**saved["cfg"])
+        gate_pass = bool(saved.get("gate", {}).get("gate_pass"))
+        enc_path = os.path.join(args.ae_dir, "encoder.keras")
+        dec_path = os.path.join(args.ae_dir, "decoder_mp.keras")
+    else:
+        from mlflow.tracking import MlflowClient
+        from analysis import load as analysis_load
+
+        run = MlflowClient().get_run(ae_run_id)
+        cfg = _cfg_from_run_params(run.data.params)
+        gate_pass = bool(run.data.metrics.get("gate_pass", 0.0))
+        state = analysis_load.ensure_state(data_dir=args.mlflow_dir)
+        enc_path = analysis_load.artifact_path(state, ae_run_id, "encoder.keras")
+        dec_path = analysis_load.artifact_path(state, ae_run_id, "decoder_mp.keras")
+        if not enc_path or not dec_path:
+            raise RuntimeError(f"El run {ae_run_id} no tiene encoder.keras/decoder_mp.keras como artefactos.")
+
+    encoder = keras.saving.load_model(enc_path, compile=False)
+    decoder = keras.saving.load_model(dec_path, compile=False)
+    models = aeml.AEModels(full=None, encoder=encoder, decoder_mp=decoder, decoder_aux=None,
+                           d=cfg.d, d_aux=cfg.resolved_d_aux(), aux_input_dim=0)
+    return cfg, models, gate_pass
+
+
+def run_dmd_pass(grid: aed.HourlyGrid, cfg: AEConfig, args, ae_run_id: str, models, sinca: pd.DataFrame, open_meteo, feriados) -> None:
+    """Pase de DMD sobre el latente congelado de `models`; registra runs por serie y el operador.
+
+    No comprueba la compuerta: el llamador decide (`run()` lo hace antes de llamar).
+    """
+    from mlflow.tracking import MlflowClient
+    from ae import models as aeml
+
+    spans = aed.holdout_spans(grid.index)
+    valid_span = default_valid_span(grid, spans["train"])
+    ctx = make_context(grid, cfg.length, spans["train"], valid_span, spans["test"])
+
+    def latent(win):
+        # `encode` ya recorta la entrada auxiliar según `aux_input`.
+        return aeml.encode(models, cfg, win.x_mp, win.x_aux)
+
+    z_tr = latent(ctx.tr)
+    segs_tr = dmdm.split_segments(z_tr, ctx.tr.end_positions)
+    fit_full = dmdm.fit_dmd(segs_tr, None)
+    trunc_rank = max(2, cfg.d // 2)
+    fit_trunc = dmdm.fit_dmd(segs_tr, trunc_rank)
+
+    lin_test = dmdm.linearizability(fit_full["K"], dmdm.split_segments(latent(ctx.te), ctx.te.end_positions))
+    lin_trunc = dmdm.linearizability(fit_trunc["K"], dmdm.split_segments(latent(ctx.te), ctx.te.end_positions))
+    lin_valid = {}
+    if ctx.va is not None and len(ctx.va):
+        lin_valid = dmdm.linearizability(fit_full["K"], dmdm.split_segments(latent(ctx.va), ctx.va.end_positions))
+
+    z_te = latent(ctx.te)
+    z_pred = dmdm.predict_latent(fit_full["K"], z_te, dmdm.HORIZON_FORECAST)
+    decoded = aed.mp_to_ugm3(aeml.decode_mp(models, z_pred), ctx.norm)
+    forecast = dmdm.forecast_from_decoded(decoded)  # [N, 6]
+
+    features = build_features(sinca, open_meteo, feriados)
+    targets = features[["timestamp", "estacion", "pollutant", "target"]]
+    pieces = []
+    for c, (_, station, pollutant) in enumerate(aed.mp_channels()):
+        pieces.append(pd.DataFrame({
+            "timestamp": ctx.te.index, "estacion": station, "pollutant": pollutant, "y_pred": forecast[:, c],
+        }))
+    preds = pd.concat(pieces, ignore_index=True).merge(targets, on=["timestamp", "estacion", "pollutant"], how="inner")
+    preds = preds.rename(columns={"target": "y_true"})
+    preds["split"] = "test"
+    preds = preds[["timestamp", "estacion", "pollutant", "y_true", "y_pred", "split"]]
+
+    for station, pollutant in sorted({(s, p) for _, s, p in aed.mp_channels()}):
+        frame = preds[(preds["estacion"] == station) & (preds["pollutant"] == pollutant)]
+        name = mlflow_log.run_name(station, f"ae-{cfg.arch}-dmd", args.version)
+        metrics = {f"test_{k}": v for k, v in evaluate_predictions(frame, args.alpha).items()} if not frame.empty else {}
+        tags = {"serie": f"{station}|{pollutant}", "modelo": f"ae-{cfg.arch}-dmd", "stage": "ae-dmd", "tipo": "entrenamiento", "ae_run_id": ae_run_id}
+        params = {"estacion": station, "pollutant": pollutant, "version": args.version, "tipo": "entrenamiento", "alpha": args.alpha, "rank": "full"}
+        frames = {
+            "predictions.parquet": frame,
+            "zone_icap.parquet": zone_icap(frame) if not frame.empty else pd.DataFrame(columns=["timestamp", "icap_true", "icap_pred"]),
+            "rolling_scores.parquet": pd.DataFrame({"window_index": pd.Series(dtype=int), "rmse": pd.Series(dtype=float)}),
+        }
+        _log_run(name, tags, params, metrics, frames)
+
+    client = MlflowClient()
+    ae_metrics = {f"dmd_latent_rmse_{k.rsplit('_', 1)[-1]}": v for k, v in lin_test.items()}
+    ae_metrics.update({f"dmd_valid_latent_rmse_{k.rsplit('_', 1)[-1]}": v for k, v in lin_valid.items()})
+    ae_metrics.update({f"dmd_trunc_latent_rmse_{k.rsplit('_', 1)[-1]}": v for k, v in lin_trunc.items()})
+    ae_metrics["dmd_trunc_rank"] = float(trunc_rank)
+    for key, value in ae_metrics.items():
+        if np.isfinite(value):
+            client.log_metric(ae_run_id, key, float(value))
+
+    with tempfile.TemporaryDirectory(prefix="sinca-dmd-") as tmp:
+        full_path = os.path.join(tmp, "dmd_operator.npz")
+        trunc_path = os.path.join(tmp, "dmd_operator_trunc.npz")
+        np.savez(full_path, **dmdm.dmd_operator_arrays(fit_full))
+        np.savez(trunc_path, **dmdm.dmd_operator_arrays(fit_trunc))
+        client.log_artifact(ae_run_id, full_path)
+        client.log_artifact(ae_run_id, trunc_path)
+    log.info("Pase DMD registrado para %s (linealizabilidad test: %s)", ae_run_id, lin_test)
+
+
+# --- Búsqueda ----------------------------------------------------------------
+
+# Espacio por arquitectura y trials por defecto (design.md D6, punto de control 10.3).
+# `d` queda fijo en la búsqueda (`--d`); `d ∈ {8, 32}` se barre en 11.2. El GRU solo a L=24.
+SEARCH_SPACE: dict[str, dict[str, list]] = {
+    "linear_decoder": {"length": [24, 72], "hidden": [32, 64, 128], "dropout": [0.0, 0.1, 0.2],
+                       "lr": [1e-3, 3e-3], "batch_size": [64, 128]},
+    "mlp": {"length": [24, 72], "hidden": [32, 64, 128], "dropout": [0.0, 0.1, 0.2],
+            "lr": [1e-3, 3e-3], "batch_size": [64, 128]},
+    "conv1d": {"length": [24, 72], "hidden": [32, 64, 128], "dropout": [0.0, 0.1, 0.2],
+               "lr": [1e-3, 3e-3], "batch_size": [128]},
+    "gru": {"length": [24], "hidden": [32, 64], "dropout": [0.0, 0.1, 0.2],
+            "lr": [1e-3, 3e-3], "batch_size": [128]},
+}
+DEFAULT_SEARCH_TRIALS: dict[str, int] = {"linear_decoder": 12, "mlp": 12, "conv1d": 6, "gru": 4}
+
+
+def sample_choice(arch: str, rng: np.random.Generator) -> dict:
+    """Una muestra del espacio de `arch` (sin `d`, que viene de `--d`)."""
+    return {name: values[int(rng.integers(len(values)))] for name, values in SEARCH_SPACE[arch].items()}
+
+
+def _search_scores(grid: aed.HourlyGrid, cfg: AEConfig, models, ctx: Context) -> tuple[float, float]:
+    """Score de un trial sobre una ventana de valid: (razón RMSE_AE/RMSE_PCA media, RMSE absoluto medio)."""
+    from ae import models as aeml
+
+    mp_z, _ = aeml.predict_mp_aux(models, cfg, ctx.va.x_mp, ctx.va.x_aux)
+    recon = aed.mp_to_ugm3(mp_z, ctx.norm)
+    pca = aed.mp_to_ugm3(reference_recon_z("pca", ctx, ctx.va, cfg.d), ctx.norm)
+    truth = grid.mp.to_numpy()[np.add.outer(ctx.va.end_positions - cfg.length + 1, np.arange(cfg.length))]
+    real = ctx.va.mp_real
+    ratio = aem.score_window(truth, recon, pca, real)["score"]
+    err = (recon - truth)[real]
+    rmse = float(np.sqrt(np.mean(err**2))) if err.size else float("nan")
+    return ratio, rmse
+
+
+def _write_search(best: dict, out_path: str) -> None:
+    """Escribe el JSON de búsqueda (historial completo) de forma atómica."""
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(best, handle, ensure_ascii=False, indent=2, default=str)
+    os.replace(tmp, out_path)
+
+
+def run_search(grid: aed.HourlyGrid, args, windows: list[dict] | None = None, out_path: str | None = None) -> dict:
+    """Búsqueda aleatoria por arquitectura (D6, punto de control 10.3).
+
+    - Score de selección: media sobre las ventanas de valid de `RMSE_AE / RMSE_PCA(d, L)`
+      (`< 1` = gana a PCA). Se registra junto al RMSE absoluto de cada trial.
+    - Trials por arquitectura: `--search-trials` si se pasa, si no `DEFAULT_SEARCH_TRIALS`.
+    - Tope de tiempo `--search-time-budget` (s): al excederlo no se lanzan más trials.
+    - Si `out_path` se pasa, el JSON se escribe tras cada trial (historial incremental).
+    """
+    rng = np.random.default_rng(args.seed)
+    windows = windows if windows is not None else make_rolling_windows()
+    spans = aed.rolling_spans(grid.index, windows)
+    pairs = [(w, s) for w, s in zip(windows, spans) if s["train"][1] > s["train"][0] and s["valid"][1] > s["valid"][0]]
+    chosen = _select_windows(pairs, args.search_windows)
+    started = time.perf_counter()
+    best: dict[str, dict] = {}
+
+    def snapshot() -> dict:
+        return {arch: _arch_summary(best[arch]) for arch in best}
+
+    for arch in args.archs:
+        trials = args.search_trials if args.search_trials is not None else DEFAULT_SEARCH_TRIALS[arch]
+        history: list[dict] = []
+        best[arch] = {"best": None, "history": history}
+        if out_path:
+            _write_search(snapshot(), out_path)  # el JSON existe aunque el tope corte antes del primer trial
+        for trial in range(trials):
+            if time.perf_counter() - started > args.search_time_budget:
+                log.warning("Tope de tiempo de búsqueda (%ss) alcanzado: %s se corta en trial %d/%d",
+                            args.search_time_budget, arch, trial, trials)
+                break
+            choice = sample_choice(arch, rng)
+            cfg = AEConfig(arch=arch, length=choice["length"], d=args.d, hidden=choice["hidden"], dropout=choice["dropout"],
+                           lr=choice["lr"], batch_size=choice["batch_size"], w_mp=args.w_mp, w_aux=args.w_aux,
+                           aux_input=args.aux_input, seed=args.seed + trial)
+            ratios, rmses = [], []
+            for _, span_pair in chosen:
+                ctx = make_context(grid, cfg.length, span_pair["train"], span_pair["valid"])
+                if len(ctx.tr) < 24 or ctx.va is None or len(ctx.va) == 0:
+                    continue
+                models, _ = fit_context(ctx, cfg, args.search_epochs, args.patience)
+                ratio, rmse = _search_scores(grid, cfg, models, ctx)
+                ratios.append(ratio)
+                rmses.append(rmse)
+            score = float(np.nanmean(ratios)) if ratios else float("nan")
+            rmse_mean = float(np.nanmean(rmses)) if rmses else float("nan")
+            history.append({"trial": trial, "config": cfg.to_dict(), "score": score, "rmse_abs": rmse_mean})
+            log.info("  %s trial %d/%d score(razón PCA)=%.4f rmse=%.4f %s", arch, trial + 1, trials, score, rmse_mean, cfg.to_dict())
+            best[arch] = _arch_summary(best[arch])
+            if out_path:
+                _write_search(snapshot(), out_path)
+    return {arch: best[arch] for arch in best}
+
+
+def _arch_summary(entry: dict) -> dict:
+    """`{"best": mejor trial válido por score, "history": ...}` para una arquitectura."""
+    history = entry["history"]
+    finite = [h for h in history if np.isfinite(h["score"])]
+    return {"best": min(finite, key=lambda h: h["score"]) if finite else None, "history": history}
+
+
+# --- Orquestación ------------------------------------------------------------
+
+
+def _load_data(args):
+    data = load_validated(args.data_bucket, client=None, local_dir=args.local_validated_dir)
+    return data
+
+
+def _config_from_args(args, arch: str, seed: int) -> AEConfig:
+    overrides = {}
+    if args.search_report:
+        with open(args.search_report, encoding="utf-8") as handle:
+            report = json.load(handle)
+        best = (report.get(arch) or {}).get("best")
+        if best:
+            overrides = best["config"]
+    base = dict(arch=arch, length=args.length, d=args.d, d_aux=args.d_aux, hidden=args.hidden, dropout=args.dropout,
+                lr=args.lr, batch_size=args.batch_size, w_mp=args.w_mp, w_aux=args.w_aux, aux_input=args.aux_input, seed=seed)
+    base.update({k: v for k, v in overrides.items() if k in base and k != "seed"})
+    return AEConfig(**base)
+
+
+def run(args) -> int:
+    model_dir = args.model_dir or os.environ.get("SM_MODEL_DIR", "model")
+    output_dir = args.output_dir or os.environ.get("SM_OUTPUT_DATA_DIR", "output")
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    log.info("Runtime: %s", runtime_versions())
+    data = _load_data(args)
+    grid = aed.build_grid(data["sinca"], data["open_meteo"], data["feriados"])
+    log.info("Grilla: %d horas, %d canales MP, %d auxiliares; RSS pico tras datos: %.0f MB",
+             len(grid.index), aed.N_MP, aed.N_AUX, peak_rss_mb())
+
+    if args.mode == "search":
+        path = os.path.join(output_dir, "ae_search.json")
+        best = run_search(grid, args, out_path=path)
+        log.info("Búsqueda escrita en %s", path)
+        return 0
+
+    if not args.no_upload:
+        mlflow_log.download_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None)
+    mlflow_log.configure(args.mlflow_dir, experiment=args.experiment)
+
+    if args.mode == "final":
+        for seed in args.seeds:
+            cfg = _config_from_args(args, args.arch, seed)
+            result = run_final(grid, cfg, args, args.version, model_dir)
+            # Pase DMD encadenado en el mismo job (D7.6): semilla 0 y solo si la compuerta aprueba.
+            if args.dmd_after_final and seed == DMD_SEED:
+                if result["gate"]["gate_pass"]:
+                    run_dmd_pass(grid, cfg, args, result["run_id"], result["models"],
+                                 data["sinca"], data["open_meteo"], data["feriados"])
+                else:
+                    log.info("Compuerta no aprobada: no se encadena el pase de DMD (seed %d).", seed)
+    elif args.mode == "reference":
+        run_reference(grid, _config_from_args(args, args.arch, 0), args.version)
+    elif args.mode == "dmd":
+        if not args.ae_run_id:
+            raise SystemExit("--mode dmd requiere --ae-run-id (y opcionalmente --ae-dir para pruebas)")
+        cfg, models, gate_pass = load_ae_for_dmd(args, args.ae_run_id)
+        if not gate_pass:
+            raise SystemExit("La compuerta no aprobó este AE: no se aplica el pase de DMD.")
+        run_dmd_pass(grid, cfg, args, args.ae_run_id, models, data["sinca"], data["open_meteo"], data["feriados"])
+
+    if not args.no_upload:
+        mlflow_log.upload_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None)
+    return 0
+
+
+def _flag(name: str) -> list[str]:
+    return [f"--{name}", f"--{name.replace('-', '_')}"]
+
+
+def _gate_thresholds(text: str | None) -> dict | None:
+    """Sobreescribe umbrales de la compuerta: `k=v,k=v` (sin quoting) o JSON. Vacío = por defecto del código."""
+    if not text:
+        return None
+    text = text.strip()
+    if text.startswith("{"):
+        return json.loads(text)
+    out: dict[str, float] = {}
+    for pair in text.split(","):
+        key, sep, value = pair.partition("=")
+        if not sep or key.strip() not in aem.DEFAULT_GATE_THRESHOLDS:
+            raise argparse.ArgumentTypeError(f"Umbral desconocido o mal formado: {pair!r} (claves: {sorted(aem.DEFAULT_GATE_THRESHOLDS)})")
+        out[key.strip()] = float(value)
+    return out
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Autoencoders con rama auxiliar y pase de DMD (ae-reconstruccion).")
+    parser.add_argument(*_flag("mode"), choices=("search", "final", "reference", "dmd"), default="final")
+    parser.add_argument(*_flag("data-bucket"), default=os.environ.get("DATA_BUCKET", "sinca-data"))
+    parser.add_argument(*_flag("mlflow-bucket"), default=os.environ.get("MLFLOW_BUCKET", mlflow_log.MLFLOW_BUCKET_DEFAULT))
+    parser.add_argument(*_flag("mlflow-prefix"), default=os.environ.get("MLFLOW_PREFIX", mlflow_log.MLFLOW_PREFIX_DEFAULT))
+    parser.add_argument(*_flag("mlflow-dir"), default=os.environ.get("MLFLOW_DIR", "/opt/ml/mlflow"))
+    parser.add_argument(*_flag("experiment"), default=os.environ.get("MLFLOW_EXPERIMENT", DEFAULT_EXPERIMENT))
+    parser.add_argument(*_flag("local-validated-dir"), default=os.environ.get("LOCAL_VALIDATED_DIR"))
+    parser.add_argument(*_flag("model-dir"), default=os.environ.get("SM_MODEL_DIR"))
+    parser.add_argument(*_flag("output-dir"), default=os.environ.get("SM_OUTPUT_DATA_DIR"))
+    parser.add_argument(*_flag("arch"), choices=ARCHITECTURES, default="mlp")
+    parser.add_argument(*_flag("archs"), nargs="*", choices=ARCHITECTURES, default=list(ARCHITECTURES))
+    parser.add_argument(*_flag("length"), type=int, choices=LENGTH_CHOICES, default=24)
+    # SageMaker pasa los hiperparámetros de una letra como `-d` (no `--d`): se aceptan ambas formas.
+    parser.add_argument("-d", "--d", type=int, choices=LATENT_CHOICES, default=16)
+    parser.add_argument(*_flag("d-aux"), type=int, default=None)
+    parser.add_argument(*_flag("hidden"), type=int, default=64)
+    parser.add_argument(*_flag("dropout"), type=float, default=0.1)
+    parser.add_argument(*_flag("lr"), type=float, default=1e-3)
+    parser.add_argument(*_flag("batch-size"), type=int, default=128)
+    parser.add_argument(*_flag("w-mp"), type=float, default=1.0)
+    parser.add_argument(*_flag("w-aux"), type=float, default=0.1)
+    parser.add_argument(*_flag("aux-input"), type=lambda s: s.lower() in ("1", "true", "yes"), default=True)
+    parser.add_argument(*_flag("seeds"), type=lambda s: tuple(int(x) for x in s.split(",")), default=SEEDS_DEFAULT)
+    parser.add_argument(*_flag("seed"), type=int, default=0)
+    parser.add_argument(*_flag("version"), type=int, default=1)
+    parser.add_argument(*_flag("alpha"), type=float, default=1.0)
+    parser.add_argument(*_flag("epochs"), type=int, default=60)
+    parser.add_argument(*_flag("search-epochs"), type=int, default=15)
+    parser.add_argument(*_flag("patience"), type=int, default=8)
+    parser.add_argument(*_flag("search-trials"), type=int, default=None,
+                        help="Trials por arquitectura; sin valor usa DEFAULT_SEARCH_TRIALS (12/12/6/4).")
+    parser.add_argument(*_flag("search-time-budget"), type=float, default=10800.0,
+                        help="Tope de tiempo de la búsqueda en segundos (no lanza trials nuevos al excederlo).")
+    parser.add_argument(*_flag("search-windows"), type=int, default=4)
+    parser.add_argument(*_flag("search-report"), default=None, help="JSON de `search`: usa la mejor config de --arch.")
+    parser.add_argument(*_flag("gate-thresholds"), type=_gate_thresholds, default=None, help="JSON con umbrales; vacío = solo reporta.")
+    parser.add_argument(*_flag("dmd-after-final"), type=lambda s: s.lower() in ("1", "true", "yes"), default=True,
+                        help="Encadena el pase de DMD tras el entrenamiento final (semilla 0) si la compuerta aprueba.")
+    parser.add_argument(*_flag("ae-dir"), default=None, help="Solo pruebas: directorio local con encoder.keras/decoder_mp.keras/config.json.")
+    parser.add_argument(*_flag("ae-run-id"), default=None)
+    parser.add_argument(*_flag("no-upload"), action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    args = parse_args(argv)
+    return run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

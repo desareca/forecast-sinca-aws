@@ -42,6 +42,42 @@ DIAGNOSTIC_FILES = (
     "zone_icap.parquet",
     "rolling_scores.parquet",
 )
+# Artefactos de los autoencoders (change ae-reconstruccion): run conjunto de AE.
+AE_FILES = (
+    "reconstruction.parquet",
+    "latent.parquet",
+    "diagnostics.parquet",
+)
+AE_STAGE = "ae-reconstruccion"
+REFERENCE_TIPO = "referencia"
+
+
+# --- Clasificación de runs ---------------------------------------------------
+
+
+def is_series_run(run: dict) -> bool:
+    """Run de entrenamiento **por serie** (baseline o pase DMD por serie).
+
+    Excluye persistencia, referencias (`tipo=referencia`) y los runs conjuntos de
+    AE (sin `estacion`/`pollutant`, `stage=ae-reconstruccion`). Lee el **param**
+    `tipo` (y el tag `stage`) para que las vistas por serie no los mezclen.
+    """
+    params = run.get("params", {})
+    tags = run.get("tags", {})
+    if params.get("tipo") in ("persistencia", REFERENCE_TIPO):
+        return False
+    if tags.get("stage") == AE_STAGE:
+        return False
+    return bool(params.get("estacion") and params.get("pollutant"))
+
+
+def is_ae_run(run: dict) -> bool:
+    """Run conjunto de autoencoder (una sola corrida para las 6 series)."""
+    return run.get("tags", {}).get("stage") == AE_STAGE and run.get("tags", {}).get("modelo", "").startswith("ae-")
+
+
+def is_reference_run(run: dict) -> bool:
+    return run.get("params", {}).get("tipo") == REFERENCE_TIPO
 
 
 # --- Estado local ------------------------------------------------------------
@@ -148,17 +184,33 @@ def _artifact_dir(state_dir: str, run_id: str) -> str | None:
     return hits[0] if hits else None
 
 
-def load_artifacts(state_dir: str, run_id: str) -> dict[str, pd.DataFrame | None]:
-    """Lee los 3 parquet de diagnóstico de un run (None si falta)."""
+def artifact_path(state_dir: str, run_id: str, name: str) -> str | None:
+    """Ruta local de un artefacto del run (None si no existe). Sirve también a los notebooks."""
     directory = _artifact_dir(state_dir, run_id)
-    out: dict[str, pd.DataFrame | None] = {name: None for name in DIAGNOSTIC_FILES}
     if not directory:
-        return out
-    for name in DIAGNOSTIC_FILES:
-        path = os.path.join(directory, name)
-        if os.path.exists(path):
+        return None
+    path = os.path.join(directory, name)
+    return path if os.path.exists(path) else None
+
+
+def load_artifacts(state_dir: str, run_id: str) -> dict[str, pd.DataFrame | None]:
+    """Lee los parquet de diagnóstico y de autoencoder de un run (None si faltan)."""
+    out: dict[str, pd.DataFrame | None] = {name: None for name in (*DIAGNOSTIC_FILES, *AE_FILES)}
+    for name in out:
+        path = artifact_path(state_dir, run_id, name)
+        if path:
             out[name] = pd.read_parquet(path)
     return out
+
+
+def ae_runs(runs: list[dict]) -> list[dict]:
+    """Runs conjuntos de autoencoder, ordenados por nombre."""
+    return sorted((run for run in runs if is_ae_run(run)), key=lambda run: run["run_name"])
+
+
+def ae_metric(run: dict, prefix: str) -> dict[str, float]:
+    """Métricas de un run que empiezan por `prefix`, sin el prefijo (p. ej. `recon_rmse_`)."""
+    return {key[len(prefix):]: value for key, value in run["metrics"].items() if key.startswith(prefix)}
 
 
 def has_diagnostics(state_dir: str, run_id: str) -> bool:
@@ -232,7 +284,7 @@ def candidates_by_model(
     out: dict[str, pd.DataFrame] = {}
     for run in runs:
         params = run["params"]
-        if params.get("tipo") == "persistencia":
+        if not is_series_run(run):
             continue
         if params.get("estacion") != station or params.get("pollutant") != pollutant:
             continue
@@ -259,7 +311,7 @@ def zone_icap_from_runs(state_dir: str, runs: list[dict], split: str = "test") -
 
     frames: list[pd.DataFrame] = []
     for run in runs:
-        if run["params"].get("tipo") == "persistencia":
+        if not is_series_run(run):
             continue
         artifacts = load_artifacts(state_dir, run["run_id"])
         predictions = artifacts["predictions.parquet"]
@@ -293,7 +345,7 @@ def available_model_versions(runs: list[dict]) -> list[tuple[str, int]]:
     pairs: set[tuple[str, int]] = set()
     for run in runs:
         params = run["params"]
-        if params.get("tipo") == "persistencia":
+        if not is_series_run(run):
             continue
         version = params.get("version")
         if version is None:
@@ -318,7 +370,7 @@ def zone_icap_by_model_version(
         subset = [
             run
             for run in runs
-            if run["params"].get("tipo") != "persistencia"
+            if is_series_run(run)
             and model_family(run) == model
             and str(run["params"].get("version")) == str(version)
         ]
@@ -364,7 +416,7 @@ def rmse_by_model(
 
     for run in runs:
         params = run["params"]
-        if params.get("tipo") == "persistencia":
+        if not is_series_run(run):
             continue
         if params.get("estacion") != station or params.get("pollutant") != pollutant:
             continue
@@ -412,7 +464,7 @@ def rmse_summary(runs: list[dict]) -> pd.DataFrame:
     rows: list[dict] = []
     for run in runs:
         params = run["params"]
-        if params.get("tipo") == "persistencia":
+        if not is_series_run(run):
             continue
         station = params.get("estacion")
         pollutant = params.get("pollutant")
@@ -443,8 +495,6 @@ def series_options(runs: list[dict]) -> list[tuple[str, str]]:
     options = {
         (run["params"].get("estacion"), run["params"].get("pollutant"))
         for run in runs
-        if run["params"].get("tipo") != "persistencia"
-        and run["params"].get("estacion")
-        and run["params"].get("pollutant")
+        if is_series_run(run)
     }
     return sorted(options)

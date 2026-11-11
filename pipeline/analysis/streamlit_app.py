@@ -26,7 +26,7 @@ for _path in (str(_PIPELINE), str(_HERE)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from analysis import load, plots  # noqa: E402
+from analysis import load, plots, plots_ae  # noqa: E402
 
 FIXTURE_STATE = _HERE / "fixtures" / "state"
 
@@ -95,6 +95,90 @@ def _metrics_table(runs: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+AE_PARAM_KEYS = ("arch", "length", "d", "d_aux", "hidden", "dropout", "lr", "w_mp", "w_aux", "aux_input", "seed", "version")
+
+
+def _ae_arch(run: dict) -> str:
+    """Familia del AE: param `arch`, o tag `modelo` sin el prefijo `ae-`."""
+    return run["params"].get("arch") or run.get("tags", {}).get("modelo", "").removeprefix("ae-") or "—"
+
+
+def _ae_view(state_dir: str, runs: list[dict]) -> None:
+    """Panel de un run conjunto de autoencoder: compuerta, reconstrucción, aplanamiento, DMD."""
+    ae = load.ae_runs(runs)
+    if not ae:
+        st.info("No hay runs de autoencoder en el estado de MLflow.")
+        return
+    archs = sorted({_ae_arch(r) for r in ae})
+    arch_sel = st.sidebar.selectbox("Familia (arquitectura)", ["Todas", *archs], key="ae_arch")
+    pool = [r for r in ae if arch_sel == "Todas" or _ae_arch(r) == arch_sel]
+    versions = sorted({str(r["params"].get("version", "—")) for r in pool})
+    version_sel = st.sidebar.selectbox("Versión", ["Todas", *versions], key="ae_version")
+    if version_sel != "Todas":
+        pool = [r for r in pool if str(r["params"].get("version", "—")) == version_sel]
+    if not pool:
+        st.info("Ningún run de autoencoder coincide con los filtros.")
+        return
+    labels = [f"{run['run_name']} · {run['run_id'][:8]}" for run in pool]
+    run = pool[labels.index(st.sidebar.selectbox("Run de autoencoder", labels, key="ae_run"))]
+    artifacts = _artifacts(state_dir, run["run_id"])
+    metrics = run["metrics"]
+
+    st.title("SINCA — Autoencoders (reconstrucción)")
+    gate = metrics.get("gate_pass")
+    beats = metrics.get("gate_beats_pca")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Compuerta (relativa, + numérica si hay umbrales)", "—" if gate is None else ("aprobada" if gate else "no aprobada"))
+    c2.metric("Supera PCA(d) en todas las series", "sí" if beats else "no" if beats is not None else "—")
+    ablation = metrics.get("ablation_zaux_delta_rmse_test")
+    c3.metric("Ablación z_aux (Δ RMSE MP, test)", f"{ablation:.3f}" if ablation is not None else "—")
+
+    params = {key: run["params"].get(key) for key in AE_PARAM_KEYS if key in run["params"]}
+    with st.expander("Parámetros del run"):
+        st.dataframe(pd.DataFrame([params]), hide_index=True, width="stretch")
+
+    recon = artifacts["reconstruction.parquet"]
+    diagnostics = artifacts["diagnostics.parquet"]
+    if recon is None or recon.empty:
+        st.warning("Este run no tiene `reconstruction.parquet` persistido.")
+        return
+
+    tab_recon, tab_flat, tab_lin, tab_ref = st.tabs(
+        ["Real vs reconstruido", "Aplanamiento", "Linealizabilidad (DMD)", "Métricas vs referencias"]
+    )
+    with tab_recon:
+        serie = st.selectbox("Serie", sorted(recon["serie"].unique()), key="ae_serie")
+        stamps = recon.loc[recon["serie"] == serie, "timestamp"]
+        first, last = stamps.min(), stamps.max()
+        span = st.slider(
+            "Tramo a ver",
+            min_value=first.to_pydatetime(), max_value=last.to_pydatetime(),
+            value=(max(first, last - pd.Timedelta(days=14)).to_pydatetime(), last.to_pydatetime()),
+            format="YYYY-MM-DD HH:mm",
+        )
+        st.plotly_chart(plots_ae.reconstruction_figure(recon, serie, span[0], span[1]), width="stretch")
+    with tab_flat:
+        if diagnostics is None or diagnostics.empty:
+            st.info("Sin `diagnostics.parquet` en este run.")
+        else:
+            st.plotly_chart(plots_ae.flattening_figure(diagnostics, "test"), width="stretch")
+            st.plotly_chart(plots_ae.error_by_level_figure(diagnostics, "test"), width="stretch")
+    with tab_lin:
+        if not any(key.startswith("dmd_") for key in metrics):
+            st.info("Este AE aún no tiene pase de DMD (métricas `dmd_*`).")
+        else:
+            st.plotly_chart(plots_ae.linearizability_figure(metrics), width="stretch")
+            st.caption("Pronóstico informativo por serie: los runs `ae-<arq>-dmd` se comparan en la vista de pronóstico por serie.")
+    with tab_ref:
+        rows = [
+            {"run": r["run_name"], "test_rmse_medio": r["metrics"].get("recon_rmse_mean_test"),
+             "valid_rmse_medio": r["metrics"].get("recon_rmse_mean_valid")}
+            for r in runs
+            if load.is_reference_run(r) or load.is_ae_run(r)
+        ]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+
 def main() -> None:
     st.title("SINCA — Análisis de modelos")
     st.caption(
@@ -113,7 +197,12 @@ def main() -> None:
         st.warning("No hay runs en el estado de MLflow.")
         st.stop()
 
-    training_runs = [run for run in runs if run["params"].get("tipo") != "persistencia"]
+    vista = st.sidebar.radio("Vista", ["Pronóstico por serie", "Autoencoders (reconstrucción)"])
+    if vista == "Autoencoders (reconstrucción)":
+        _ae_view(state_dir, runs)
+        return
+
+    training_runs = [run for run in runs if load.is_series_run(run)]
     if not training_runs:
         st.warning("No hay runs de entrenamiento (solo persistencia).")
         st.stop()

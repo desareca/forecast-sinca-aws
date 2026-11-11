@@ -152,3 +152,8 @@ y versionado, y no hay "quick setup" que cree recursos de red sin avisar (ver
   en local/CI). Lección: `~/.on_start` no reinstala herramientas del flujo de la
   máquina/CI, solo lo que el Space usa de verdad (guard de aws-cli + repo).
   Instalar CLIs no usadas es justo el modo de fallo que ató el arranque.
+- **Librerías pesadas (TensorFlow) en el Space**: la imagen trae su propia versión
+  (TF 2.18 en `sagemaker-distribution-cpu` 3.2.0). `pip install` sobre el Python base
+  rompe dependencias de la imagen y no persiste al reiniciar. Usar un venv en
+  `/home/sagemaker-user/` (el disco que persiste) con la versión que coincida con la
+  imagen de training, y registrar su kernel de JupyterLab.

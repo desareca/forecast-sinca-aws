@@ -115,3 +115,10 @@ parámetros y artefactos; el registro decide dónde se versiona el modelo.
   `{estacion}-{modelo}-v{n}` no distingue contaminantes; dos series de la misma
   estación (ej. pm25/pm10) comparten nombre. Distinguirlas con un tag/param extra
   (ej. `pollutant`).
+- **Los runs de humo no van al experimento compartido**: los de prueba (`version = 99`)
+  quedaron en `sinca-baseline` y contaminaron el selector de versiones del dashboard;
+  además un humo duplicó el run de persistencia. Usar un `--experiment` aparte para
+  humo y borrar con `delete_run` + `gc` (los artefactos con `artifact_uri` `file://`
+  se borran por S3, no con `gc`).
+- **Nombres de run duplicados en corridas con semillas**: `ref-mean` y `ae_{arq}-v{n}`
+  se repiten entre corridas; incluir la semilla (o un param único) para distinguirlos.

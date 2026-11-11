@@ -20,10 +20,15 @@ Araucanía), con horizonte de **24 horas**.
 ```
 infra/        # Terraform (IAM, SageMaker Studio, buckets, red, ECR/ECS, OIDC, scraper, training)
 infra/scripts/# scripts de operación (on_start.sh del Space, mlflow-server.sh, start/stop-space.ps1.example)
-docker/       # Dockerfile (MLflow) + scraper.Dockerfile (datos) + train.Dockerfile (entrenamiento)
+docker/       # Dockerfile (MLflow) + scraper / train (LightGBM) / train-tf (autoencoders) + README de build y tags
 pipeline/     # datos (scraper/ICAP/validación/persistencia) + modelado (features/baseline/train/evaluate)
-tests/        # unit + integration (futuro)
-notebooks/    # notebook base de análisis (puntuales en .gitignore)
+pipeline/ae/  # autoencoders + DMD (TensorFlow/Keras): datos, modelos, métricas, compuerta, entry point
+pipeline/analysis/  # dashboard Streamlit (Plotly) y carga del estado de MLflow
+scripts/ae/   # scripts de PowerShell para lanzar series de Training Jobs (11.2, 11.3)
+tests/        # unit tests (tests/ae/ para autoencoders)
+notebooks/    # análisis base + exploración del autoencoder (matplotlib, versionados con outputs)
+EXPERIMENT-LOG.md  # registro narrativo de experimentos (el "por qué"; MLflow guarda el "cuánto")
+requirements-*.txt # dashboard/Space (analysis), lanzador local (dev), scraper, notebooks nivel 2 (TF)
 modules/      # blueprints de decisión por dominio (guías, no specs)
 openspec/     # changes activos y specs consolidadas
 .github/      # workflows de GitHub Actions (ci, infra-cd, pipeline-cd)
@@ -211,6 +216,26 @@ Flujo:
 Los notebooks puntuales están en `.gitignore`; versioná el que quieras conservar
 con `git add -f`.
 
+### Notebooks de exploración del autoencoder
+
+Tres plantillas en `notebooks/` (change `ae-reconstruccion`, tarea 8.7):
+
+- `exploracion_datos_ae.ipynb`: huecos y cobertura, ventanas que sobreviven según `L`, rangos tras la transformación.
+- `exploracion_reconstruccion.ipynb`: real vs reconstruido, aplanamiento, comparación contra `ref-mean` y `ref-pca-d*`.
+- `exploracion_latente_dmd.ipynb`: latente y operador DMD. Nivel 1 sin TensorFlow; nivel 2 (decodificar) requiere TF.
+
+Reglas:
+
+- **Gráficos con matplotlib**: Plotly tardaba demasiado en el Space. El dashboard sigue en Plotly.
+- **Lectura desde MLflow vía `analysis/load.py`** (`ensure_state`, `artifact_path`): no duplicar la carga.
+- **Se versionan CON outputs** (la última corrida con datos reales). Antes de commitear, verificar que no haya credenciales ni IDs de cuenta: `git grep -nE "[0-9]{12}|desareca|arn:aws" -- notebooks/`.
+- **`git add -f` solo para notebooks nuevos**: `*.ipynb` está en `.gitignore` (salvo `analisis_baseline.ipynb`); los ya trackeados siguen trackeados.
+- **Nivel 2**: la imagen del Space trae TF 2.18, distinto de `tf-cpu-v1` (2.20). Se usa un venv aparte en `/home/sagemaker-user/venv-tf` con `requirements-notebooks-tf.txt` y su propio kernel de JupyterLab; el Python base no sirve para cargar los `.keras`.
+
+Flujo del Space (`sinca-dev`): **encender** (SageMaker Console → Studio → Spaces → `sinca-dev` →
+Open Studio), **trabajar** en JupyterLab, **apagar** (Spaces → `sinca-dev` → Stop). Con la app
+detenida no se paga cómputo.
+
 ## Servidor MLflow (on-demand)
 
 El tracking usa MLflow self-hosted: backend SQLite (`mlflow.sqlite`) persistido
@@ -232,7 +257,7 @@ La imagen custom vive en ECR (`sinca-mlflow`). Se construye y publica a mano
 
 ```powershell
 docker build -t sinca-mlflow docker/
-aws ecr get-login-password --profile $env:AWS_PROFILE | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --region us-east-1 --profile <AWS_PROFILE> | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
 docker tag sinca-mlflow:latest <account>.dkr.ecr.us-east-1.amazonaws.com/sinca-mlflow:latest
 docker push <account>.dkr.ecr.us-east-1.amazonaws.com/sinca-mlflow:latest
 ```
@@ -348,6 +373,20 @@ pipeline/
   ahí la radiación es casi toda nula → evaluar features extra (`rain`, viento de
   Open-Meteo) o un baseline por estación.
 
+**Fase 3.5 — Análisis de modelos (completada).** Change `analisis-modelos`:
+dashboard Streamlit y diagnósticos por run (ver ["Análisis"](#análisis-dashboard-y-notebooks)).
+
+**Fase 4, parte 1 — Autoencoders (completada).** Change `ae-reconstruccion`:
+autoencoders sobre las 6 series de MP con meteo/capa límite/calendario como auxiliares
+del latente, compuerta de reconstrucción contra PCA y un primer pase de DMD global.
+AE de referencia: **conv1d, `L = 24`, `d = 16`** (aprueba la compuerta en 3 semillas,
+razón AE/PCA(16) en test 0.916). El DMD global todavía no supera a LightGBM; es el punto
+de partida de `ae-dmd`. Ver ["Autoencoders"](#autoencoders-fase-4-parte-1) y
+[`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
+
+**Siguiente — Fase 4, parte 2 (`ae-dmd`)**: dinámica sobre el latente (borrador en
+`openspec/changes/ae-dmd/`, por replanificar).
+
 ### Correr local (sin AWS, sin escribir)
 
 ```powershell
@@ -358,13 +397,10 @@ python pipeline/train/train.py --local-validated-dir <dir>/validated --no-upload
 
 ### Build + push de la imagen de entrenamiento
 
+Tags explícitos por imagen (`lgbm-v1` para LightGBM, `tf-cpu-v1` para los autoencoders); nunca `:latest`. Pasos completos, retag y lanzamiento en [`docker/README.md`](docker/README.md).
+
 ```powershell
-$env:AWS_PROFILE="<profile>"
-docker build -f docker/train.Dockerfile -t sinca-train .
-$acct = aws sts get-caller-identity --query Account --output text
-aws ecr get-login-password | docker login --username AWS --password-stdin $acct.dkr.ecr.us-east-1.amazonaws.com
-docker tag sinca-train:latest $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
-docker push $acct.dkr.ecr.us-east-1.amazonaws.com/sinca-train:latest
+docker build -f docker/train.Dockerfile -t sinca-train:lgbm-v1 .
 ```
 
 ### Lanzar el Training Job (manual)
@@ -375,11 +411,14 @@ desde `pipeline/`. Requiere el SDK de SageMaker **v2** en el entorno local
 elimina la API `Estimator`). Los ARNs salen de los outputs de Terraform:
 
 ```powershell
-$env:AWS_PROFILE="<profile>"
 $role = terraform -chdir=infra output -raw training_role_arn
-$image = "$(terraform -chdir=infra output -raw train_ecr_repository_url):latest"
-python pipeline/train/launch.py --role-arn $role --image-uri $image --wait
+$image = "$(terraform -chdir=infra output -raw train_ecr_repository_url):lgbm-v1"
+python pipeline/train/launch.py --profile <AWS_PROFILE> --role-arn $role --image-uri $image --wait
 ```
+
+> `<AWS_PROFILE>` = profile de la cuenta personal. **No uses `$env:AWS_PROFILE`** heredado
+> de la shell: puede apuntar a otra cuenta (ya pasó). El SDK v2 está en mantenimiento
+> hasta el 2027-07-05; la migración a v3 es un change futuro (`sagemaker-sdk-v3`).
 
 ### Ver las métricas
 
@@ -388,6 +427,34 @@ python pipeline/train/launch.py --role-arn $role --image-uri $image --wait
 aws s3 ls s3://sinca-mlflow/_mlflow/ --recursive
 # O levantar la UI de MLflow (ver sección "Servidor MLflow").
 ```
+
+## Autoencoders (Fase 4, parte 1)
+
+Autoencoder sobre las 6 series de MP (ventana `[L × 6]`), con meteo, capa límite y
+calendario entrando por una rama auxiliar que se mezcla en el latente `z = [z_mp | z_aux]`.
+Arquitecturas: `mlp`, `conv1d`, `gru` y `linear_decoder`. Una **compuerta** de reconstrucción
+(capa relativa contra el predictor del promedio y PCA del mismo `d`, más umbrales numéricos de
+aplanamiento) decide qué modelos pasan a un primer **DMD global** sobre el latente congelado,
+que mide linealizabilidad y da un pronóstico informativo a 24 h.
+
+```
+pipeline/ae/
+├── data.py      # ventanas, huecos, normalización (solo con train), máscaras
+├── models.py    # AE en Keras (4 variantes) + loss con pesos separados
+├── metrics.py   # referencias (promedio, PCA), diagnósticos, compuerta
+├── dmd.py       # DMD exacto sobre el latente, linealizabilidad, pronóstico
+└── run.py       # entry point: modos search / final / reference / dmd
+```
+
+- **Cómputo**: Training Job on-demand en CPU `ml.m5.large`, imagen `sinca-train:tf-cpu-v1`.
+  Comandos y flujo en [`pipeline/ae/README.md`](pipeline/ae/README.md) y build/tags en
+  [`docker/README.md`](docker/README.md).
+- **Tracking**: mismo experimento `sinca-baseline`; runs `sinca-zona-ae_{arq}-v{n}`,
+  referencias `ref-mean` / `ref-pca-d{d}` y runs por serie `ae-{arq}-dmd` comparables con
+  LightGBM en el dashboard (vista "Autoencoders").
+- **Referencia**: conv1d `L = 24`, `d = 16`. Decisiones, cifras y hallazgos en
+  [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
+- **Tests**: `tests/ae/` (sin AWS).
 
 ## CI/CD (GitHub Actions)
 

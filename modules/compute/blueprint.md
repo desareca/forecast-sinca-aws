@@ -123,6 +123,17 @@ el almacenamiento intermedio (S3) y la orquestación (ver `cicd/blueprint.md`).
 - **`code_location`/`output_path` del Estimator**: fijarlos a buckets/prefijos que
   el rol de training ya puede leer/escribir, no el bucket default de SageMaker
   (`sagemaker-<region>-<account>`), para no ampliar permisos.
+- **`sagemaker-training` con TensorFlow**: instalarlo con `--no-deps` en la imagen:
+  `protobuf<=3.20.3` choca con `tensorflow-cpu` 2.20 (`protobuf>=5.28`).
+- **Hiperparámetros y nombres de job**: SageMaker pasa un hiperparámetro de una letra
+  como `-d 16` (el entry point debe aceptar la forma corta), y los nombres de job no
+  admiten `_`.
+- **Warning de deprecación del SDK en PowerShell**: se lee como error si se valida por
+  stderr; validar el éxito por exit code.
+- **El launcher no debe heredar el profile del entorno**: un `AWS_PROFILE` de la shell
+  puede apuntar a otra cuenta (pasó en 4 changes). `--profile` obligatorio, sin default.
+- **Fin de soporte del SDK v2**: mantenimiento desde 2026-07-06, fin de soporte
+  2027-07-06. Planificar la migración a v3 (`ModelTrainer`) con margen.
 - **stdout cp1252 en Windows**: al correr `fit(wait=True, logs=True)` se streamea
   CloudWatch y un `print` puede reventar con `UnicodeEncodeError`; reconfigurar
   stdout a UTF-8 (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`)
