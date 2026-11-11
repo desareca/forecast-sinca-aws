@@ -15,14 +15,14 @@ Requiere **SageMaker Python SDK v2** (`sagemaker>=2,<3`): la v3 (3.x) eliminó
 Uso:
 
     python pipeline/train/launch.py \
-        --profile $AWS_PROFILE \
+        --profile <AWS_PROFILE> \
         --role-arn <arn de training_role_arn (output de Terraform)> \
         --image-uri <url de train_ecr_repository_url>:lgbm-v1 \
         --wait
 
     # Autoencoders (change ae-reconstruccion): imagen TF y entry point propio.
     python pipeline/train/launch.py \
-        --profile $AWS_PROFILE \
+        --profile <AWS_PROFILE> \
         --role-arn <training_role_arn> \
         --image-uri <train_ecr_repository_url>:tf-cpu-v1 \
         --entry-point ae/run.py \
@@ -86,7 +86,8 @@ def parse_hp(pairs: list[str] | None) -> dict:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Lanza un Training Job de SageMaker (baseline o autoencoders).")
-    parser.add_argument("--profile", default=os.environ.get("AWS_PROFILE"))
+    # Sin default: NO se toma AWS_PROFILE del entorno (puede apuntar a otra cuenta).
+    parser.add_argument("--profile", default=None, help="Named profile de la cuenta personal (obligatorio).")
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
     parser.add_argument("--role-arn", default=os.environ.get("TRAINING_ROLE_ARN"))
     parser.add_argument("--image-uri", default=os.environ.get("TRAIN_IMAGE_URI"))
@@ -116,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args(argv)
+    if not args.profile:
+        raise SystemExit(
+            "Falta --profile (named profile de la cuenta personal). "
+            "No se usa AWS_PROFILE del entorno: puede apuntar a otra cuenta."
+        )
     if not args.role_arn:
         raise SystemExit("Falta --role-arn (o la env TRAINING_ROLE_ARN).")
     if not args.image_uri:
@@ -126,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     from sagemaker.estimator import Estimator
     from sagemaker.session import Session
 
-    boto_session = boto3.Session(profile_name=args.profile or None, region_name=args.region)
+    boto_session = boto3.Session(profile_name=args.profile, region_name=args.region)
     session = Session(boto_session=boto_session)
 
     code_location = f"s3://{args.mlflow_bucket}/{args.mlflow_prefix}/code"
