@@ -96,7 +96,7 @@ cuando no puede crear el app. Los permisos del rol están bien.
 ### Diagnóstico, en orden
 
 ```powershell
-$env:AWS_PROFILE = "desareca_dev"
+$env:AWS_PROFILE = "<AWS_PROFILE>"
 
 # 1. ¿Hay app? ¿En qué estado y por qué falló?
 aws sagemaker list-apps --region us-east-1 --profile $env:AWS_PROFILE
