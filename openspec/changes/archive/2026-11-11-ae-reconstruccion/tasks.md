@@ -107,9 +107,9 @@ Los notebooks son exploración scratch, no producción. Siguen `analisis_baselin
 
 ## 13. Cierre (acordado en la revisión de cierre, 2026-11-10)
 
-- [ ] 13.1 Limpieza de runs de humo en `sinca-baseline` (operador; verificar con output real). **7 runs**: los 6 `lightgbm-v99` (`36c7daa2…`, `9c3c061b…` nielol; `5fa97305…`, `acc31532…` las_encinas; `be6be304…`, `e86c1f6e…` padre_las_casas_ii) y el `sinca-persistence-baseline` duplicado del 2026-11-02 (`a29930ad…`; sus métricas son idénticas al oficial `49e477a3…` del 2026-10-26, que se conserva). Método: (a) comparar el `LastModified` de `_mlflow/mlflow.sqlite` en S3 con la copia local; si cambió, volver a descargar; (b) sobre la copia local, `delete_run` + `mlflow gc` de esos 7 IDs; (c) los artefactos tienen `artifact_uri` `file:///opt/ml/...` (ruta del contenedor), así que `gc` no los borra: listar con `aws s3 ls` el prefijo real de cada run bajo `_mlflow/mlruns/`, `--dryrun`, y recién entonces `aws s3 rm --recursive`; (d) subir el sqlite; (e) confirmar con la misma consulta que quedan 0 runs `version = 99` y 1 de persistencia. Los runs `v1` no se tocan (2 runs por serie es estructural)
-- [ ] 13.2 Higiene de profile: (a) `train/launch.py`: `--profile` obligatorio, sin default de `AWS_PROFILE` del entorno; error claro si falta; test; (b) `scripts/ae/run_11_2_serie.ps1` y `run_11_3_finales.ps1`: leer profile y cuenta esperada de `.env` (gitignored) con un `.env.example` con placeholders; sin valores reales en el script; (c) `grep` final en archivos versionados que no queden `desareca_dev` ni el Account ID fuera del historial. Nota: la historia ya empujada de `origin` conserva los valores anteriores; reescribirla es decisión del operador
-- [ ] 13.3 Verificación final: tests (`tests/ae/` y el resto) en verde; el dashboard no lista `v99` ni persistencia duplicada; `openspec status --change ae-reconstruccion` sin pendientes. Después, `/opsx/archive ae-reconstruccion`
+- [x] 13.1 Limpieza de runs de humo en `sinca-baseline` (operador; verificar con output real). **7 runs**: los 6 `lightgbm-v99` (`36c7daa2…`, `9c3c061b…` nielol; `5fa97305…`, `acc31532…` las_encinas; `be6be304…`, `e86c1f6e…` padre_las_casas_ii) y el `sinca-persistence-baseline` duplicado del 2026-11-02 (`a29930ad…`; sus métricas son idénticas al oficial `49e477a3…` del 2026-10-26, que se conserva). Método: (a) comparar el `LastModified` de `_mlflow/mlflow.sqlite` en S3 con la copia local; si cambió, volver a descargar; (b) sobre la copia local, `delete_run` + `mlflow gc` de esos 7 IDs; (c) los artefactos tienen `artifact_uri` `file:///opt/ml/...` (ruta del contenedor), así que `gc` no los borra: listar con `aws s3 ls` el prefijo real de cada run bajo `_mlflow/mlruns/`, `--dryrun`, y recién entonces `aws s3 rm --recursive`; (d) subir el sqlite; (e) confirmar con la misma consulta que quedan 0 runs `version = 99` y 1 de persistencia. Los runs `v1` no se tocan (2 runs por serie es estructural)
+- [x] 13.2 Higiene de profile: (a) `train/launch.py`: `--profile` obligatorio, sin default de `AWS_PROFILE` del entorno; error claro si falta; test; (b) `scripts/ae/run_11_2_serie.ps1` y `run_11_3_finales.ps1`: leer profile y cuenta esperada de `.env` (gitignored) con un `.env.example` con placeholders; sin valores reales en el script; (c) `grep` final en archivos versionados que no queden `desareca_dev` ni el Account ID fuera del historial. Nota: la historia ya empujada de `origin` conserva los valores anteriores; reescribirla es decisión del operador
+- [x] 13.3 Verificación final: tests (`tests/ae/` y el resto) en verde; el dashboard no lista `v99` ni persistencia duplicada; `openspec status --change ae-reconstruccion` sin pendientes. Después, `/opsx/archive ae-reconstruccion`
 
 ## Notas de implementación
 
@@ -194,6 +194,11 @@ Qué se encontró y qué se hizo cuando algo no calza con lo planificado. Las de
 ### Nota 12.2 (cierre)
 
 - Los 3 notebooks de exploración se corrieron con `Run All` en el Space con datos reales (reportado por el operador). El apagado del Space no se verificó desde esta revisión. El venv de nivel 2 (`/home/sagemaker-user/venv-tf`) es entorno local del Space, sin documentación adicional.
+
+### Cierre 13.2 (implementador)
+- `launch.py`: `--profile` sin default; test en `tests/pipeline/test_launch.py`. Scripts `run_11_*.ps1` leen `AWS_PROFILE` y `AWS_ACCOUNT_ID` de `.env` (nuevo placeholder en `.env.example`); el script valida que ambos tengan valor real. No se ejecutaron contra AWS.
+- `grep` final: se corrigió `docs/space-sagemaker.md`. Quedan `desareca_dev`/Account ID solo en `openspec/changes/archive/*` (historial) y en el texto de la tarea 13.2 de este `tasks.md`. **Decisión del operador:** dejarlos como historial o redactarlos.
+- Dato no tocado: `run_11_2_serie.ps1` tiene `lr = 0.001` (ver nota de conv1d arriba); queda como estaba, no se re-corre.
 
 ## Decisiones del Arquitecto
 
