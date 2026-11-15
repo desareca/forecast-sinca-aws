@@ -384,8 +384,9 @@ razón AE/PCA(16) en test 0.916). El DMD global todavía no supera a LightGBM; e
 de partida de `ae-dmd`. Ver ["Autoencoders"](#autoencoders-fase-4-parte-1) y
 [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
 
-**Siguiente — Fase 4, parte 2 (`ae-dmd`)**: dinámica sobre el latente (borrador en
-`openspec/changes/ae-dmd/`, por replanificar).
+**Siguiente — Fase 4, parte 2 (`ae-dmd`)**: dinámica sobre el latente, replanificada en 4
+changes (`ae-dmd-prep` → `dmd-operador-global` → `dmd-localizado` → `deep-koopman`).
+Ver `project-decisions.md` §9 y `docs/ae-dmd-propuesta-experimentos.md`.
 
 ### Correr local (sin AWS, sin escribir)
 
