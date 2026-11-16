@@ -28,7 +28,7 @@ El sistema SHALL ofrecer una herramienta de mantenimiento con un modo de plan de
 
 ### Requirement: Convención de runs para modelos conjuntos de reconstrucción
 
-El sistema SHALL registrar los runs de autoencoders como runs de **modelo conjunto** que cubren las 6 series, sin parámetros `estacion`/`pollutant`, con tags `modelo=ae-{arq}`, `tipo=entrenamiento` y `seed`, y con nombre que incluye la semilla: `sinca-zona-ae_{arq}-v{n}-s{seed}` en la partición `holdout` (tag `stage=ae-reconstruccion`) y `sinca-zona-ae_{arq}-{part}-v{n}-s{seed}` en una partición con nombre, donde `{part}` es el nombre de la partición sin guiones (tags `stage=ae-dmd-prep` y `particion`). Los runs de referencia SHALL llevar `tipo=referencia` y nombre `ref-mean-L{L}-v{n}` o `ref-pca-d{d}-L{L}-v{n}`. Los del pase de DMD SHALL registrarse por serie con `modelo=ae-{arq}-dmd`, parámetros `estacion`/`pollutant`/`version`/`seed`, un tag `ae_run_id` que apunta al run del AE y nombre `sinca-{estacion}-ae-{arq}-dmd[-{part}]-v{n}-s{seed}`. Las referencias de pronóstico de una partición con nombre SHALL usar un `modelo` propio (`lightgbm-{part}`, `persistence-{part}`) para no agruparse con el baseline.
+El sistema SHALL registrar los runs de autoencoders como runs de **modelo conjunto** que cubren las 6 series, sin parámetros `estacion`/`pollutant`, con tags `modelo=ae-{arq}`, `tipo=entrenamiento` y `seed`, y con nombre que incluye la semilla: `sinca-zona-ae_{arq}-v{n}-s{seed}` en la partición `holdout` (tag `stage=ae-reconstruccion`) y `sinca-zona-ae_{arq}-{part}-v{n}-s{seed}` en una partición con nombre, donde `{part}` es el nombre de la partición sin guiones (tags `stage=ae-dmd-prep` y `particion`). Los runs de referencia SHALL llevar `tipo=referencia` y nombre `ref-mean-L{L}-v{n}` o `ref-pca-d{d}-L{L}-v{n}`. Los del pase de DMD SHALL registrarse por serie con `modelo=ae-{arq}-dmd`, parámetros `estacion`/`pollutant`/`version`/`seed`, un tag `ae_run_id` que apunta al run del AE y nombre `sinca-{estacion}-ae-{arq}-dmd-v{n}-s{seed}` en `holdout` o `sinca-{estacion}-{pollutant}-ae-{arq}-dmd-{part}-v{n}-s{seed}` en una partición con nombre. Las referencias de pronóstico de una partición con nombre SHALL usar un `modelo` propio (`lightgbm-{part}`, `persistence-{part}`) para no agruparse con el baseline, y los runs LightGBM por serie SHALL llamarse `sinca-{estacion}-{pollutant}-lightgbm-{part}-v{n}`.
 
 #### Scenario: Run de AE sin serie
 - **WHEN** se entrena un autoencoder conjunto
@@ -37,6 +37,10 @@ El sistema SHALL registrar los runs de autoencoders como runs de **modelo conjun
 #### Scenario: Semillas distinguibles por nombre
 - **WHEN** se entrenan 3 semillas de la misma configuración
 - **THEN** los 3 runs tienen nombres distintos
+
+#### Scenario: Series distinguibles por nombre
+- **WHEN** se registran los runs por serie de una partición con nombre
+- **THEN** los runs de `pm10` y `pm25` de una misma estación tienen nombres distintos
 
 #### Scenario: Runs del pase de DMD por serie
 - **WHEN** se evalúa el pase de DMD de un AE

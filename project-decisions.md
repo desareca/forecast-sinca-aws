@@ -164,7 +164,7 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
 | Tramo | Fechas | Uso |
 |---|---|---|
 | Train | 2021-01 → 2026-02 | Entrenar AE y ajustar K (una sola vez) |
-| Early stopping | 2026-03 | Solo para detener el entrenamiento de los AE |
+| Marzo (`es`) | 2026-03 | Sin uso para entrenar ni detener; solo diagnóstico (ver "Presupuesto fijo") |
 | Validación de selección | 2026-04 → 2026-06 | Elegir el ganador de cada etapa |
 | Test held-out | 2026-07-01 → 2026-10-04 | Solo confirma al final de cada change |
 
@@ -173,6 +173,11 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
   test. Los números de test ya conocidos (33.28, 31.09) no se usan para elegir.
 - Rolling de 12 ventanas solo para Hankel/PCA (dato adicional) y para el modelo final
   (reentrenado por ventana).
+- **Presupuesto fijo, sin early stopping (2026-11-15, tras `ae-dmd-prep`)**: detener con marzo
+  cortaba muy pronto (mes de baja concentración, ~500–670 filas): AE en época 3–24 y LightGBM en
+  41–145 rondas, peor que persistencia en `sel`. Desde `ae-dmd-prep` v2: AE con 60 épocas fijas;
+  LightGBM con `num_boost_round` = árboles del booster v1 de cada serie (fuga leve conocida: el
+  early stopping de v1 usó junio de 2026, a favor de LightGBM). Ningún presupuesto se elige con `sel`.
 - Al reentrenar con esta partición, las cifras de referencia de `ae-reconstruccion`
   cambian algo: anotarlo en `EXPERIMENT-LOG.md`, no es regresión.
 
