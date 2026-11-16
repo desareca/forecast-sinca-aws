@@ -44,6 +44,7 @@ from ae import dmd as dmdm  # noqa: E402
 from ae import metrics as aem  # noqa: E402
 from ae.models import ARCHITECTURES, LATENT_CHOICES, LENGTH_CHOICES, AEConfig  # noqa: E402
 from evaluate.evaluate import evaluate_predictions, zone_icap  # noqa: E402
+from features import partition as pt  # noqa: E402
 from features.build import build_features, load_validated, make_rolling_windows  # noqa: E402
 from train import mlflow_log  # noqa: E402
 from train.train import _select_windows  # noqa: E402
@@ -70,6 +71,7 @@ class Context:
     tr: aed.Windows
     va: aed.Windows | None
     te: aed.Windows | None
+    se: aed.Windows | None = None  # ventana de selección (`sel`), solo con partición ae-dmd
 
 
 def _span_mask(n: int, lo: int, hi: int) -> np.ndarray:
@@ -84,6 +86,7 @@ def make_context(
     train_span: tuple[int, int],
     valid_span: tuple[int, int] | None,
     test_span: tuple[int, int] | None = None,
+    sel_span: tuple[int, int] | None = None,
 ) -> Context:
     """Normaliza con el train de la partición y corta las ventanas de cada conjunto."""
     norm = aed.fit_normalizer(grid, _span_mask(len(grid.index), *train_span))
@@ -93,7 +96,8 @@ def make_context(
     if valid_span is not None and valid_span[1] > valid_span[0]:
         va = aed.select_samples(grid, ng, length, *valid_span)
     te = aed.select_samples(grid, ng, length, *test_span) if test_span is not None else None
-    return Context(grid=grid, norm=norm, ng=ng, tr=tr, va=va, te=te)
+    se = aed.select_samples(grid, ng, length, *sel_span) if sel_span is not None else None
+    return Context(grid=grid, norm=norm, ng=ng, tr=tr, va=va, te=te, se=se)
 
 
 def default_valid_span(grid: aed.HourlyGrid, train_span: tuple[int, int]) -> tuple[int, int]:
@@ -280,8 +284,31 @@ def _log_run(name: str, tags: dict, params: dict, metrics: dict, frames: dict[st
         return run.info.run_id
 
 
-def run_name_ae(arch: str, version: int) -> str:
-    return f"{MODEL_BASE}_{arch}-v{version}"
+def run_name_ae(arch: str, version: int, seed: int, partition: pt.Partition | None = None) -> str:
+    """`sinca-zona-ae_{arch}-v{n}-s{seed}`; con partición, `sinca-zona-ae_{arch}-{token}-v{n}-s{seed}`."""
+    token = f"-{partition.token}" if partition is not None else ""
+    return f"{MODEL_BASE}_{arch}{token}-v{version}-s{seed}"
+
+
+def run_name_ref(kind: str, length: int, d: int, version: int) -> str:
+    """`ref-mean-L{L}-v{n}` o `ref-pca-d{d}-L{L}-v{n}` (la longitud de ventana va en el nombre)."""
+    if kind == "mean":
+        return f"ref-mean-L{length}-v{version}"
+    return f"ref-pca-d{d}-L{length}-v{version}"
+
+
+def run_name_dmd(station: str, pollutant: str, arch: str, version: int, seed: int,
+                 partition: pt.Partition | None = None) -> str:
+    """Nombre del run DMD por serie.
+
+    Holdout (sin partición): `sinca-{slug}-ae-{arch}-dmd-v{n}-s{seed}` (sin cambios).
+    Partición con nombre: `sinca-{slug}-{pollutant}-ae-{arch}-dmd-{token}-v{n}-s{seed}`, con el
+    contaminante para que pm10 y pm25 de una estación no compartan nombre (5.7).
+    """
+    if partition is None:
+        return f"{mlflow_log.run_name(station, f'ae-{arch}-dmd', version)}-s{seed}"
+    return (f"sinca-{mlflow_log.station_slug(station)}-{pollutant}-ae-{arch}-dmd-{partition.token}"
+            f"-v{version}-s{seed}")
 
 
 def config_to_params(cfg: AEConfig, version: int) -> dict:
@@ -332,8 +359,8 @@ def run_final(grid: aed.HourlyGrid, cfg: AEConfig, args, version: int, model_dir
     if "test" in zs:
         ablation = ablation_delta(models, cfg, ctx, ctx.te, zs["test"], results["test"])
 
-    name = run_name_ae(cfg.arch, version)
-    seed_dir = os.path.join(model_dir, f"{name}-s{cfg.seed}")
+    name = run_name_ae(cfg.arch, version, cfg.seed)
+    seed_dir = os.path.join(model_dir, name)
     os.makedirs(seed_dir, exist_ok=True)
     enc_path = os.path.join(seed_dir, "encoder.keras")
     dec_path = os.path.join(seed_dir, "decoder_mp.keras")
@@ -395,8 +422,8 @@ def run_reference(grid: aed.HourlyGrid, cfg: AEConfig, version: int) -> None:
     spans = aed.holdout_spans(grid.index)
     valid_span = default_valid_span(grid, spans["train"])
     ctx = make_context(grid, cfg.length, spans["train"], valid_span, spans["test"])
-    kinds = {"ref-mean": "mean", f"ref-pca-d{cfg.d}": "pca"}
-    for name, kind in kinds.items():
+    for kind in ("mean", "pca"):
+        name = run_name_ref(kind, cfg.length, cfg.d, version)
         metrics: dict[str, float] = {}
         tables = {}
         for split, win in (("valid", ctx.va), ("test", ctx.te)):
@@ -412,6 +439,228 @@ def run_reference(grid: aed.HourlyGrid, cfg: AEConfig, version: int) -> None:
         frames = {"reconstruction.parquet": pd.concat(tables.values(), ignore_index=True) if tables else pd.DataFrame()}
         _log_run(name, tags, params, metrics, frames)
         log.info("Referencia %s registrada", name)
+
+
+def run_final_partition(grid: aed.HourlyGrid, cfg: AEConfig, args, part: pt.Partition, version: int, model_dir: str) -> dict:
+    """AE en la partición `ae-dmd` (ae-dmd-prep, D2): una semilla.
+
+    Normaliza con `train`; early stopping con `es`; compuerta y métricas de reconstrucción
+    en `sel`; el tramo `test` solo aporta latentes (sin métricas ni pronóstico).
+    """
+    from ae import models as aeml
+
+    spans = aed.partition_spans(grid.index, part)
+    ctx = make_context(grid, cfg.length, spans["train"], spans["es"], spans["test"], spans["sel"])
+    empty = [len(w) if w is not None else 0 for w in (ctx.tr, ctx.va, ctx.se, ctx.te)]
+    if min(empty) == 0:
+        raise RuntimeError(f"Sin muestras en algún tramo (train/es/sel/test = {empty}) con L={cfg.length}.")
+    log.info("Partición %s: entrenando %s L=%d d=%d seed=%d (train=%d es=%d sel=%d test=%d)",
+             part.name, cfg.arch, cfg.length, cfg.d, cfg.seed, *empty)
+    t_fit = time.perf_counter()
+    models, history = fit_context(ctx, cfg, args.epochs, args.patience)
+    fit_seconds = time.perf_counter() - t_fit
+    epochs_run = len(history.history.get("loss", []))
+    curve, curve_best = curve_metrics(history.history)
+
+    results: dict[str, dict] = {}
+    tables: dict[str, pd.DataFrame] = {}
+    zs: dict[str, np.ndarray] = {"train": aeml.encode(models, cfg, ctx.tr.x_mp, ctx.tr.x_aux)}
+    for split, win in (("es", ctx.va), ("sel", ctx.se)):
+        mp_z, _ = aeml.predict_mp_aux(models, cfg, win.x_mp, win.x_aux)
+        per_series, table = split_metrics(grid, win, aed.mp_to_ugm3(mp_z, ctx.norm))
+        zs[split] = aeml.encode(models, cfg, win.x_mp, win.x_aux)
+        results[split] = per_series
+        tables[split] = table.assign(split=split)
+    pca_metrics, _ = split_metrics(grid, ctx.se, aed.mp_to_ugm3(reference_recon_z("pca", ctx, ctx.se, cfg.d), ctx.norm))
+    mean_metrics, _ = split_metrics(grid, ctx.se, aed.mp_to_ugm3(reference_recon_z("mean", ctx, ctx.se, cfg.d), ctx.norm))
+    results["sel_pca"] = pca_metrics
+    results["sel_mean"] = mean_metrics
+    zs["test"] = aeml.encode(models, cfg, ctx.te.x_mp, ctx.te.x_aux)
+
+    gate = aem.gate_decision(results["sel"], results["sel_pca"], results["sel_mean"], args.gate_thresholds)
+    latent = aem.latent_diagnostics(zs["sel"], models.d_aux)
+    ablation = ablation_delta(models, cfg, ctx, ctx.se, zs["sel"], results["sel"])
+
+    name = run_name_ae(cfg.arch, version, cfg.seed, part)
+    model_path = os.path.join(model_dir, name)
+    os.makedirs(model_path, exist_ok=True)
+    enc_path = os.path.join(model_path, "encoder.keras")
+    dec_path = os.path.join(model_path, "decoder_mp.keras")
+    models.encoder.save(enc_path)
+    models.decoder_mp.save(dec_path)
+    with open(os.path.join(model_path, "config.json"), "w", encoding="utf-8") as handle:
+        json.dump({"cfg": cfg.to_dict(), "gate": gate, "version": version, "partition": pt.to_json(part)},
+                  handle, ensure_ascii=False, indent=2, default=str)
+
+    metrics = {
+        **_flatten_metrics("es_recon_", results["es"]),
+        **_flatten_metrics("sel_recon_", results["sel"]),
+        **_flatten_metrics("ref_pca_sel_", results["sel_pca"]),
+        **_flatten_metrics("ref_mean_sel_", results["sel_mean"]),
+        "es_recon_rmse_mean": _mean_metric(results["es"]),
+        "sel_recon_rmse_mean": _mean_metric(results["sel"]),
+        "ablation_zaux_delta_rmse_sel": ablation,
+        # Sin métricas de test: el tramo test solo aporta latentes (D2).
+        "gate_pass": float(gate["gate_pass"]),
+        "gate_relative": float(gate["relative"]),
+        "gate_beats_pca": float(gate["beats_pca"]),
+        "gate_beats_mean": float(gate["beats_mean"]),
+        "epochs_run": float(epochs_run),
+        **curve_best,
+        "fit_seconds": float(fit_seconds),
+        "seconds_per_epoch": float(fit_seconds / epochs_run) if epochs_run else float("nan"),
+        "peak_rss_mb": peak_rss_mb(),
+        "train_loss_final": float(history.history["loss"][-1]) if history.history.get("loss") else float("nan"),
+        **{f"latent_{k}": v for k, v in latent.items()},
+    }
+    if gate["numeric"] is not None:
+        metrics["gate_numeric"] = float(gate["numeric"])
+
+    tags = {"modelo": f"ae-{cfg.arch}", "tipo": "entrenamiento", "stage": "ae-dmd-prep",
+            "particion": part.name, "seed": cfg.seed}
+    bounds = json.loads(pt.to_json(part))["bounds"]
+    params = {**config_to_params(cfg, version), "version": version, "particion": part.name,
+              "partition_bounds": json.dumps(bounds, sort_keys=True),
+              "gate_thresholds": json.dumps(gate["thresholds"], sort_keys=True),
+              **{f"runtime_{k}": v for k, v in runtime_versions().items()}}
+    frames = {
+        "reconstruction.parquet": pd.concat(tables.values(), ignore_index=True),
+        "latent.parquet": pd.concat(
+            [latent_table(zs[s], w, models.d_aux, s)
+             for s, w in (("train", ctx.tr), ("es", ctx.va), ("sel", ctx.se), ("test", ctx.te))],
+            ignore_index=True,
+        ),
+        "diagnostics.parquet": pd.DataFrame(
+            [{"split": s, "serie": k, "metric": m, "value": v}
+             for s in ("es", "sel") for k, ms in results[s].items() for m, v in ms.items()]
+        ),
+    }
+    run_id = _log_run(name, tags, params, metrics, frames,
+                      files={"encoder.keras": enc_path, "decoder_mp.keras": dec_path}, step_metrics=curve)
+    log.info("Run %s registrado (partición %s, seed=%d, gate=%s)", run_id, part.name, cfg.seed, gate["gate_pass"])
+    return {
+        "run_id": run_id, "name": name, "seed": cfg.seed, "gate": gate,
+        "sel_rmse_mean": metrics["sel_recon_rmse_mean"], "model_dir": model_path,
+        "models": models, "ctx": ctx,
+    }
+
+
+def _pydmd_check(segments: list[np.ndarray], trunc_rank: int) -> tuple[dict[str, float], str]:
+    """Contraste numpy vs `pydmd` sobre el segmento contiguo más largo de train (D8).
+
+    Devuelve `(métricas, version)`. Sin `pydmd`: `({}, "no-disponible")`. Una discrepancia o
+    un error no corta el job: se registra un warning y `dmd_pydmd_ok = 0`.
+    """
+    try:
+        segment = dmdm.longest_segment(segments)
+        full = dmdm.pydmd_crosscheck(segment, None)
+        trunc = dmdm.pydmd_crosscheck(segment, trunc_rank)
+    except ImportError:
+        return {}, "no-disponible"
+    except Exception as exc:  # noqa: BLE001 - el contraste no debe cortar el entrenamiento
+        log.warning("Contraste pydmd no pudo calcularse: %s", exc)
+        return {"dmd_pydmd_ok": 0.0}, "error"
+    ok = bool(full["ok"] and trunc["ok"])
+    if not ok:
+        log.warning("Discrepancia numpy/pydmd: full=%s trunc=%s", full, trunc)
+    metrics = {
+        "dmd_pydmd_eig_maxdiff_full": full["eig_maxdiff"],
+        "dmd_pydmd_pred1_maxdiff_full": full["pred1_maxdiff"],
+        "dmd_pydmd_eig_maxdiff_trunc": trunc["eig_maxdiff"],
+        "dmd_pydmd_ok": float(ok),
+    }
+    return metrics, full["version"]
+
+
+def run_dmd_pass_partition(grid: aed.HourlyGrid, cfg: AEConfig, args, part: pt.Partition, ae_run_id: str,
+                           models, ctx: Context, sinca: pd.DataFrame, open_meteo, feriados) -> None:
+    """Pase DMD en la partición `ae-dmd` (ae-dmd-prep, D3). **No mira la compuerta.**
+
+    `K` se ajusta con latentes de `train`; linealidad en `es` y `sel`; pronóstico sobre las
+    ventanas de `sel` con embargo (`row_mask`). Registra runs por serie (`sel_*`) y, en el run
+    del AE, linealidad, operadores y el contraste con `pydmd`.
+    """
+    from mlflow.tracking import MlflowClient
+    from ae import models as aeml
+
+    if ctx.se is None or len(ctx.se) == 0 or ctx.va is None or len(ctx.va) == 0:
+        raise RuntimeError("El pase DMD de la partición requiere ventanas de es y sel.")
+
+    def latent(win):
+        # `encode` ya recorta la entrada auxiliar según `aux_input`.
+        return aeml.encode(models, cfg, win.x_mp, win.x_aux)
+
+    z_tr = latent(ctx.tr)
+    segs_tr = dmdm.split_segments(z_tr, ctx.tr.end_positions)
+    fit_full = dmdm.fit_dmd(segs_tr, None)
+    trunc_rank = max(2, cfg.d // 2)
+    fit_trunc = dmdm.fit_dmd(segs_tr, trunc_rank)
+
+    lin_es = dmdm.linearizability(fit_full["K"], dmdm.split_segments(latent(ctx.va), ctx.va.end_positions))
+    z_se = latent(ctx.se)
+    segs_se = dmdm.split_segments(z_se, ctx.se.end_positions)
+    lin_sel = dmdm.linearizability(fit_full["K"], segs_se)
+    lin_sel_trunc = dmdm.linearizability(fit_trunc["K"], segs_se)
+
+    # Pronóstico solo en t con embargo: t + 24 h debe caer dentro de sel.
+    keep = pt.row_mask(ctx.se.index, part, "sel")
+    if not keep.any():
+        raise RuntimeError("Ninguna ventana de sel conserva el pronóstico de 24 h tras el embargo.")
+    z_pred = dmdm.predict_latent(fit_full["K"], z_se[keep], dmdm.HORIZON_FORECAST)
+    decoded = aed.mp_to_ugm3(aeml.decode_mp(models, z_pred), ctx.norm)
+    forecast = dmdm.forecast_from_decoded(decoded)  # [N, 6]
+    stamps = ctx.se.index[keep]
+
+    features = build_features(sinca, open_meteo, feriados)
+    targets = features[["timestamp", "estacion", "pollutant", "target"]]
+    pieces = []
+    for c, (_, station, pollutant) in enumerate(aed.mp_channels()):
+        pieces.append(pd.DataFrame({
+            "timestamp": stamps, "estacion": station, "pollutant": pollutant, "y_pred": forecast[:, c],
+        }))
+    preds = pd.concat(pieces, ignore_index=True).merge(targets, on=["timestamp", "estacion", "pollutant"], how="inner")
+    preds = preds.rename(columns={"target": "y_true"})
+    preds["split"] = "sel"
+    preds = preds[["timestamp", "estacion", "pollutant", "y_true", "y_pred", "split"]]
+
+    for station, pollutant in sorted({(s, p) for _, s, p in aed.mp_channels()}):
+        frame = preds[(preds["estacion"] == station) & (preds["pollutant"] == pollutant)]
+        name = run_name_dmd(station, pollutant, cfg.arch, args.version, cfg.seed, part)
+        metrics = {f"sel_{k}": v for k, v in evaluate_predictions(frame, args.alpha).items()} if not frame.empty else {}
+        tags = {"serie": f"{station}|{pollutant}", "modelo": f"ae-{cfg.arch}-dmd", "stage": "ae-dmd-prep",
+                "particion": part.name, "tipo": "entrenamiento", "ae_run_id": ae_run_id, "seed": cfg.seed}
+        params = {"estacion": station, "pollutant": pollutant, "version": args.version, "seed": cfg.seed,
+                  "tipo": "entrenamiento", "alpha": args.alpha, "rank": "full"}
+        frames = {
+            "predictions.parquet": frame,
+            "zone_icap.parquet": zone_icap(frame) if not frame.empty else pd.DataFrame(columns=["timestamp", "icap_true", "icap_pred"]),
+            "rolling_scores.parquet": pd.DataFrame({"window_index": pd.Series(dtype=int), "rmse": pd.Series(dtype=float)}),
+        }
+        _log_run(name, tags, params, metrics, frames)
+
+    client = MlflowClient()
+    ae_metrics: dict[str, float] = {}
+    for prefix, lin in (("dmd_es_latent_rmse_", lin_es), ("dmd_sel_latent_rmse_", lin_sel),
+                        ("dmd_sel_trunc_latent_rmse_", lin_sel_trunc)):
+        for key, value in lin.items():
+            ae_metrics[prefix + key.rsplit("_", 1)[-1]] = value
+    ae_metrics["dmd_trunc_rank"] = float(trunc_rank)
+    pydmd_metrics, pydmd_version = _pydmd_check(segs_tr, trunc_rank)
+    ae_metrics.update(pydmd_metrics)
+    client.set_tag(ae_run_id, "pydmd_version", pydmd_version)
+    for key, value in ae_metrics.items():
+        if np.isfinite(value):
+            client.log_metric(ae_run_id, key, float(value))
+
+    with tempfile.TemporaryDirectory(prefix="sinca-dmd-") as tmp:
+        full_path = os.path.join(tmp, "dmd_operator.npz")
+        trunc_path = os.path.join(tmp, "dmd_operator_trunc.npz")
+        np.savez(full_path, **dmdm.dmd_operator_arrays(fit_full))
+        np.savez(trunc_path, **dmdm.dmd_operator_arrays(fit_trunc))
+        client.log_artifact(ae_run_id, full_path)
+        client.log_artifact(ae_run_id, trunc_path)
+    log.info("Pase DMD (%s) registrado para %s; pydmd=%s; linealidad sel: %s", part.name, ae_run_id,
+             pydmd_version, lin_sel)
 
 
 def _cfg_from_run_params(params: dict) -> AEConfig:
@@ -513,9 +762,9 @@ def run_dmd_pass(grid: aed.HourlyGrid, cfg: AEConfig, args, ae_run_id: str, mode
 
     for station, pollutant in sorted({(s, p) for _, s, p in aed.mp_channels()}):
         frame = preds[(preds["estacion"] == station) & (preds["pollutant"] == pollutant)]
-        name = mlflow_log.run_name(station, f"ae-{cfg.arch}-dmd", args.version)
+        name = run_name_dmd(station, pollutant, cfg.arch, args.version, cfg.seed)
         metrics = {f"test_{k}": v for k, v in evaluate_predictions(frame, args.alpha).items()} if not frame.empty else {}
-        tags = {"serie": f"{station}|{pollutant}", "modelo": f"ae-{cfg.arch}-dmd", "stage": "ae-dmd", "tipo": "entrenamiento", "ae_run_id": ae_run_id}
+        tags = {"serie": f"{station}|{pollutant}", "modelo": f"ae-{cfg.arch}-dmd", "stage": "ae-dmd", "tipo": "entrenamiento", "ae_run_id": ae_run_id, "seed": cfg.seed}
         params = {"estacion": station, "pollutant": pollutant, "version": args.version, "tipo": "entrenamiento", "alpha": args.alpha, "rank": "full"}
         frames = {
             "predictions.parquet": frame,
@@ -690,14 +939,26 @@ def run(args) -> int:
         return 0
 
     if not args.no_upload:
-        mlflow_log.download_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None)
+        run_ids = mlflow_log.parse_mlflow_runs(args.mlflow_runs)
+        if run_ids is not None and args.mode == "dmd" and args.ae_run_id:
+            run_ids = [*run_ids, args.ae_run_id]  # el AE se necesita para el pase de DMD
+        mlflow_log.download_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None, run_ids=run_ids)
     mlflow_log.configure(args.mlflow_dir, experiment=args.experiment)
 
-    if args.mode == "final":
+    if args.mode == "final" and args.partition != "holdout":
+        part = pt.get_partition(args.partition)
+        for seed in args.seeds:
+            cfg = _config_from_args(args, args.arch, seed)
+            result = run_final_partition(grid, cfg, args, part, args.version, model_dir)
+            # Pase DMD en cada semilla, sin mirar la compuerta (D3 de ae-dmd-prep).
+            if args.dmd_after_final:
+                run_dmd_pass_partition(grid, cfg, args, part, result["run_id"], result["models"], result["ctx"],
+                                       data["sinca"], data["open_meteo"], data["feriados"])
+    elif args.mode == "final":
         for seed in args.seeds:
             cfg = _config_from_args(args, args.arch, seed)
             result = run_final(grid, cfg, args, args.version, model_dir)
-            # Pase DMD encadenado en el mismo job (D7.6): semilla 0 y solo si la compuerta aprueba.
+            # Pase DMD encadenado en el mismo job (holdout): semilla 0 y solo si la compuerta aprueba.
             if args.dmd_after_final and seed == DMD_SEED:
                 if result["gate"]["gate_pass"]:
                     run_dmd_pass(grid, cfg, args, result["run_id"], result["models"],
@@ -710,9 +971,17 @@ def run(args) -> int:
         if not args.ae_run_id:
             raise SystemExit("--mode dmd requiere --ae-run-id (y opcionalmente --ae-dir para pruebas)")
         cfg, models, gate_pass = load_ae_for_dmd(args, args.ae_run_id)
-        if not gate_pass:
-            raise SystemExit("La compuerta no aprobó este AE: no se aplica el pase de DMD.")
-        run_dmd_pass(grid, cfg, args, args.ae_run_id, models, data["sinca"], data["open_meteo"], data["feriados"])
+        if args.partition == "ae-dmd":
+            # Partición ae-dmd: el pase DMD no exige la compuerta (D3).
+            part = pt.get_partition(args.partition)
+            spans = aed.partition_spans(grid.index, part)
+            ctx = make_context(grid, cfg.length, spans["train"], spans["es"], spans["test"], spans["sel"])
+            run_dmd_pass_partition(grid, cfg, args, part, args.ae_run_id, models, ctx,
+                                   data["sinca"], data["open_meteo"], data["feriados"])
+        else:
+            if not gate_pass:
+                raise SystemExit("La compuerta no aprobó este AE: no se aplica el pase de DMD.")
+            run_dmd_pass(grid, cfg, args, args.ae_run_id, models, data["sinca"], data["open_meteo"], data["feriados"])
 
     if not args.no_upload:
         mlflow_log.upload_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None)
@@ -781,6 +1050,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Encadena el pase de DMD tras el entrenamiento final (semilla 0) si la compuerta aprueba.")
     parser.add_argument(*_flag("ae-dir"), default=None, help="Solo pruebas: directorio local con encoder.keras/decoder_mp.keras/config.json.")
     parser.add_argument(*_flag("ae-run-id"), default=None)
+    parser.add_argument("--partition", choices=("holdout", "ae-dmd"), default="holdout",
+                        help="holdout (actual) o ae-dmd: early stopping en es, selección en sel, test solo latentes (ae-dmd-prep).")
+    parser.add_argument(*_flag("mlflow-runs"), default="all",
+                        help="Descarga selectiva de MLflow: all | none | IDs separados por coma (defecto all).")
     parser.add_argument(*_flag("no-upload"), action="store_true")
     return parser.parse_args(argv)
 

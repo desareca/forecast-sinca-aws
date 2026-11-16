@@ -29,6 +29,19 @@ Uso:
         --hp mode=final --hp arch=gru --hp d=16 --hp length=72 \
         --wait
 
+    # ae-dmd-prep: AE en la partición ae-dmd y reajuste de LightGBM con descarga selectiva de MLflow
+    # (`--hp mlflow_runs=none`: el job solo baja mlflow.sqlite; el AE de `--mode dmd` se agrega solo).
+    python pipeline/train/launch.py \
+        --profile <AWS_PROFILE> --role-arn <training_role_arn> \
+        --image-uri <train_ecr_repository_url>:tf-cpu-v2 --entry-point ae/run.py \
+        --hp mode=final --hp partition=ae-dmd --hp mlflow_runs=none --hp seeds=0 --wait
+
+    python pipeline/train/launch.py \
+        --profile <AWS_PROFILE> --role-arn <training_role_arn> \
+        --image-uri <train_ecr_repository_url>:lgbm-v1 --entry-point train/train.py \
+        --hp mode=refit --hp partition=ae-dmd --hp version=1 --hp mlflow_runs=none \
+        --hp source_run_ids=<slug:pollutant=run_id,...> --wait
+
 Los ARNs salen de los outputs de Terraform (`training_role_arn`,
 `train_ecr_repository_url`). La imagen SIEMPRE lleva tag explícito (nunca
 `:latest`): ver `docker/`.
