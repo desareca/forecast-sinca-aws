@@ -292,3 +292,30 @@ Nota: el barrido usó `lr = 0.001`, pero el ganador de 11.1 tiene `lr = 0.003`. 
 - **(d)** El `lr` correcto del ganador de 11.1 es **0.003** (la fila de la tabla de 11.1 estaba mal transcripta). La referencia es el finalista de 11.3; los barridos de 11.2 (lr 0.001, semilla 0) solo ordenan variantes. La base de 11.2 (0.901/0.909) y el finalista (0.904/0.916) difieren poco; no se re-corren.
 - **Matices para `ae-dmd`:** ganancia modesta sobre PCA(16) (~8 %); aplanamiento común a AE y PCA; PLC II pm25 justo bajo el umbral de 0.05 en test; el DMD global no mejora a LightGBM en RMSE ponderado (33.28 frente a 28.17), lo que motiva `ae-dmd`; `d = 8` como palanca a evaluar.
 
+
+---
+
+## 2026-11-15 - ae-dmd-prep: partición ae-dmd, reentrenamiento y referencias en sel
+
+- **Hipótesis**: con una partición que no usa test para entrenar ni para detener (train hasta 2026-02, early stopping en marzo, selección en abril-junio), los AE, el pase DMD y las referencias (LightGBM y persistencia) se pueden comparar en `sel` sobre las mismas filas. Eso habilita la elección de `dmd-operador-global` sin mirar el test.
+- **Qué se probó**:
+  - Partición `ae-dmd` (features/partition.py): train 2021-01-01 a 2026-03-01, `es` 2026-03, `sel` 2026-04-01 a 2026-07-01, test 2026-07-01 a 2026-10-05 (solo latentes). Embargo de 24 h para filas con target.
+  - AE conv1d y GRU, L = 24, d = 16, hidden 64, dropout 0.1, lr 0.003, batch 128, w_aux 0.1, aux_input on, 60 épocas, patience 8. Tres semillas por arquitectura: 6 Training Jobs, con pase DMD encadenado a cada semilla, sin mirar la compuerta.
+  - LightGBM y persistencia reajustados en `sel` con el mismo corte, usando los hiperparámetros de los runs `lightgbm-v1` (un run fuente por serie, sin búsqueda nueva). Sesgo conocido: esas búsquedas usaron ventanas de validación hasta 2026-06, que incluye `sel`; favorece a LightGBM en esta comparación.
+  - Nombres de run con semilla y contaminante (`sinca-{estacion}-{pollutant}-ae-{arq}-dmd-aedmd-v1-s{seed}`), para que pm10 y pm25 de una estación no compartan nombre.
+- **Resultado** (`output/sel_summary_ae_dmd.md`, medias de las 6 series sobre filas comunes, n mínimo por serie = 1407):
+
+  | modelo | RMSE | RMSE ponderado |
+  |---|---|---|
+  | DMD conv1d s0 / s1 / s2 | 23.08 / 24.13 / 23.98 | 38.83 / 40.92 / 39.54 |
+  | DMD GRU s0 / s1 / s2 | 23.87 / 24.73 / 24.40 | 38.07 / 41.49 / 41.05 |
+  | LightGBM (reajustado) | 31.04 | 32.13 |
+  | Persistencia | 25.23 | 30.94 |
+
+  - Dispersión entre semillas: conv1d ~1.05 de RMSE (rango); GRU ~0.86. Hay variación entre semillas en la misma magnitud que la diferencia con persistencia en RMSE simple.
+  - Compuerta por semilla: `gate_pass = 0` en las 6 semillas (conv1d y GRU). El pase DMD corrió igual, como estaba definido. RMSE medio de reconstrucción en `sel`: conv1d 18.70 / 18.41 / 18.17; GRU 18.07 / 18.96 / 18.35 µg/m³.
+  - Contraste con `pydmd` 2025.8.1: `dmd_pydmd_ok = 1` en los 6 AE (rango completo y truncado); diferencias de autovalores ~1e-15 en el contraste sintético dentro de la imagen `tf-cpu-v2`.
+  - Linealidad del latente en `sel` (RMSE a 1 y 24 pasos): conv1d 0.15-0.18 y 0.81-0.93; GRU 0.06-0.07 y 0.39-0.40.
+  - Costo real (facturable, 11.6): 7 jobs de la serie = 4637 s (1.29 h). Por job: lgbm-v1 89 s; conv1d s0/s1/s2 269/333/326 s; gru s0/s1/s2 1328/1149/1143 s. Con los dos humos, 4940 s (1.37 h). A la tarifa de `design.md` (~USD 0.115/h, no verificada en consola), ~USD 0.16 contra ~USD 0.46 estimados.
+- **Las cifras de referencia cambian por la nueva partición; no es regresión.** Los números 33.28 / 31.09 / 28.17 eran RMSE de test con train hasta junio. Ahora son RMSE en `sel` (abril-junio) con train hasta febrero. No son comparables entre sí.
+- **Decisión / siguiente paso**: estas filas `sel` son la base para `dmd-operador-global` (7.1): elegir representación y operador con `sel`, sin test. La compuerta en `ae-dmd` es informativa (`gate_pass = 0`), y el DMD global sigue siendo la fila de continuidad de 33.28 hasta que 7.1 decida. Anotado en las notas de `tasks.md`.

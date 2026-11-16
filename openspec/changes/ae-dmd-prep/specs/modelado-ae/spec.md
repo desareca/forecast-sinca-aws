@@ -26,11 +26,15 @@ Una ventana de AE SHALL pertenecer a un tramo solo si cae completa dentro de él
 
 ### Requirement: Reentrenamiento de AE en la partición `ae-dmd`
 
-El sistema SHALL entrenar un AE en la partición `ae-dmd` normalizando con su train, deteniendo con `es` y calculando métricas de reconstrucción, referencias (promedio y PCA del mismo `d`), compuerta, ablación de `z_aux` y diagnósticos del latente sobre `sel`. El sistema SHALL guardar el latente de los cuatro tramos y NO SHALL calcular métricas, reconstrucciones ni pronósticos sobre el test en esta partición. Cada semilla SHALL registrarse como un run propio.
+El sistema SHALL entrenar un AE en la partición `ae-dmd` normalizando con su train, con un número fijo de épocas sin early stopping, y SHALL calcular sobre `sel` la reconstrucción, las referencias, la compuerta, la ablación de `z_aux` y los diagnósticos del latente. El sistema SHALL guardar el latente de los cuatro tramos y NO SHALL calcular métricas, reconstrucciones ni pronósticos sobre el test en esta partición. Cada semilla SHALL registrarse como un run propio.
 
 #### Scenario: Latentes de los cuatro tramos
 - **WHEN** termina el entrenamiento de un AE en `ae-dmd`
 - **THEN** `latent.parquet` contiene filas con `split` en `train`, `es`, `sel` y `test`
+
+#### Scenario: Sin early stopping
+- **WHEN** se entrena un AE en `ae-dmd`
+- **THEN** corre el número de épocas pedido completo y ninguna decisión de entrenamiento usa `es` ni `sel`
 
 #### Scenario: Test sin métricas
 - **WHEN** se registra un AE entrenado en `ae-dmd`
@@ -50,7 +54,7 @@ En la partición `ae-dmd`, el sistema SHALL aplicar el DMD exacto actual (rango 
 
 ### Requirement: Referencias de pronóstico en la validación de selección
 
-El sistema SHALL producir, para la partición `ae-dmd`, `predictions.parquet` de persistencia y de LightGBM sobre las filas de `sel`. LightGBM SHALL reajustarse por serie con el train y el `es` de la partición, usando los hiperparámetros de un run fuente indicado explícitamente por serie y sin nueva búsqueda. El sistema SHALL rechazar la ejecución si falta el run fuente de alguna serie o si su serie no coincide.
+El sistema SHALL producir, para la partición `ae-dmd`, `predictions.parquet` de persistencia y de LightGBM sobre las filas de `sel`. LightGBM SHALL reajustarse por serie con el train de la partición, usando los hiperparámetros y el número de rondas del booster de un run fuente indicado explícitamente por serie, sin early stopping ni nueva búsqueda. El sistema SHALL rechazar la ejecución si falta el run fuente de alguna serie o si su serie no coincide.
 
 #### Scenario: Mismo corte de información
 - **WHEN** se reajusta LightGBM para `ae-dmd`
