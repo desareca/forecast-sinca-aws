@@ -8,6 +8,7 @@ imágenes son **solo runtime**: el código viaja por `source_dir`/`entry_point` 
 |---|---|---|---|
 | `train.Dockerfile` | `sinca-train` | `lgbm-v1` | Baseline LightGBM (Fase 3). |
 | `train-tf.Dockerfile` | `sinca-train` | `tf-cpu-v1` | Autoencoders TensorFlow (`ae-reconstruccion`). |
+| `train-tf-v2.Dockerfile` | `sinca-train` | `tf-cpu-v2` | AE + `pydmd` a prueba (`ae-dmd-prep`). `FROM` la `tf-cpu-v1` de ECR (`BASE_IMAGE`) + una capa `pydmd==2025.8.1`. |
 | `scraper.Dockerfile` | (pipeline de datos) | — | Scraper de la Fase 2; instala sus deps inline. |
 | `analysis.Dockerfile` | (dashboard local) | — | Dashboard Streamlit, `requirements-analysis.txt`. |
 
@@ -29,6 +30,39 @@ Desde la raíz del repo:
 docker build -f docker/train.Dockerfile -t sinca-train:lgbm-v1 .
 docker build -f docker/train-tf.Dockerfile -t sinca-train:tf-cpu-v1 .
 ```
+
+## Imagen `tf-cpu-v2` (`ae-dmd-prep`): build y chequeo de aceptación
+
+```powershell
+$profile = (Select-String -Path .env -Pattern '^AWS_PROFILE=').Line.Split('=', 2)[1].Trim()
+$acct = aws sts get-caller-identity --profile $profile --query Account --output text
+$reg = "$acct.dkr.ecr.us-east-1.amazonaws.com"
+aws ecr get-login-password --region us-east-1 --profile $profile | docker login --username AWS --password-stdin $reg
+docker pull "$reg/sinca-train:tf-cpu-v1"
+docker build -f docker/train-tf-v2.Dockerfile --build-arg "BASE_IMAGE=$reg/sinca-train:tf-cpu-v1" -t sinca-train:tf-cpu-v2 .
+```
+
+Chequeo de aceptación (D8): el freeze de v2 debe ser el de v1 más las líneas de `pydmd`, sin
+cambiar ninguna versión de v1 (incluido `mlflow`; si `pydmd` fuerza una actualización, plan B); y
+`pip check` igual en ambas (v1 ya reporta el conflicto conocido de `sagemaker-training` con
+`protobuf`). Pegar el diff en las notas de `ae-dmd-prep`:
+
+```powershell
+docker run --rm --entrypoint pip sinca-train:tf-cpu-v1 freeze | Sort-Object | Set-Content "$env:TEMP\freeze-v1.txt"
+docker run --rm --entrypoint pip sinca-train:tf-cpu-v2 freeze | Sort-Object | Set-Content "$env:TEMP\freeze-v2.txt"
+Compare-Object (Get-Content "$env:TEMP\freeze-v1.txt") (Get-Content "$env:TEMP\freeze-v2.txt")
+docker run --rm --entrypoint pip sinca-train:tf-cpu-v1 check
+docker run --rm --entrypoint pip sinca-train:tf-cpu-v2 check
+```
+
+Contraste numérico numpy vs `pydmd` dentro de la imagen (debe salir con `ok`):
+
+```powershell
+docker run --rm -v "${PWD}:/repo" -w /repo --entrypoint python sinca-train:tf-cpu-v2 scripts/ae/pydmd_check.py --synthetic
+```
+
+Si v2 no cumple el chequeo: plan B. No se publica `tf-cpu-v2`; los jobs usan `tf-cpu-v1` y el
+contraste corre fuera de la imagen (`requirements-dmd.txt`).
 
 ## Push a ECR
 

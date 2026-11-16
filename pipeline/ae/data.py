@@ -36,6 +36,7 @@ from features.build import (
     _holiday_dates,
     _to_hours,
 )
+from features.partition import TRAMOS, tramo_bounds
 
 GAP_MAX_HOURS = 6
 CLIP_AUX = 5.0
@@ -297,6 +298,18 @@ def holdout_spans(index: pd.DatetimeIndex) -> dict[str, tuple[int, int]]:
         "train": span(index, index[0], TEST_START),
         "test": span(index, TEST_START, test_stop),
     }
+
+
+def partition_spans(index: pd.DatetimeIndex, part) -> dict[str, tuple[int, int]]:
+    """Posiciones `[lo, hi)` de cada tramo de la partición con nombre (`features.partition`).
+
+    Los límites son fechas locales; `span` los compara con la grilla (naive o con tz).
+    """
+    out: dict[str, tuple[int, int]] = {}
+    for tramo in TRAMOS:
+        start, stop = tramo_bounds(part, tramo)
+        out[tramo] = span(index, start.tz_localize(None), stop.tz_localize(None))
+    return out
 
 
 def rolling_spans(index: pd.DatetimeIndex, windows: list[dict]) -> list[dict[str, tuple[int, int]]]:

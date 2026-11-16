@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import sqlite3
 
 from botocore.exceptions import ClientError
 
@@ -83,8 +84,73 @@ def _get_client(client=None):
     return client or get_client()
 
 
-def download_state(bucket: str, prefix: str, local_dir: str, client=None) -> list[str]:
-    """Baja `mlflow.sqlite` y `mlruns/` de S3 al directorio local (si existen)."""
+def parse_mlflow_runs(text: str | None) -> list[str] | None:
+    """Interpreta `--mlflow-runs`: `None`/`""`/`all` -> todo (`None`); `none` -> `[]`; IDs separados por coma."""
+    if text is None:
+        return None
+    value = text.strip()
+    if value in ("", "all"):
+        return None
+    if value == "none":
+        return []
+    return [item for item in value.split(",") if item]
+
+
+def _list_objects(client, bucket: str, prefix: str) -> list[tuple[str, int]]:
+    """Claves y tamaños bajo un prefijo (sin marcadores de directorio)."""
+    out: list[tuple[str, int]] = []
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if not obj["Key"].endswith("/"):
+                out.append((obj["Key"], int(obj.get("Size", -1))))
+    return out
+
+
+def _experiment_id(local_dir: str, run_id: str) -> str | None:
+    """`experiment_id` del run en el `mlflow.sqlite` local (None si no está)."""
+    db = os.path.join(local_dir, DB_FILENAME)
+    if not os.path.exists(db):
+        return None
+    con = sqlite3.connect(db)
+    try:
+        row = con.execute("select experiment_id from runs where run_uuid = ?", (run_id,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        con.close()
+    return str(row[0]) if row else None
+
+
+def _download_selected_runs(client, bucket: str, prefix: str, local_dir: str, run_ids: list[str]) -> list[str]:
+    """Baja solo los artefactos de los runs pedidos (layout con y sin experimento)."""
+    downloaded: list[str] = []
+    for run_id in run_ids:
+        objects: list[tuple[str, int]] = []
+        experiment_id = _experiment_id(local_dir, run_id)
+        if experiment_id is not None:
+            objects = _list_objects(client, bucket, f"{prefix}/{ARTIFACTS_DIRNAME}/{experiment_id}/{run_id}/")
+        if not objects:
+            objects = _list_objects(client, bucket, f"{prefix}/{ARTIFACTS_DIRNAME}/{run_id}/")
+        if not objects:
+            log.warning("Run %s sin objetos en s3://%s/%s; no se baja nada.", run_id, bucket, prefix)
+            continue
+        for key, size in objects:
+            relative = key[len(prefix) + 1:]
+            destination = os.path.join(local_dir, *relative.split("/"))
+            if size >= 0 and os.path.exists(destination) and os.path.getsize(destination) == size:
+                continue
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            client.download_file(bucket, key, destination)
+            downloaded.append(key)
+    return downloaded
+
+
+def download_state(bucket: str, prefix: str, local_dir: str, client=None, run_ids: list[str] | None = None) -> list[str]:
+    """Baja `mlflow.sqlite` y `mlruns/` de S3 al directorio local (si existen).
+
+    `run_ids=None` baja todo (comportamiento original). Una lista (vacía o no) baja
+    el sqlite y, por cada run, solo sus artefactos (`ae-dmd-prep`, D6); `[]` = solo sqlite.
+    """
     client = _get_client(client)
     os.makedirs(local_dir, exist_ok=True)
     downloaded: list[str] = []
@@ -99,6 +165,11 @@ def download_state(bucket: str, prefix: str, local_dir: str, client=None) -> lis
         if code not in _MISSING_CODES:
             raise
         log.info("Estado previo ausente en s3://%s/%s (arranca vacío).", bucket, db_key)
+
+    if run_ids is not None:
+        downloaded.extend(_download_selected_runs(client, bucket, prefix, local_dir, run_ids))
+        log.info("Estado MLflow descargado (selectivo): %d objetos.", len(downloaded))
+        return downloaded
 
     paginator = client.get_paginator("list_objects_v2")
     objects_prefix = f"{prefix}/{ARTIFACTS_DIRNAME}/"

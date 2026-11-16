@@ -49,6 +49,7 @@ def fit_dmd(segments, rank: int | None = None) -> dict:
     if rank is None or rank >= min(z0.shape):
         k = z1 @ np.linalg.pinv(z0)
         used_rank = d
+        a_tilde = None
     else:
         u, s, vt = np.linalg.svd(z0, full_matrices=False)
         u_r, s_r, v_r = u[:, :rank], s[:rank], vt[:rank].T
@@ -56,7 +57,9 @@ def fit_dmd(segments, rank: int | None = None) -> dict:
         k = u_r @ a_tilde @ u_r.T
         used_rank = rank
     eigvals = np.linalg.eigvals(k)
-    return {"K": k, "rank": int(used_rank), "eigvals": eigvals}
+    # Autovalores del operador reducido Ã (r x r). Con rango completo, Ã = K.
+    eigvals_tilde = eigvals if a_tilde is None else np.linalg.eigvals(a_tilde)
+    return {"K": k, "rank": int(used_rank), "eigvals": eigvals, "eigvals_tilde": eigvals_tilde}
 
 
 def predict_latent(k: np.ndarray, z0: np.ndarray, steps: int) -> np.ndarray:
@@ -92,6 +95,59 @@ def forecast_from_decoded(decoded_ugm3: np.ndarray, horizon: int = HORIZON_FOREC
     return decoded[:, -horizon:, :].mean(axis=1)
 
 
+def longest_segment(segments) -> np.ndarray:
+    """Segmento contiguo más largo (en filas); con empate, el primero."""
+    segs = [np.asarray(seg, dtype=float) for seg in segments]
+    if not segs:
+        raise ValueError("No hay segmentos.")
+    return max(segs, key=lambda seg: seg.shape[0])
+
+
+def _nearest_gap(a: np.ndarray, b: np.ndarray) -> float:
+    """Mayor distancia de un autovalor de `a` a su vecino más cercano en `b`."""
+    return float(np.abs(a[:, None] - b[None, :]).min(axis=1).max())
+
+
+def pydmd_crosscheck(segment, rank: int | None = None, tol: float = 1e-6) -> dict:
+    """Contrasta el DMD exacto de numpy con `pydmd` sobre un mismo segmento (D8).
+
+    Compara autovalores (distancia simétrica) y, con rango completo, la predicción a
+    1 paso `K z_t` contra `Phi diag(lambda) Phi^+ z_t` de `pydmd`, relativa a la rms del
+    segmento. El import es perezoso: sin `pydmd` lanza `ImportError` (lo decide el llamador).
+    """
+    from importlib.metadata import version as package_version
+
+    from pydmd import DMD
+
+    seg = np.asarray(segment, dtype=float)
+    if seg.ndim != 2 or seg.shape[0] < 3:
+        raise ValueError("El segmento necesita al menos 3 instantes y forma [T, d].")
+    fit = fit_dmd([seg], rank)
+    k = fit["K"]
+    model = DMD(svd_rank=-1 if rank is None else rank, exact=True)
+    model.fit(seg.T)  # pydmd espera snapshots en columnas
+    lam_py = np.asarray(model.eigs)
+    # Se compara con Ã (r x r): con rango truncado, K tiene d - r autovalores nulos extra que pydmd no reporta.
+    lam_np = np.asarray(fit["eigvals_tilde"])
+    eig_maxdiff = max(_nearest_gap(lam_np, lam_py), _nearest_gap(lam_py, lam_np))
+
+    pred1_maxdiff = float("nan")
+    if rank is None:
+        phi = np.asarray(model.modes)
+        operator = phi @ np.diag(lam_py) @ np.linalg.pinv(phi)
+        z0 = seg[:-1]
+        pred_np = z0 @ k.T
+        pred_py = (z0 @ operator.T).real
+        scale = float(np.sqrt(np.mean(seg**2))) or 1.0
+        pred1_maxdiff = float(np.max(np.abs(pred_np - pred_py)) / scale)
+
+    ok = bool(eig_maxdiff <= tol and (not np.isfinite(pred1_maxdiff) or pred1_maxdiff <= tol))
+    return {
+        "eig_maxdiff": float(eig_maxdiff),
+        "pred1_maxdiff": pred1_maxdiff,
+        "ok": ok,
+        "version": package_version("pydmd"),  # pydmd no expone __version__
+    }
 def dmd_operator_arrays(fit: dict) -> dict[str, np.ndarray]:
     """Contenido de `dmd_operator.npz`: `K`, rango y autovalores (parte real e imaginaria)."""
     eig = np.asarray(fit["eigvals"])
