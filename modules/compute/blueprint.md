@@ -138,3 +138,14 @@ el almacenamiento intermedio (S3) y la orquestación (ver `cicd/blueprint.md`).
   CloudWatch y un `print` puede reventar con `UnicodeEncodeError`; reconfigurar
   stdout a UTF-8 (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`)
   al arrancar el launcher. El job sigue corriendo aunque el cliente muera.
+- **Imagen nueva = capa sobre la publicada, no rebuild** (`ae-dmd-prep`): reconstruir
+  `tf-cpu-v2` desde `python:3.11-slim` resolvió versiones nuevas en los rangos sin fijar
+  (mlflow 3.17 → 3.18, boto3, SQLAlchemy). Un mlflow distinto puede migrar el sqlite compartido.
+  Para agregar un paquete: `FROM <imagen publicada por digest>` + una capa; aceptar solo si
+  `pip freeze` agrega líneas sin cambiar versiones.
+- **Un job por semilla**: si falla uno, se repite solo esa semilla; el script en serie salta
+  los `Completed` y se reanuda relanzándolo.
+- **Tiempos medidos (`ml.m5.large`, L = 24, 60 épocas)**: conv1d ~15 min, GRU ~40 min por
+  semilla; LightGBM refit de 6 series ~3 min. Serie de 7 jobs ≈ 2,8 h facturables (~USD 0,32).
+- **ECR `sinca-train` conserva un tag `latest` antiguo** (2026-10-19): no usarlo; los
+  launchers exigen tag explícito.

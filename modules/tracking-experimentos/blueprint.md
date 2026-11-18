@@ -122,3 +122,19 @@ parámetros y artefactos; el registro decide dónde se versiona el modelo.
   se borran por S3, no con `gc`).
 - **Nombres de run duplicados en corridas con semillas**: `ref-mean` y `ae_{arq}-v{n}`
   se repiten entre corridas; incluir la semilla (o un param único) para distinguirlos.
+- **Sincronización parcial** (`ae-dmd-prep`): `download_state(run_ids=...)` /
+  `ensure_state(run_ids=...)` y el hp `--mlflow-runs none` bajan solo el sqlite (o el sqlite
+  más los runs pedidos). Basta para jobs que solo agregan runs: `upload_state` no borra en S3.
+- **Layout real de artefactos**: `_mlflow/mlruns/<run_id>/` (sin subdirectorio de
+  experimento). El código prueba ese layout primero y `mlruns/<exp>/<run>/` como respaldo.
+- **Nombres únicos**: semilla (`-s{seed}`), token de partición y, en runs por serie de una
+  partición con nombre, el contaminante. Resuelve la colisión pm10/pm25 anotada arriba.
+- **Mantenimiento del sqlite**: `scripts/mlflow/maintenance.py plan` (solo lectura) →
+  `apply --yes` sobre copia local → respaldo en `_mlflow/backups/` → subida. Comprobar con
+  `head-object` que `LastModified` no cambió entre la descarga y la subida.
+- **`list_runs` omite runs borrados** (`lifecycle_stage`); antes, un `delete_run` seguía
+  apareciendo en el dashboard.
+- **Profile explícito en todo CLI local que toca S3** (`--profile` obligatorio). Un
+  `default` de otra cuenta dio 403. Deuda: el dashboard (fuente "S3 (real)") aún no lo pide.
+- **Early stopping con un mes de baja concentración corta demasiado pronto**: con marzo, AE en
+  época 3–24 y LightGBM en 41–145 rondas. En `ae-dmd` se usa presupuesto fijo (§9).

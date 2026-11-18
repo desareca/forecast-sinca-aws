@@ -1,7 +1,7 @@
 # Predicción Calidad del Aire (SINCA) — Plan de arquitectura (contexto para OpenSpec)
 
 **Fecha:** 2026-09-21
-**Estado:** Fase 4 en progreso — `ae-reconstruccion` cerrado; `ae-dmd` replanificado en 4 changes (ver §8 y §9, actualizado 2026-11-15)
+**Estado:** Fase 4 en progreso — `ae-reconstruccion` y `ae-dmd-prep` cerrados; siguiente `dmd-operador-global` (ver §8 y §9, actualizado 2026-11-18)
 
 Este documento es la fuente de verdad de arquitectura del proyecto. Las
 decisiones acá cerradas no se re-discuten salvo que cambien explícitamente, y
@@ -86,7 +86,8 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
 7. `ae-dmd` (Fase 4, parte 2) — **se divide en 4 changes con compuertas** (ver §9,
    "Plan de `ae-dmd`"). El borrador original (proposal/design con PA-1…PA-14) se movió a
    `docs/referencia/ae-dmd-borrador/` y queda **solo como referencia**; lo que vale es §9.
-   - 7.0 `ae-dmd-prep` — mantención y nueva partición (reentrenar conv1d y GRU).
+   - 7.0 `ae-dmd-prep` — mantención y nueva partición (reentrenar conv1d y GRU). **(completado)**
+     Base de 7.1: runs `version = 2` (presupuesto fijo). Cifras en `EXPERIMENT-LOG.md`.
    - 7.1 `dmd-operador-global` — oráculo, escalera de representaciones, picos,
      exógenas, horizonte, estimador y selección de modos (post-hoc, CPU).
    - 7.2 `dmd-localizado` — medición de variabilidad de la dinámica; operador
@@ -176,8 +177,13 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
 - **Presupuesto fijo, sin early stopping (2026-11-15, tras `ae-dmd-prep`)**: detener con marzo
   cortaba muy pronto (mes de baja concentración, ~500–670 filas): AE en época 3–24 y LightGBM en
   41–145 rondas, peor que persistencia en `sel`. Desde `ae-dmd-prep` v2: AE con 60 épocas fijas;
-  LightGBM con `num_boost_round` = árboles del booster v1 de cada serie (fuga leve conocida: el
-  early stopping de v1 usó junio de 2026, a favor de LightGBM). Ningún presupuesto se elige con `sel`.
+  LightGBM con `num_boost_round` = árboles del booster baseline `lightgbm-v1` de cada serie (1000 en
+  las 6 = tope `NUM_BOOST_ROUND`: el baseline no cortó por early stopping, así que la fuga vía junio
+  de 2026 no se confirma). Ningún presupuesto se elige con `sel`.
+- **Pendiente para `dmd-operador-global` (decide el operador al planificarlo)**: en `sel`, LightGBM
+  entrenado una vez (34.24 ponderado) queda peor que persistencia (30.94); el criterio
+  "≤ 1.05 × LightGBM" pierde exigencia. Propuesta: exigir además skill > 0 vs persistencia en las
+  6 series (hoy solo PLC II).
 - Al reentrenar con esta partición, las cifras de referencia de `ae-reconstruccion`
   cambian algo: anotarlo en `EXPERIMENT-LOG.md`, no es regresión.
 
