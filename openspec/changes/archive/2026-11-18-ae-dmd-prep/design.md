@@ -177,7 +177,9 @@ Parámetros `-TfTag` (defecto `tf-cpu-v2`) y `-SourceRunIds`.
 - AE (`--early-stopping off`): `fit` sin `valid` → 60 épocas completas, sin restaurar pesos. Marzo
   se sigue reportando (`es_recon_*`) como diagnóstico. `holdout` no cambia (defecto `on`).
 - LightGBM (`--rounds-from-source`): `num_boost_round` = `num_trees()` del booster `.txt` del run
-  fuente v1 (guardado con `num_iteration = best_iteration`), sin conjunto de validación. Marzo no
+  fuente: el **baseline** `sinca-{estacion}-lightgbm-v1` (el de la búsqueda, el que dio 28.17 en
+  test), **no** el refit `lightgbm-aedmd-v1` (ese usó early stopping con marzo, justo lo que D11
+  elimina). Sin conjunto de validación. Marzo no
   entra al train (se mantiene la partición).
 - Alternativa descartada: mediana de rondas de las ventanas rolling previas a 2026-03 (sin fuga,
   pero el dato no se guardó por ventana). Early stopping con bloques del train: más código y riesgo.
