@@ -36,6 +36,7 @@ htmlcov/
 !notebooks/analisis_baseline.ipynb
 
 # MLflow / artefactos locales de entrenamiento
+output/
 mlruns/
 artifacts/
 runs/
@@ -51,3 +52,4 @@ mlflow-smoke-review/
 search-review/
 .venv-dmd/
 mlflow-maint/
+mlflow-v2/

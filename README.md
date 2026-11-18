@@ -384,9 +384,14 @@ razón AE/PCA(16) en test 0.916). El DMD global todavía no supera a LightGBM; e
 de partida de `ae-dmd`. Ver ["Autoencoders"](#autoencoders-fase-4-parte-1) y
 [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
 
-**Siguiente — Fase 4, parte 2 (`ae-dmd`)**: dinámica sobre el latente, replanificada en 4
-changes (`ae-dmd-prep` → `dmd-operador-global` → `dmd-localizado` → `deep-koopman`).
-Ver `project-decisions.md` §9 y `docs/ae-dmd-propuesta-experimentos.md`.
+**Fase 4, parte 2 — `ae-dmd` (en curso).** Plan en 4 changes (`ae-dmd-prep` →
+`dmd-operador-global` → `dmd-localizado` → `deep-koopman`), ver `project-decisions.md` §9.
+`ae-dmd-prep` **(completado)**: partición `ae-dmd` (train → 2026-02, marzo solo diagnóstico,
+selección `sel` = abril–junio, test intacto), conv1d y GRU `L = 24` × 3 semillas con 60 épocas
+fijas, pase DMD por semilla, referencias persistencia/LightGBM en `sel`, descarga selectiva de
+MLflow e imagen `tf-cpu-v2` con `pydmd`. En `sel`: el DMD tiene el mejor RMSE simple pero el peor
+ponderado (subestima picos); persistencia es la referencia más fuerte. Detalle en
+[`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md). **Siguiente:** `dmd-operador-global`.
 
 ### Correr local (sin AWS, sin escribir)
 
@@ -447,12 +452,15 @@ pipeline/ae/
 └── run.py       # entry point: modos search / final / reference / dmd
 ```
 
-- **Cómputo**: Training Job on-demand en CPU `ml.m5.large`, imagen `sinca-train:tf-cpu-v1`.
+- **Cómputo**: Training Job on-demand en CPU `ml.m5.large`, imagen `sinca-train:tf-cpu-v1`
+  (`tf-cpu-v2` = v1 + `pydmd`, desde `ae-dmd-prep`).
   Comandos y flujo en [`pipeline/ae/README.md`](pipeline/ae/README.md) y build/tags en
   [`docker/README.md`](docker/README.md).
-- **Tracking**: mismo experimento `sinca-baseline`; runs `sinca-zona-ae_{arq}-v{n}`,
-  referencias `ref-mean` / `ref-pca-d{d}` y runs por serie `ae-{arq}-dmd` comparables con
-  LightGBM en el dashboard (vista "Autoencoders").
+- **Tracking**: mismo experimento `sinca-baseline`; runs `sinca-zona-ae_{arq}[-aedmd]-v{n}-s{seed}`,
+  referencias `ref-mean-L{L}-v{n}` / `ref-pca-d{d}-L{L}-v{n}` y runs por serie `ae-{arq}-dmd`
+  comparables con LightGBM en el dashboard (vista "Autoencoders"). Partición `ae-dmd`:
+  `--partition ae-dmd` (ver [`pipeline/ae/README.md`](pipeline/ae/README.md)); resumen de `sel`
+  con `pipeline/analysis/sel_summary.py --profile <AWS_PROFILE>`.
 - **Referencia**: conv1d `L = 24`, `d = 16`. Decisiones, cifras y hallazgos en
   [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
 - **Tests**: `tests/ae/` (sin AWS).
