@@ -3,9 +3,7 @@
 ## Purpose
 
 Análisis y visualización on-demand de los resultados de entrenamiento del baseline: dashboard interactivo que lee el estado de MLflow desde S3 (sin servidor) y expone series real vs predicho, `ICAP_zona`, feature importance y comparación contra el baseline de persistencia.
-
 ## Requirements
-
 ### Requirement: Dashboard de análisis de modelos
 
 El sistema SHALL disponer de un dashboard Streamlit interactivo que, por run de entrenamiento, muestre: resumen de RMSE por serie (LightGBM vs persistencia), series real vs predicho con bandas ICAP (alerta 100 / preemergencia 200 / emergencia 300), `ICAP_zona` real vs predicho, y feature importance por serie.
@@ -16,11 +14,19 @@ El sistema SHALL disponer de un dashboard Streamlit interactivo que, por run de 
 
 ### Requirement: Lectura del estado de MLflow sin servidor
 
-El sistema SHALL leer el estado de MLflow (`mlflow.sqlite` y `mlruns/`) desde `sinca-mlflow/_mlflow/`, incluyendo los artefactos de diagnóstico (`predictions.parquet`, `feature_importance.parquet`, `zone_icap.parquet`), sin requerir un servidor MLflow corriendo.
+El sistema SHALL leer el estado de MLflow (`mlflow.sqlite` y `mlruns/`) desde `sinca-mlflow/_mlflow/`, incluyendo los artefactos de diagnóstico (`predictions.parquet`, `feature_importance.parquet`, `zone_icap.parquet`), sin requerir un servidor MLflow corriendo. El sistema SHALL permitir descargar solo `mlflow.sqlite` más los artefactos de los runs pedidos. El listado de runs NO SHALL incluir por defecto los runs borrados (`lifecycle_stage = deleted`).
 
 #### Scenario: Carga y listado de runs
 - **WHEN** se inicia el dashboard o se refrescan los datos
 - **THEN** se descargan el `mlflow.sqlite` y los artefactos necesarios desde S3 y se listan los runs disponibles del experimento
+
+#### Scenario: Descarga selectiva
+- **WHEN** se pide el estado para una lista de runs
+- **THEN** se descargan `mlflow.sqlite` y solo los artefactos de esos runs
+
+#### Scenario: Run borrado
+- **WHEN** un run fue borrado con `delete_run`
+- **THEN** no aparece en el listado de runs
 
 ### Requirement: Degradación ante runs sin diagnósticos
 
@@ -77,3 +83,16 @@ El sistema SHALL listar y mostrar los runs que no tienen parámetros `estacion`/
 #### Scenario: Run sin feature importance
 - **WHEN** un run no tiene `feature_importance.parquet`
 - **THEN** el dashboard omite ese panel y muestra un aviso
+
+### Requirement: Resumen de la validación de selección
+
+El sistema SHALL producir, para una partición con nombre, un resumen de la validación de selección que compare persistencia, LightGBM y cada pase de DMD sobre las filas comunes a todos ellos por serie, con RMSE y RMSE ponderado por serie, su media sobre las 6 series y el número de filas comunes, y una tabla de los runs de AE con su compuerta, su reconstrucción en `sel`, su linealizabilidad y el resultado del contraste con `pydmd`.
+
+#### Scenario: Filas comunes
+- **WHEN** un modelo no tiene predicción para un `timestamp` de una serie
+- **THEN** ese `timestamp` se excluye de esa serie para todos los modelos del resumen
+
+#### Scenario: Resumen sin runs de la partición
+- **WHEN** no hay runs con la partición pedida
+- **THEN** el resumen informa que no hay runs y termina sin error
+
