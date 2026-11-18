@@ -104,6 +104,21 @@ def summary_tables(frames: dict[str, pd.DataFrame], alpha: float = ALPHA_DEFAULT
     return pd.DataFrame(per_series), pd.DataFrame(means)
 
 
+def select_version(runs: list[dict], version: int | None = None) -> tuple[list[dict], int | None]:
+    """Filtra por el param `version` (13.3). Sin `version` usa la mayor presente (la corrida vigente)."""
+    def _version(run: dict) -> int | None:
+        raw = run.get("params", {}).get("version")
+        try:
+            return int(float(raw)) if raw is not None else None
+        except ValueError:
+            return None
+
+    present = [v for v in (_version(r) for r in runs) if v is not None]
+    chosen = version if version is not None else (max(present) if present else None)
+    selected = [r for r in runs if chosen is not None and _version(r) == chosen]
+    return selected, chosen
+
+
 def ae_table(runs: list[dict]) -> pd.DataFrame:
     """Una fila por run AE con la compuerta, la linealidad y el contraste con `pydmd`."""
     rows = []
@@ -172,10 +187,12 @@ def _md_table(frame: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(partition: str, per_series: pd.DataFrame, means: pd.DataFrame, ae: pd.DataFrame) -> str:
+def render_markdown(partition: str, per_series: pd.DataFrame, means: pd.DataFrame, ae: pd.DataFrame,
+                    version: int | None = None) -> str:
     n_common = int(means["n"].min()) if not means.empty else 0
+    title_version = f", versión {version}" if version is not None else ""
     return "\n".join([
-        f"# Resumen de `sel` - partición `{partition}`",
+        f"# Resumen de `sel` - partición `{partition}`{title_version}",
         "",
         f"Filas comunes a todas las etiquetas (valor finito en todas): n mínimo por serie = {n_common}; "
         "en la tabla por serie, n es el de cada serie tras la intersección. Métricas sobre `sel`, con embargo de 24 h.",
@@ -204,7 +221,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--partition", default="ae-dmd", help="Valor del tag `particion` de los runs a resumir.")
     parser.add_argument("--state-dir", default=None, help="Directorio local del estado MLflow (defecto: temporal, desde S3).")
     parser.add_argument("--experiment", default=analysis_load.EXPERIMENT_NAME)
-    parser.add_argument("--out", default=None, help="Markdown de salida (defecto output/sel_summary_<partición>.md).")
+    parser.add_argument("--out", default=None,
+                        help="Markdown de salida (defecto output/sel_summary_<partición>_v<n>.md).")
+    parser.add_argument("--version", type=int, default=None,
+                        help="Filtra el param `version` de los runs (defecto: la mayor presente en la partición).")
     parser.add_argument("--alpha", type=float, default=ALPHA_DEFAULT)
     parser.add_argument("--profile", default=None,
                         help="Profile AWS de la cuenta personal (obligatorio: el valor de AWS_PROFILE en .env).")
@@ -216,17 +236,20 @@ def main(argv: list[str] | None = None) -> int:
     state = analysis_load.ensure_state(data_dir=args.state_dir, run_ids=[], client=client)  # solo mlflow.sqlite
     runs = [run for run in analysis_load.list_runs(state, experiment_name=args.experiment)
             if run.get("tags", {}).get("particion") == args.partition]
+    runs, version = select_version(runs, args.version)
     if not runs:
-        print(f"Sin runs con particion={args.partition} en el experimento {args.experiment}.")
+        print(f"Sin runs con particion={args.partition}"
+              f"{'' if version is None else f' y version={version}'} en el experimento {args.experiment}.")
         return 0
 
     analysis_load.ensure_state(data_dir=state, run_ids=[run["run_id"] for run in runs], client=client)  # artefactos
     frames = load_sel_predictions(state, runs)
     per_series, means = summary_tables(frames, args.alpha)
     ae = ae_table([run for run in runs if analysis_load.is_ae_run(run)])
-    markdown = render_markdown(args.partition, per_series, means, ae)
+    markdown = render_markdown(args.partition, per_series, means, ae, version)
 
-    out = pathlib.Path(args.out or f"output/sel_summary_{args.partition.replace('-', '_')}.md")
+    token = args.partition.replace("-", "_")
+    out = pathlib.Path(args.out or f"output/sel_summary_{token}_v{version}.md")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(markdown, encoding="utf-8")
     print(markdown)

@@ -15,12 +15,14 @@
 #
 # Uso:
 #   .\scripts\ae\run_ae_dmd_prep.ps1 -Smoke -DryRun
-#   .\scripts\ae\run_ae_dmd_prep.ps1 -SourceRunIds "padre_las_casas_ii:pm25=<run>,..."           # serie real
+#   .\scripts\ae\run_ae_dmd_prep.ps1 -Version 2 -SourceRunIds "padre_las_casas_ii:pm25=<run>,..."  # serie v2 (defecto)
 #   .\scripts\ae\run_ae_dmd_prep.ps1 -SourceRunIds "..." -TfTag tf-cpu-v1                         # plan B
 #
 # Log: %TEMP%\sinca-aedmd-prep-<fecha>.log
 
 param(
+    # v2 (D11): presupuesto fijo sin early stopping. v1 queda como evidencia (no se relanza).
+    [ValidateRange(1, 99)][int]$Version = 2,
     [string]$TfTag = 'tf-cpu-v2',
     [string]$SourceRunIds = '',
     [string]$SmokeJobName = 'sinca-aedmd-prep-smoke',
@@ -91,7 +93,7 @@ function New-AeHp([string]$arch, [hashtable]$over) {
         mode = 'final'; partition = 'ae-dmd'; arch = $arch; length = '24'; d = '16'
         hidden = '64'; dropout = '0.1'; lr = '0.003'; batch_size = '128'
         w_aux = '0.1'; aux_input = 'true'; seeds = '0'; epochs = '60'; patience = '8'
-        dmd_after_final = 'true'; version = '1'; mlflow_runs = 'none'
+        dmd_after_final = 'true'; version = "$Version"; mlflow_runs = 'none'; early_stopping = 'off'
     }
     foreach ($k in $over.Keys) { $hp[$k] = $over[$k] }
     return $hp
@@ -105,16 +107,16 @@ if ($Smoke) {
     )
 } else {
     $jobs = @(
-        @{ Name = 'sinca-aedmd-prep-lgbm-v1'; Image = $ImageLgbm; Entry = 'train/train.py'; MaxRun = 3600;
-           Hp = [ordered]@{ mode = 'refit'; partition = 'ae-dmd'; version = '1'; mlflow_runs = 'none';
-                            source_run_ids = $SourceRunIds } }
+        @{ Name = "sinca-aedmd-prep-lgbm-v$Version"; Image = $ImageLgbm; Entry = 'train/train.py'; MaxRun = 3600;
+           Hp = [ordered]@{ mode = 'refit'; partition = 'ae-dmd'; version = "$Version"; mlflow_runs = 'none';
+                            source_run_ids = $SourceRunIds; rounds_from_source = 'true' } }
     )
     foreach ($seed in 0, 1, 2) {
-        $jobs += @{ Name = "sinca-aedmd-prep-conv1d-s$seed"; Image = $ImageTf; Entry = 'ae/run.py'; MaxRun = 7200;
+        $jobs += @{ Name = "sinca-aedmd-prep-conv1d-s$seed-v$Version"; Image = $ImageTf; Entry = 'ae/run.py'; MaxRun = 7200;
                     Hp = (New-AeHp 'conv1d' @{ seeds = "$seed" }) }
     }
     foreach ($seed in 0, 1, 2) {
-        $jobs += @{ Name = "sinca-aedmd-prep-gru-s$seed"; Image = $ImageTf; Entry = 'ae/run.py'; MaxRun = 10800;
+        $jobs += @{ Name = "sinca-aedmd-prep-gru-s$seed-v$Version"; Image = $ImageTf; Entry = 'ae/run.py'; MaxRun = 10800;
                     Hp = (New-AeHp 'gru' @{ seeds = "$seed" }) }
     }
 }

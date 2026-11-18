@@ -97,3 +97,24 @@ def test_sin_runs_de_la_particion_sale_con_cero(tmp_path, monkeypatch, capsys):
     assert ss.main(argv) == 0
     assert "Sin runs" in capsys.readouterr().out
     assert not (tmp_path / "out.md").exists()
+
+
+def test_select_version_usa_la_mayor_por_defecto_y_filtra_la_pedida():
+    """13.3: con runs v1 y v2 en el estado, el resumen usa solo la versión pedida (defecto: la mayor)."""
+    runs = [
+        {"run_id": "a", "params": {"version": "1"}},
+        {"run_id": "b", "params": {"version": "1"}},
+        {"run_id": "c", "params": {"version": "2"}},
+    ]
+    selected, version = ss.select_version(runs)
+    assert version == 2 and [r["run_id"] for r in selected] == ["c"]
+    selected, version = ss.select_version(runs, 1)
+    assert version == 1 and [r["run_id"] for r in selected] == ["a", "b"]
+    assert ss.select_version([], None) == ([], None)
+
+
+def test_titulo_del_markdown_incluye_la_version():
+    empty = pd.DataFrame()
+    text = ss.render_markdown("ae-dmd", empty, empty, empty, version=2)
+    assert text.splitlines()[0].endswith("versión 2")
+    assert "versión" not in ss.render_markdown("ae-dmd", empty, empty, empty).splitlines()[0]
