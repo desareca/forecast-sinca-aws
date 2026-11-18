@@ -4,7 +4,9 @@ Reutiliza `train.mlflow_log` para bajar `mlflow.sqlite` + `mlruns/` a un dir
 local y expone helpers para listar runs y leer los diagnósticos persistidos
 (`predictions.parquet`, `feature_importance.parquet`, `zone_icap.parquet`).
 
-Fuente de datos:
+Fuente de datos (change `ae-dmd-prep`, D6):
+- `ensure_state(..., run_ids=[...])`: descarga selectiva. `[]` baja solo `mlflow.sqlite`;
+  una lista baja el sqlite y los artefactos de esos runs. `run_ids=None` baja todo.
 - `ensure_state(data_dir=...)`: usa un estado local ya descargado (fixture o
   `mlflow_log.download_state` previo) — no toca AWS.
 - `ensure_state(data_dir=None)`: descarga el estado real desde S3 a un dir
@@ -63,17 +65,23 @@ def is_series_run(run: dict) -> bool:
     `tipo` (y el tag `stage`) para que las vistas por serie no los mezclen.
     """
     params = run.get("params", {})
-    tags = run.get("tags", {})
     if params.get("tipo") in ("persistencia", REFERENCE_TIPO):
         return False
-    if tags.get("stage") == AE_STAGE:
+    if is_ae_run(run):
         return False
     return bool(params.get("estacion") and params.get("pollutant"))
 
 
 def is_ae_run(run: dict) -> bool:
-    """Run conjunto de autoencoder (una sola corrida para las 6 series)."""
-    return run.get("tags", {}).get("stage") == AE_STAGE and run.get("tags", {}).get("modelo", "").startswith("ae-")
+    """Run conjunto de autoencoder: `modelo` empieza con `ae-`, no termina en `-dmd` y no tiene `estacion`.
+
+    Se reconoce por `modelo`, no por `stage`: los runs por serie de `ae-dmd-prep` llevan
+    `stage=ae-dmd-prep` y siguen siendo por serie (D4).
+    """
+    tags = run.get("tags", {})
+    params = run.get("params", {})
+    modelo = tags.get("modelo", "")
+    return modelo.startswith("ae-") and not modelo.endswith("-dmd") and not params.get("estacion")
 
 
 def is_reference_run(run: dict) -> bool:
@@ -88,12 +96,23 @@ def ensure_state(
     bucket: str = mlflow_log.MLFLOW_BUCKET_DEFAULT,
     prefix: str = mlflow_log.MLFLOW_PREFIX_DEFAULT,
     client=None,
+    run_ids: list[str] | None = None,
 ) -> str:
     """Devuelve un dir local con `mlflow.sqlite` + `mlruns/`.
 
     Si `data_dir` existe se usa tal cual (fixture o descarga previa); si no, se
     descarga el estado real desde S3 a un dir temporal.
+
+    Con `run_ids` (lista, vacía o no) la descarga es selectiva (D6): siempre baja el
+    sqlite y, por cada run, solo sus artefactos. El destino es `data_dir` (se crea si
+    no existe) o un temporal. Con `run_ids=None` se comporta como antes.
     """
+    if run_ids is not None:
+        local = data_dir or tempfile.mkdtemp(prefix="sinca-analysis-")
+        os.makedirs(local, exist_ok=True)
+        downloaded = mlflow_log.download_state(bucket, prefix, local, client, run_ids=run_ids)
+        log.info("Descarga selectiva en %s: %d objetos (%d runs)", local, len(downloaded), len(run_ids))
+        return local
     if data_dir:
         if not os.path.isdir(data_dir):
             raise FileNotFoundError(f"No existe el directorio de estado: {data_dir}")
@@ -111,12 +130,44 @@ def _db_path(state_dir: str) -> str:
 # --- Runs --------------------------------------------------------------------
 
 
-def list_runs(state_dir: str, experiment_name: str | None = EXPERIMENT_NAME) -> list[dict]:
+_RUN_COLUMNS = "run_uuid, name, status, experiment_id, start_time, end_time, lifecycle_stage"
+
+
+def _run_record(con: sqlite3.Connection, row: tuple) -> dict:
+    run_id, run_name, status, experiment_id, start_time, end_time, lifecycle = row
+    params = dict(con.execute("select key, value from params where run_uuid = ?", (run_id,)).fetchall())
+    metrics = {
+        key: float(value)
+        for key, value in con.execute(
+            "select key, value from latest_metrics where run_uuid = ?", (run_id,)
+        ).fetchall()
+    }
+    tags = dict(con.execute("select key, value from tags where run_uuid = ?", (run_id,)).fetchall())
+    return {
+        "run_id": run_id,
+        "run_name": run_name,
+        "status": status,
+        "experiment_id": experiment_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "lifecycle_stage": lifecycle,
+        "params": params,
+        "metrics": metrics,
+        "tags": tags,
+    }
+
+
+def list_runs(
+    state_dir: str,
+    experiment_name: str | None = EXPERIMENT_NAME,
+    include_deleted: bool = False,
+) -> list[dict]:
     """Lista runs del experimento desde `mlflow.sqlite`.
 
-    Devuelve `[{run_id, run_name, status, experiment_id, params, metrics}]`.
-    Usa un cursor por consulta (reusar el mismo cursor dentro de un loop corta
-    la iteración externa en `sqlite3`).
+    Devuelve `[{run_id, run_name, status, experiment_id, start_time, end_time,
+    lifecycle_stage, params, metrics, tags}]`. Por defecto omite los runs borrados
+    (`lifecycle_stage != 'active'`); `include_deleted=True` los incluye. Si el
+    experimento no existe, lista los runs de todos los experimentos (mismo filtro).
     """
     db = _db_path(state_dir)
     if not os.path.exists(db):
@@ -125,52 +176,35 @@ def list_runs(state_dir: str, experiment_name: str | None = EXPERIMENT_NAME) -> 
 
     con = sqlite3.connect(db)
     try:
+        clauses: list[str] = []
+        args: list = []
+        if not include_deleted:
+            clauses.append("lifecycle_stage = 'active'")
         if experiment_name:
             exp = con.execute(
                 "select experiment_id from experiments where name = ?", (experiment_name,)
             ).fetchone()
-            if not exp:
-                log.warning("Experimento %s no encontrado; se listan todos los runs.", experiment_name)
-                rows = con.execute(
-                    "select run_uuid, name, status, experiment_id from runs order by name"
-                ).fetchall()
+            if exp:
+                clauses.append("experiment_id = ?")
+                args.append(exp[0])
             else:
-                rows = con.execute(
-                    "select run_uuid, name, status, experiment_id from runs "
-                    "where experiment_id = ? order by name",
-                    (exp[0],),
-                ).fetchall()
-        else:
-            rows = con.execute(
-                "select run_uuid, name, status, experiment_id from runs order by name"
-            ).fetchall()
+                log.warning("Experimento %s no encontrado; se listan todos los runs.", experiment_name)
+        where = f" where {' and '.join(clauses)}" if clauses else ""
+        rows = con.execute(f"select {_RUN_COLUMNS} from runs{where} order by name", args).fetchall()
+        return [_run_record(con, row) for row in rows]
+    finally:
+        con.close()
 
-        runs: list[dict] = []
-        for run_id, run_name, status, experiment_id in rows:
-            params = dict(
-                con.execute("select key, value from params where run_uuid = ?", (run_id,)).fetchall()
-            )
-            metrics = {
-                key: float(value)
-                for key, value in con.execute(
-                    "select key, value from latest_metrics where run_uuid = ?", (run_id,)
-                ).fetchall()
-            }
-            tags = dict(
-                con.execute("select key, value from tags where run_uuid = ?", (run_id,)).fetchall()
-            )
-            runs.append(
-                {
-                    "run_id": run_id,
-                    "run_name": run_name,
-                    "status": status,
-                    "experiment_id": experiment_id,
-                    "params": params,
-                    "metrics": metrics,
-                    "tags": tags,
-                }
-            )
-        return runs
+
+def run_by_id(state_dir: str, run_id: str) -> dict | None:
+    """Un run por `run_uuid`, con la forma de `list_runs`. No filtra por experimento ni por borrado."""
+    db = _db_path(state_dir)
+    if not os.path.exists(db):
+        return None
+    con = sqlite3.connect(db)
+    try:
+        row = con.execute(f"select {_RUN_COLUMNS} from runs where run_uuid = ?", (run_id,)).fetchone()
+        return _run_record(con, row) if row else None
     finally:
         con.close()
 

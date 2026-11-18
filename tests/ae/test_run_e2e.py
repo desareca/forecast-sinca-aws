@@ -91,7 +91,7 @@ def pipeline_run(tmp_path_factory):
 def test_final_registra_run_del_ae_con_artefactos(pipeline_run):
     tmp, _ = pipeline_run
     names = {r.info.run_name: r for r in _runs(tmp)}
-    name = "sinca-zona-ae_mlp-v1"
+    name = "sinca-zona-ae_mlp-v1-s0"
     assert name in names
     run = names[name]
     assert run.data.tags["stage"] == "ae-reconstruccion"
@@ -123,7 +123,7 @@ def test_final_registra_curva_de_aprendizaje(pipeline_run):
     from mlflow.tracking import MlflowClient
 
     tmp, _ = pipeline_run
-    run = _run_named(tmp, "sinca-zona-ae_mlp-v1")
+    run = _run_named(tmp, "sinca-zona-ae_mlp-v1-s0")
     mlflow.set_tracking_uri(f"sqlite:///{(tmp / 'mlflow' / 'mlflow.sqlite').as_posix()}")
     client = MlflowClient()
     epochs = int(run.data.metrics["epochs_run"])
@@ -137,8 +137,8 @@ def test_final_registra_curva_de_aprendizaje(pipeline_run):
 def test_reference_registra_mean_y_pca(pipeline_run):
     tmp, _ = pipeline_run
     names = {r.info.run_name for r in _runs(tmp)}
-    assert {"ref-mean", "ref-pca-d8"}.issubset(names)
-    ref = _run_named(tmp, "ref-pca-d8")
+    assert {"ref-mean-L24-v1", "ref-pca-d8-L24-v1"}.issubset(names)
+    ref = _run_named(tmp, "ref-pca-d8-L24-v1")
     assert ref.data.params["tipo"] == "referencia"
 
 
@@ -146,8 +146,8 @@ def test_dmd_encadenado_tras_final_aprobado(pipeline_run):
     """5.7 (a): con compuerta aprobada, el pase DMD corre en el mismo job del final."""
     tmp, _ = pipeline_run
     names = {r.info.run_name for r in _runs(tmp)}
-    assert any(n.endswith("ae-mlp-dmd-v1") for n in names)
-    ae_run = _run_named(tmp, "sinca-zona-ae_mlp-v1")
+    assert any(n.endswith("ae-mlp-dmd-v1-s0") for n in names)
+    ae_run = _run_named(tmp, "sinca-zona-ae_mlp-v1-s0")
     assert "dmd_latent_rmse_1" in ae_run.data.metrics
     assert "dmd_latent_rmse_24" in ae_run.data.metrics
     assert "dmd_trunc_latent_rmse_1" in ae_run.data.metrics
@@ -158,10 +158,10 @@ def test_dmd_standalone_desde_mlflow_sin_ae_dir(pipeline_run):
     from ae import run as aerun
 
     tmp, validated = pipeline_run
-    ae_run = _run_named(tmp, "sinca-zona-ae_mlp-v1")
+    ae_run = _run_named(tmp, "sinca-zona-ae_mlp-v1-s0")
     argv = _args(tmp, validated, "--mode", "dmd", "--ae-run-id", ae_run.info.run_id)
     assert aerun.run(aerun.parse_args(argv)) == 0
-    refreshed = _run_named(tmp, "sinca-zona-ae_mlp-v1")
+    refreshed = _run_named(tmp, "sinca-zona-ae_mlp-v1-s0")
     assert "dmd_latent_rmse_24" in refreshed.data.metrics
 
 
@@ -169,7 +169,7 @@ def test_dmd_con_ae_dir_para_pruebas(pipeline_run):
     from ae import run as aerun
 
     tmp, validated = pipeline_run
-    ae_run = _run_named(tmp, "sinca-zona-ae_mlp-v1")
+    ae_run = _run_named(tmp, "sinca-zona-ae_mlp-v1-s0")
     ae_dir = next((tmp / "model").glob("sinca-zona-ae_mlp-v1-s0"))
     argv = _args(tmp, validated, "--mode", "dmd", "--arch", "mlp", "--length", "24", "--d", "8",
                  "--ae-dir", str(ae_dir), "--ae-run-id", ae_run.info.run_id)
@@ -183,8 +183,8 @@ def test_compuerta_no_aprobada_no_encadena_ni_permite_dmd(tmp_path):
     validated = _write_validated(tmp_path / "validated")
     assert aerun.run(aerun.parse_args(_args(tmp_path, validated, "--mode", "final", "--arch", "mlp", "--seeds", "0"))) == 0
     names = {r.info.run_name for r in _runs(tmp_path)}
-    assert not any(n.endswith("ae-mlp-dmd-v1") for n in names)
-    ae_run = _run_named(tmp_path, "sinca-zona-ae_mlp-v1")
+    assert not any(n.endswith("ae-mlp-dmd-v1-s0") for n in names)
+    ae_run = _run_named(tmp_path, "sinca-zona-ae_mlp-v1-s0")
     with pytest.raises(SystemExit):
         aerun.run(aerun.parse_args(_args(tmp_path, validated, "--mode", "dmd", "--ae-run-id", ae_run.info.run_id)))
 
@@ -236,6 +236,18 @@ def test_search_tope_de_tiempo_no_lanza_trials_y_deja_json_valido(tmp_path):
     assert best["gru"]["best"] is None and best["gru"]["history"] == []
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["gru"]["history"] == [] and not (tmp_path / "ae_search.json.tmp").exists()
+
+
+def test_dos_semillas_generan_dos_runs_ae_con_nombres_distintos(tmp_path):
+    """3.2: `--seeds 0,1` registra un run por semilla, con `-s{seed}` en el nombre."""
+    from ae import run as aerun
+
+    validated = _write_validated(tmp_path / "validated")
+    argv = _args(tmp_path, validated, "--mode", "final", "--arch", "mlp", "--seeds", "0,1", "--dmd-after-final", "false")
+    assert aerun.run(aerun.parse_args(argv)) == 0
+    names = {r.info.run_name for r in _runs(tmp_path)}
+    assert {"sinca-zona-ae_mlp-v1-s0", "sinca-zona-ae_mlp-v1-s1"}.issubset(names)
+    assert (tmp_path / "model" / "sinca-zona-ae_mlp-v1-s1" / "encoder.keras").exists()
 
 
 def test_search_espacio_por_arquitectura_respeta_d6():

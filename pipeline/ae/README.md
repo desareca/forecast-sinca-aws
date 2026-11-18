@@ -85,3 +85,49 @@ Orden típico del trabajo (cada paso con el operador corriendo el comando):
 Los artefactos de cada run quedan en MLflow (`sinca-mlflow/_mlflow/`):
 `reconstruction.parquet`, `latent.parquet`, `diagnostics.parquet`, `encoder.keras`,
 `decoder_mp.keras`, y `dmd_operator.npz` / `dmd_operator_trunc.npz` cuando hay pase de DMD.
+
+## Partición `ae-dmd` (change `ae-dmd-prep`)
+
+Partición nueva (`features/partition.py`), la que usa `dmd-operador-global`. `holdout` sigue
+siendo el defecto y no cambia.
+
+- Tramos (fechas locales, `[inicio, fin)`): `train` 2021-01 a 2026-02, `es` 2026-03 (early
+  stopping), `sel` 2026-04 a 2026-06 (selección), `test` 2026-07-01 a 2026-10-04.
+- `--partition ae-dmd`: normaliza con `train`; early stopping con `es`; compuerta y métricas
+  de reconstrucción en `sel`. El tramo `test` solo aporta latentes (`latent.parquet`): no hay
+  métricas de test ni pronóstico en este change.
+- Pase DMD tras el `final`, **en cada semilla y sin mirar la compuerta** (la compuerta se
+  registra igual, pero no bloquea). Con `--mode dmd --partition ae-dmd` tampoco se exige.
+- Pronóstico de DMD solo en `sel`, con embargo de 24 h (`row_mask`): ningún target usa datos
+  del tramo siguiente.
+- `--mlflow-runs all|none|ID,ID` (defecto `all`): descarga selectiva de MLflow. En `--mode dmd`
+  se agrega siempre `--ae-run-id`.
+
+```powershell
+python pipeline/ae/run.py --mode final --arch conv1d --length 24 --d 16 --partition ae-dmd `
+    --seeds 0,1,2 --mlflow-runs none --local-validated-dir ./validated --mlflow-dir ./mlflow-local `
+    --model-dir ./model --output-dir ./output --no-upload
+```
+
+Nombres de run (todos con `-s{seed}`): AE `sinca-zona-ae_{arq}-aedmd-v{n}-s{seed}`;
+DMD por serie `sinca-{slug}-ae-{arq}-dmd-aedmd-v{n}-s{seed}`; referencias `ref-mean-L{L}-v{n}`
+y `ref-pca-d{d}-L{L}-v{n}`. Los runs de `holdout` cambian el nombre del AE a
+`sinca-zona-ae_{arq}-v{n}-s{seed}` (los históricos no se renombran salvo con el plan de
+`scripts/mlflow/maintenance.py`).
+
+Las cifras de referencia de esta partición no son comparables con las de `holdout`: otro
+corte y otro tramo de evaluación.
+
+## Contraste con `pydmd`
+
+Cada pase DMD compara su estimador numpy con `pydmd==2025.8.1` sobre el segmento contiguo más
+largo de `train` (`dmd.pydmd_crosscheck`): diferencia de autovalores y, en rango completo, de
+la predicción a 1 paso. Tolerancia `1e-6`.
+
+- Resultado en el run del AE: `dmd_pydmd_ok` (1 = coinciden), `dmd_pydmd_eig_maxdiff_full`,
+  `dmd_pydmd_pred1_maxdiff_full`, `dmd_pydmd_eig_maxdiff_trunc`, y el tag `pydmd_version`
+  (`no-disponible` si la imagen no trae `pydmd`).
+- Una discrepancia no corta el job: queda en el log como warning y `dmd_pydmd_ok = 0`.
+- La imagen `sinca-train:tf-cpu-v2` trae `pydmd` (`docker/train-tf-v2.Dockerfile`). Plan B:
+  `scripts/ae/pydmd_check.py` en un venv aparte (`requirements-dmd.txt`) sobre `latent.parquet`.
+- `pydmd` no entra al entrenamiento TF: trabaja sobre latentes como arrays.

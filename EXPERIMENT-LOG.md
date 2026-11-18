@@ -292,3 +292,95 @@ Nota: el barrido usó `lr = 0.001`, pero el ganador de 11.1 tiene `lr = 0.003`. 
 - **(d)** El `lr` correcto del ganador de 11.1 es **0.003** (la fila de la tabla de 11.1 estaba mal transcripta). La referencia es el finalista de 11.3; los barridos de 11.2 (lr 0.001, semilla 0) solo ordenan variantes. La base de 11.2 (0.901/0.909) y el finalista (0.904/0.916) difieren poco; no se re-corren.
 - **Matices para `ae-dmd`:** ganancia modesta sobre PCA(16) (~8 %); aplanamiento común a AE y PCA; PLC II pm25 justo bajo el umbral de 0.05 en test; el DMD global no mejora a LightGBM en RMSE ponderado (33.28 frente a 28.17), lo que motiva `ae-dmd`; `d = 8` como palanca a evaluar.
 
+
+---
+
+## 2026-11-15 - ae-dmd-prep: partición ae-dmd, reentrenamiento y referencias en sel
+
+- **Hipótesis**: con una partición que no usa test para entrenar ni para detener (train hasta 2026-02, early stopping en marzo, selección en abril-junio), los AE, el pase DMD y las referencias (LightGBM y persistencia) se pueden comparar en `sel` sobre las mismas filas. Eso habilita la elección de `dmd-operador-global` sin mirar el test.
+- **Qué se probó**:
+  - Partición `ae-dmd` (features/partition.py): train 2021-01-01 a 2026-03-01, `es` 2026-03, `sel` 2026-04-01 a 2026-07-01, test 2026-07-01 a 2026-10-05 (solo latentes). Embargo de 24 h para filas con target.
+  - AE conv1d y GRU, L = 24, d = 16, hidden 64, dropout 0.1, lr 0.003, batch 128, w_aux 0.1, aux_input on, 60 épocas, patience 8. Tres semillas por arquitectura: 6 Training Jobs, con pase DMD encadenado a cada semilla, sin mirar la compuerta.
+  - LightGBM y persistencia reajustados en `sel` con el mismo corte, usando los hiperparámetros de los runs `lightgbm-v1` (un run fuente por serie, sin búsqueda nueva). Sesgo conocido: esas búsquedas usaron ventanas de validación hasta 2026-06, que incluye `sel`; favorece a LightGBM en esta comparación.
+  - Nombres de run con semilla y contaminante (`sinca-{estacion}-{pollutant}-ae-{arq}-dmd-aedmd-v1-s{seed}`), para que pm10 y pm25 de una estación no compartan nombre.
+- **Resultado** (`output/sel_summary_ae_dmd.md`, medias de las 6 series sobre filas comunes, n mínimo por serie = 1407):
+
+  | modelo | RMSE | RMSE ponderado |
+  |---|---|---|
+  | DMD conv1d s0 / s1 / s2 | 23.08 / 24.13 / 23.98 | 38.83 / 40.92 / 39.54 |
+  | DMD GRU s0 / s1 / s2 | 23.87 / 24.73 / 24.40 | 38.07 / 41.49 / 41.05 |
+  | LightGBM (reajustado) | 31.04 | 32.13 |
+  | Persistencia | 25.23 | 30.94 |
+
+  - Dispersión entre semillas: conv1d ~1.05 de RMSE (rango); GRU ~0.86. Hay variación entre semillas en la misma magnitud que la diferencia con persistencia en RMSE simple.
+  - Compuerta por semilla: `gate_pass = 0` en las 6 semillas (conv1d y GRU). El pase DMD corrió igual, como estaba definido. RMSE medio de reconstrucción en `sel`: conv1d 18.70 / 18.41 / 18.17; GRU 18.07 / 18.96 / 18.35 µg/m³.
+  - Contraste con `pydmd` 2025.8.1: `dmd_pydmd_ok = 1` en los 6 AE (rango completo y truncado); diferencias de autovalores ~1e-15 en el contraste sintético dentro de la imagen `tf-cpu-v2`.
+  - Linealidad del latente en `sel` (RMSE a 1 y 24 pasos): conv1d 0.15-0.18 y 0.81-0.93; GRU 0.06-0.07 y 0.39-0.40.
+  - Costo real (facturable, 11.6): 7 jobs de la serie = 4637 s (1.29 h). Por job: lgbm-v1 89 s; conv1d s0/s1/s2 269/333/326 s; gru s0/s1/s2 1328/1149/1143 s. Con los dos humos, 4940 s (1.37 h). A la tarifa de `design.md` (~USD 0.115/h, no verificada en consola), ~USD 0.16 contra ~USD 0.46 estimados.
+- **Las cifras de referencia cambian por la nueva partición; no es regresión.** Los números 33.28 / 31.09 / 28.17 eran RMSE de test con train hasta junio. Ahora son RMSE en `sel` (abril-junio) con train hasta febrero. No son comparables entre sí.
+- **Decisión / siguiente paso**: estas filas `sel` son la base para `dmd-operador-global` (7.1): elegir representación y operador con `sel`, sin test. La compuerta en `ae-dmd` es informativa (`gate_pass = 0`), y el DMD global sigue siendo la fila de continuidad de 33.28 hasta que 7.1 decida. Anotado en las notas de `tasks.md`.
+
+### v2 (presupuesto fijo)
+
+- **Motivo**: diagnóstico de v1. El early stopping con marzo (`es`, mes de baja concentración) cortaba muy pronto: AE en épocas 3–24 y LightGBM en 41–145 rondas. No hay bug de máscaras ni de fuga.
+- **Cambio (D11)**: AE con 60 épocas fijas, sin early stopping (`early_stopping=off`). LightGBM refit con `num_boost_round` = árboles del booster baseline `sinca-<estacion>-lightgbm-v1` de cada serie: LightGBM v2 usa las mismas rondas que el baseline v1 (1000 por serie; el `.txt` tiene 1000 árboles). El resto, igual que v1. Serie v2: 7 jobs `Completed`, `-Version 2`.
+- Resumen: `output/sel_summary_ae_dmd_v2.md`. Filas comunes, n = 1407 en las 8 etiquetas.
+
+**a) AE v2 (`sel`, 3 semillas por arquitectura)**
+
+| run (`sinca-zona-ae_{arq}-aedmd-v2-s{seed}`) | epochs_run | gate_pass | sel_recon_rmse_mean | dmd_sel_latent_rmse_1 | dmd_sel_latent_rmse_24 | dmd_pydmd_ok |
+|---|---|---|---|---|---|---|
+| conv1d s0 | 60 | 1 | 16.820 | 0.137 | 0.698 | 1 |
+| conv1d s1 | 60 | 1 | 16.659 | 0.128 | 0.650 | 1 |
+| conv1d s2 | 60 | 1 | 16.549 | 0.137 | 0.703 | 1 |
+| gru s0 | 60 | 1 | 17.159 | 0.060 | 0.351 | 1 |
+| gru s1 | 60 | 0 | 17.732 | 0.055 | 0.340 | 1 |
+| gru s2 | 60 | 0 | 17.904 | 0.057 | 0.327 | 1 |
+
+**b) y d) Media de 6 series en `sel` (RMSE / RMSE ponderado), v1 frente a v2**
+
+| modelo | RMSE v1 | RMSE v2 | Pond. v1 | Pond. v2 |
+|---|---|---|---|---|
+| DMD conv1d s0 | 23.075 | 24.065 | 38.828 | 39.392 |
+| DMD conv1d s1 | 24.131 | 24.205 | 40.918 | 39.508 |
+| DMD conv1d s2 | 23.980 | 23.087 | 39.544 | 37.401 |
+| DMD GRU s0 | 23.867 | 24.009 | 38.068 | 36.934 |
+| DMD GRU s1 | 24.725 | 23.654 | 41.493 | 36.171 |
+| DMD GRU s2 | 24.402 | 22.723 | 41.054 | 35.767 |
+| LightGBM | 31.038 | 28.283 | 32.130 | 34.236 |
+| Persistencia | 25.226 | 25.226 | 30.938 | 30.938 |
+
+LightGBM cambia de v1 a v2 porque v1 usó las rondas del early stopping (41–145) y v2 usa 1000 (las del baseline).
+
+**c) Por serie, RMSE ponderado (v2)**
+
+| serie | Persist. | LightGBM | Límite 1,05×LGBM | DMD conv1d (media) | DMD GRU (media) | Mejor DMD | Cumple |
+|---|---|---|---|---|---|---|---|
+| Las Encinas pm10 | 33.338 | 32.236 | 33.848 | 37.313 | 35.255 | 34.918 (GRU s1) | No (+3,2 %) |
+| Las Encinas pm25 | 38.394 | 29.397 | 30.867 | 49.479 | 45.030 | 44.501 (GRU s1) | No (+44 %) |
+| Nielol pm10 | 21.837 | 22.044 | 23.146 | 20.853 | 20.114 | 19.758 (GRU s2) | Sí |
+| Nielol pm25 | 27.901 | 36.900 | 38.745 | 43.809 | 40.489 | 40.403 (GRU s1) | No (+4,3 %) |
+| Padre Las Casas II pm10 | 33.566 | 50.889 | 53.433 | 41.390 | 37.449 | 36.428 (GRU s2) | Sí |
+| Padre Las Casas II pm25 | 30.592 | 33.951 | 35.649 | 39.758 | 39.408 | 37.267 (GRU s2) | No (+4,5 %) |
+
+RMSE simple por serie: `output/sel_summary_ae_dmd_v2.md`.
+
+**e) Costo (`BillableTimeInSeconds`)**
+
+| job | v1 (s) | v2 (s) |
+|---|---|---|
+| lgbm | 89 | 164 |
+| conv1d s0 / s1 / s2 | 269 / 333 / 326 | 893 / 918 / 994 |
+| gru s0 / s1 / s2 | 1328 / 1149 / 1143 | 2429 / 2364 / 2388 |
+| **Total serie** | **4637 (1,29 h)** | **10150 (2,82 h)** |
+
+v2 ≈ USD 0.32 a la tarifa de `design.md` (no verificada en consola). Sin los humos.
+
+**Lectura**
+
+1. Con 60 épocas, conv1d aprueba la compuerta 3/3 (igual que `ae-reconstruccion`). GRU 1/3, inestable entre semillas.
+2. En `sel`, persistencia es la referencia más fuerte en RMSE ponderado (30,94). LightGBM entrenado una vez hasta 2026-02 queda peor (34,24); el control con reentrenamiento mensual (diagnóstico de v1) le ganaba. Se atribuye al desfase de 1 a 4 meses al inicio de temporada, no a un error.
+3. El DMD tiene el mejor RMSE simple (GRU s2: 22,72; persistencia 25,23) y el peor RMSE ponderado (35,8–39,5, frente a 34,2 de LightGBM y 30,9 de persistencia): subestima los picos (a verificar con sesgo en picos). Es el objetivo de la etapa "Picos" de 7.1.
+4. Criterio de §9 (ponderado ≤ 1,05 × LightGBM, por serie; mejor corrida DMD por serie, punto estimado): cumple en 2 de 6 (Nielol pm10, Padre Las Casas II pm10). Necesita ≥ 4/6: no cumple. Los fallos van de +3 % a +44 %. El intervalo bootstrap no está calculado, así que el veredicto por serie puede cambiar. Dispersión entre semillas (RMSE simple, rango de 3): conv1d 1,1; GRU 1,3. El mejor DMD se elige entre 6 corridas, así que es optimista.
+
+**Decisión**: v1 queda superada; la base de 7.1 es v2. Pendiente para 7.1: revisar si la referencia del criterio debe incluir persistencia en las 6 series (en 5 de 6 es mejor que el mejor DMD; no en Nielol pm10).

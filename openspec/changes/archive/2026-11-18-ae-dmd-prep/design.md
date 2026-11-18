@@ -82,11 +82,14 @@ Función nueva en `ae/run.py`; `run_final` (holdout) no cambia salvo el nombre (
 | AE ae-dmd | `sinca-zona-ae_{arq}-aedmd-v{n}-s{seed}` | `stage=ae-dmd-prep`, `particion=ae-dmd`, `seed` |
 | Referencias holdout | `ref-mean-L{L}-v{n}`, `ref-pca-d{d}-L{L}-v{n}` | como hoy |
 | DMD por serie holdout | `sinca-{slug}-ae-{arq}-dmd-v{n}-s{seed}` | como hoy + `seed` |
-| DMD por serie ae-dmd | `sinca-{slug}-ae-{arq}-dmd-aedmd-v{n}-s{seed}` | `stage=ae-dmd-prep`, `particion=ae-dmd`, `seed`, `ae_run_id` |
-| LightGBM ae-dmd | `sinca-{slug}-lightgbm-aedmd-v{n}` | `modelo=lightgbm-aedmd`, `source_run_id`, `particion` |
+| DMD por serie ae-dmd | `sinca-{slug}-{pollutant}-ae-{arq}-dmd-aedmd-v{n}-s{seed}` | `stage=ae-dmd-prep`, `particion=ae-dmd`, `seed`, `ae_run_id` |
+| LightGBM ae-dmd | `sinca-{slug}-{pollutant}-lightgbm-aedmd-v{n}` | `modelo=lightgbm-aedmd`, `source_run_id`, `particion` |
 | Persistencia ae-dmd | `sinca-zona-persistence-aedmd-v{n}` | param `tipo=referencia`, tag `modelo=persistence-aedmd` |
 
 - Token de partición = nombre sin guiones (`ae-dmd` → `aedmd`).
+- En la partición con nombre, los runs por serie llevan el contaminante (corregido tras el humo de
+  11.4: `pm10` y `pm25` de una estación compartían nombre). `holdout` conserva la convención del
+  baseline `sinca-{estacion}-{modelo}-v{n}`.
 - `modelo` distinto para LightGBM y persistencia de `ae-dmd`: el dashboard agrupa por
   `(modelo, version)` y no debe mezclarlos con el baseline `lightgbm v1`.
 - `is_ae_run` pasa a reconocer el run conjunto por `modelo` (`ae-*` que no termina en `-dmd`, sin
@@ -140,9 +143,11 @@ Función nueva en `ae/run.py`; `run_final` (holdout) no cambia salvo el nombre (
 
 ### D8. `pydmd` a prueba
 
-- Imagen `sinca-train:tf-cpu-v2` desde `docker/train-tf-v2.Dockerfile`: copia de `train-tf.Dockerfile`
-  más una capa `pip install "pydmd==2025.8.1"` (última versión en PyPI al 2026-11-15; trae scipy,
-  matplotlib, xarray, h5netcdf). `tf-cpu-v1` no se reconstruye ni se pisa.
+- Imagen `sinca-train:tf-cpu-v2` desde `docker/train-tf-v2.Dockerfile`: `FROM` la imagen publicada
+  `tf-cpu-v1` (`ARG BASE_IMAGE`, por digest o tag) más una capa `pip install "pydmd==2025.8.1"`. No se
+  reconstruye desde `python:3.11-slim`: los rangos sin fijar de v1 resolverían versiones nuevas
+  (medido en 11.2: mlflow 3.17.2 → 3.18.0, boto3, SQLAlchemy, …). Un mlflow distinto escribiendo el
+  sqlite compartido puede migrar su esquema y dejar fuera a `lgbm-v1` y al dashboard.
 - Aceptación de la imagen: `pip freeze` de v2 = el de v1 más líneas nuevas, sin cambiar versión de
   `tensorflow-cpu`, `keras`, `numpy`, `pandas`, `protobuf`, `h5py`, `scikit-learn`; `pip check`
   igual al de v1 (v1 ya reporta el conflicto conocido de `sagemaker-training` con `protobuf`).
@@ -164,6 +169,23 @@ Función nueva en `ae/run.py`; `run_final` (holdout) no cambia salvo el nombre (
 Switch `-Smoke`: un solo job conv1d semilla 0, `epochs = 2`, experimento `sinca-smoke`.
 Parámetros `-TfTag` (defecto `tf-cpu-v2`) y `-SourceRunIds`.
 
+### D11. Presupuesto fijo, sin early stopping (corrección tras 11.5, v2)
+
+- Medido en v1: early stopping con marzo corta muy pronto (AE: mejor época 3–24, `gate_pass = 0` en
+  los 6; LightGBM: 41–145 rondas, peor que persistencia en 4/6 series de `sel`). No hay error de
+  máscaras ni fuga (diagnóstico de solo lectura en las notas de implementación).
+- AE (`--early-stopping off`): `fit` sin `valid` → 60 épocas completas, sin restaurar pesos. Marzo
+  se sigue reportando (`es_recon_*`) como diagnóstico. `holdout` no cambia (defecto `on`).
+- LightGBM (`--rounds-from-source`): `num_boost_round` = `num_trees()` del booster `.txt` del run
+  fuente: el **baseline** `sinca-{estacion}-lightgbm-v1` (el de la búsqueda, el que dio 28.17 en
+  test), **no** el refit `lightgbm-aedmd-v1` (ese usó early stopping con marzo, justo lo que D11
+  elimina). Sin conjunto de validación. Marzo no
+  entra al train (se mantiene la partición).
+- Alternativa descartada: mediana de rondas de las ventanas rolling previas a 2026-03 (sin fuga,
+  pero el dato no se guardó por ventana). Early stopping con bloques del train: más código y riesgo.
+- Se re-corren los 7 jobs como `version = 2`; los runs v1 quedan como evidencia del problema.
+  `sel_summary.py` filtra por `--version`.
+
 ### D10. Resumen de `sel` (`pipeline/analysis/sel_summary.py`)
 
 Baja con D6 solo los runs de `particion = ae-dmd`, toma los `predictions.parquet` (`split = sel`) de
@@ -173,6 +195,9 @@ reporta RMSE y RMSE ponderado por serie y su media, con `n` común; más una tab
 para `EXPERIMENT-LOG.md`. Sin bootstrap (7.1).
 
 ## Costo y tiempo
+
+**v2 (D11):** 60 épocas fijas → conv1d ~15–18 min de fit y GRU ~38–45 min. Estimado de la serie
+v2: ~3,3 h, ~USD 0,40. El real de v1 fue 4 637 s (USD 0,16).
 
 Base: 11.3 y calibración 10.4 (conv1d `L = 24` ~15–16 min de fit en 60 epochs; GRU ~38 min), train
 ~6 % más corto, + ~5–8 min por job de arranque, datos y DMD. Tarifa `ml.m5.large` Training

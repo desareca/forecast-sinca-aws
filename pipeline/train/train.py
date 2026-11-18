@@ -60,6 +60,7 @@ from features.build import (
     final_holdout_split,
     series_list,
 )
+from features import partition as pt
 from train import mlflow_log
 
 log = logging.getLogger("train")
@@ -113,8 +114,12 @@ def fit_model(
     alpha: float = ALPHA_DEFAULT,
     valid_df: pd.DataFrame | None = None,
     seed: int = 0,
+    num_boost_round: int = NUM_BOOST_ROUND,
 ):
-    """Entrena un booster LightGBM con early stopping sobre `valid_df` (si se pasa)."""
+    """Entrena un booster LightGBM con early stopping sobre `valid_df` (si se pasa).
+
+    Sin `valid_df` no hay early stopping: se entrenan exactamente `num_boost_round` rondas (D11).
+    """
     import lightgbm as lgb
 
     features, target, weights = _xyw(train_df, pollutant, alpha)
@@ -148,7 +153,7 @@ def fit_model(
 
     booster = lgb.train(
         lgb_params, train_set,
-        num_boost_round=NUM_BOOST_ROUND,
+        num_boost_round=num_boost_round,
         valid_sets=valid_sets, callbacks=callbacks,
     )
     return booster
@@ -321,10 +326,11 @@ def log_diagnostics(
     return paths
 
 
-def save_booster(booster, model_dir: str, name: str) -> str:
+def save_booster(booster, model_dir: str, name: str, num_iteration: int | None = None) -> str:
     os.makedirs(model_dir, exist_ok=True)
     path = os.path.join(model_dir, f"{name}.txt")
-    booster.save_model(path, num_iteration=booster.best_iteration or NUM_BOOST_ROUND)
+    rounds = num_iteration or booster.best_iteration or NUM_BOOST_ROUND
+    booster.save_model(path, num_iteration=rounds)
     return path
 
 
@@ -357,8 +363,12 @@ def run(args: argparse.Namespace) -> int:
     windows = make_rolling_windows()
     log.info("Ventanas deslizantes: %d", len(windows))
 
+    if args.mode == "refit":
+        return run_refit(args, data, features, pt.get_partition(args.partition))
+
     if not args.no_upload:
-        downloaded = mlflow_log.download_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, client)
+        downloaded = mlflow_log.download_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, client,
+                                               run_ids=mlflow_log.parse_mlflow_runs(args.mlflow_runs))
         log.info("Estado MLflow previo: %d objetos", len(downloaded))
 
     import mlflow
@@ -491,6 +501,200 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- Reajuste en la partición ae-dmd (ae-dmd-prep, D5) -----------------------
+
+INT_HYPERPARAMS = ("num_leaves", "min_child_samples")
+
+
+def parse_source_run_ids(text: str | None) -> dict[tuple[str, str], str]:
+    """`slug:pollutant=run_id,...` -> `{(slug, pollutant): run_id}`."""
+    out: dict[tuple[str, str], str] = {}
+    if not text:
+        return out
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        left, eq, run_id = item.partition("=")
+        slug, colon, pollutant = left.partition(":")
+        if not (eq and colon and slug.strip() and pollutant.strip() and run_id.strip()):
+            raise ValueError(f"--source-run-ids mal formado: {item!r} (formato slug:pollutant=run_id)")
+        out[(slug.strip(), pollutant.strip())] = run_id.strip()
+    return out
+
+
+def source_params(state_dir: str, run_id: str, station: str, pollutant: str) -> dict:
+    """Hiperparámetros de un run `lightgbm` fuente, con su tipo (`HYPERPARAM_SPACE`)."""
+    from analysis import load as analysis_load
+
+    run = analysis_load.run_by_id(state_dir, run_id)
+    if run is None:
+        raise SystemExit(f"El run fuente {run_id} no existe en MLflow ({station}/{pollutant}).")
+    stored = run["params"]
+    if stored.get("estacion") != station or stored.get("pollutant") != pollutant:
+        raise SystemExit(
+            f"El run fuente {run_id} es de {stored.get('estacion')}/{stored.get('pollutant')}, "
+            f"no de {station}/{pollutant}."
+        )
+    out: dict = {}
+    for name in HYPERPARAM_SPACE:
+        if name not in stored:
+            raise SystemExit(f"El run fuente {run_id} no tiene el hiperparámetro {name}.")
+        out[name] = int(float(stored[name])) if name in INT_HYPERPARAMS else float(stored[name])
+    return out
+
+
+def source_rounds(state_dir: str, run_id: str, station: str, pollutant: str) -> int:
+    """Rondas del booster `.txt` del run fuente v1 (D11): su `num_trees()` tras guardarlo con `best_iteration`."""
+    import lightgbm as lgb
+
+    from analysis import load as analysis_load
+
+    run = analysis_load.run_by_id(state_dir, run_id)
+    path = analysis_load.artifact_path(state_dir, run_id, f"{run['run_name']}.txt") if run else None
+    if path is None:
+        raise SystemExit(f"El run fuente {run_id} ({station}/{pollutant}) no tiene el booster .txt: "
+                         "no se pueden tomar sus rondas (--rounds-from-source). Descargar sus artefactos o usar false.")
+    return int(lgb.Booster(model_file=path).num_trees())
+
+
+def _log_frames(frames: dict[str, pd.DataFrame]) -> None:
+    """Loguea parquet con nombres canónicos al directorio de artefactos del run activo."""
+    import mlflow
+
+    tmp = tempfile.mkdtemp(prefix="sinca-refit-")
+    for filename, frame in frames.items():
+        frame.to_parquet(os.path.join(tmp, filename), index=False)
+    mlflow.log_artifacts(tmp)
+
+
+def run_refit(args: argparse.Namespace, data: dict, features: pd.DataFrame, part) -> int:
+    """Reajusta LightGBM y persistencia en la partición `part` (D5, ae-dmd-prep).
+
+    Hiperparámetros de los runs fuente (sin búsqueda). Ajuste: `train` con embargo, early
+    stopping sobre `es` con embargo, predicción en `sel` con embargo. Sin `upload_model_artifact`.
+    """
+    import mlflow
+
+    from baseline.persistence import predict_frame as persistence_frame
+
+    model_dir = args.model_dir or os.environ.get("SM_MODEL_DIR", "model")
+    output_dir = args.output_dir or os.environ.get("SM_OUTPUT_DATA_DIR", "output")
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    series = series_list(features)
+    sources = parse_source_run_ids(args.source_run_ids)
+    missing = [f"{mlflow_log.station_slug(s)}:{p}" for s, p in series
+               if (mlflow_log.station_slug(s), p) not in sources]
+    if missing:
+        raise SystemExit(f"Faltan run fuente para: {', '.join(missing)} (--source-run-ids).")
+
+    rounds_mode = bool(args.rounds_from_source)
+    if not args.no_upload:
+        run_ids = mlflow_log.parse_mlflow_runs(args.mlflow_runs)
+        if rounds_mode and run_ids is not None:
+            # Las rondas salen del booster de cada run fuente: se bajan aunque --mlflow-runs no los liste (D11).
+            source_ids = [sources[(mlflow_log.station_slug(s), p)] for s, p in series]
+            run_ids = list(dict.fromkeys([*run_ids, *source_ids]))
+        mlflow_log.download_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None, run_ids=run_ids)
+    mlflow_log.configure(args.mlflow_dir, experiment=args.experiment)
+    mlflow.autolog(disable=True)
+
+    # Validar todos los runs fuente antes de entrenar nada.
+    chosen: dict[tuple[str, str], tuple[str, dict, int | None]] = {}
+    for station, pollutant in series:
+        run_id = sources[(mlflow_log.station_slug(station), pollutant)]
+        params = source_params(args.mlflow_dir, run_id, station, pollutant)
+        rounds = source_rounds(args.mlflow_dir, run_id, station, pollutant) if rounds_mode else None
+        chosen[(station, pollutant)] = (run_id, params, rounds)
+
+    token = part.token
+    results: dict[str, dict] = {}
+    for station, pollutant in series:
+        run_id, params, rounds = chosen[(station, pollutant)]
+        log.info("=== Refit %s / %s (%s) desde run %s (rondas=%s) ===", station, pollutant, part.name, run_id,
+                 rounds if rounds_mode else "early stopping")
+        series_df = features[(features["estacion"] == station) & (features["pollutant"] == pollutant)]
+        series_df = series_df.sort_values("timestamp").reset_index(drop=True)
+        ts = series_df["timestamp"]
+        train_df = series_df[pt.row_mask(ts, part, "train")]
+        es_df = series_df[pt.row_mask(ts, part, "es")]
+        sel_df = series_df[pt.row_mask(ts, part, "sel")]
+        if len(train_df) < MIN_TRAIN_ROWS or sel_df.empty:
+            raise SystemExit(f"Sin filas suficientes en train/sel para {station}/{pollutant} (partición {part.name}).")
+
+        if rounds_mode:
+            # D11: presupuesto fijo = rondas del booster v1; sin `es` como validación.
+            booster = fit_model(train_df, pollutant, params, args.alpha, None, seed=args.seed, num_boost_round=rounds)
+            iterations = rounds
+        else:
+            booster = fit_model(train_df, pollutant, params, args.alpha, es_df if len(es_df) else None, seed=args.seed)
+            iterations = booster.best_iteration or NUM_BOOST_ROUND
+        train_pred = booster.predict(train_df[list(FEATURE_COLUMNS)].astype("float64"), num_iteration=iterations)
+        train_loss = weighted_rmse(train_df[TARGET_COLUMN], train_pred,
+                                   sample_weights(train_df[TARGET_COLUMN], pollutant, args.alpha))
+        sel_pred = booster.predict(sel_df[list(FEATURE_COLUMNS)].astype("float64"), num_iteration=iterations)
+        sel_frame = _prediction_frame(sel_df, sel_pred)
+        sel_frame["split"] = "sel"
+        sel_metrics = evaluate_predictions(sel_frame, args.alpha) if not sel_frame.empty else {}
+
+        # Con contaminante en el nombre (5.7): pm10 y pm25 de una estación no comparten nombre.
+        name = f"sinca-{mlflow_log.station_slug(station)}-{pollutant}-lightgbm-{token}-v{args.version}"
+        model_path = save_booster(booster, model_dir, name, iterations)
+        with mlflow.start_run(run_name=name):
+            mlflow.set_tags({
+                "serie": f"{station}|{pollutant}", "modelo": f"lightgbm-{token}", "stage": "ae-dmd-prep",
+                "particion": part.name, "tipo": "entrenamiento",
+            })
+            mlflow.log_params({
+                **params,
+                "alpha": args.alpha, "estacion": station, "pollutant": pollutant, "version": args.version,
+                "source_run_id": run_id, "particion": part.name,
+                "early_stopping": "off" if rounds_mode else "on",
+                **({"num_boost_round": rounds, "rounds_source": "v1-booster"} if rounds_mode else {}),
+            })
+            metrics = {
+                "train_loss": train_loss,
+                "best_iteration": float(iterations),
+                **{f"sel_{k}": v for k, v in sel_metrics.items()},
+            }
+            mlflow.log_metrics(_finite_metrics(metrics))
+            _log_frames({
+                "predictions.parquet": sel_frame[PREDICTIONS_COLUMNS],
+                "feature_importance.parquet": _feature_importance_frame(booster, station, pollutant),
+                "zone_icap.parquet": zone_icap(sel_frame) if not sel_frame.empty else pd.DataFrame(
+                    columns=["timestamp", "icap_true", "icap_pred"]),
+                "rolling_scores.parquet": pd.DataFrame({"window_index": pd.Series(dtype=int),
+                                                        "rmse": pd.Series(dtype=float)}),
+            })
+            mlflow.log_artifact(model_path)
+        results[f"{station}|{pollutant}"] = {"source_run_id": run_id, "sel": sel_metrics}
+        log.info("Refit %s/%s -> sel_weighted_rmse=%s", station, pollutant, sel_metrics.get("weighted_rmse"))
+
+    # --- Persistencia en sel (referencia, D5) ----------------------------------
+    persistence = persistence_frame(data["sinca"], features)
+    sel_persistence = persistence[pt.row_mask(persistence["timestamp"], part, "sel")].copy()
+    sel_persistence["split"] = "sel"
+    persist_metrics = evaluate_predictions(sel_persistence, args.alpha) if not sel_persistence.empty else {}
+    name = f"sinca-zona-persistence-{token}-v{args.version}"
+    with mlflow.start_run(run_name=name):
+        mlflow.set_tags({"modelo": f"persistence-{token}", "stage": "ae-dmd-prep", "particion": part.name})
+        mlflow.log_params({"tipo": "referencia", "alpha": args.alpha, "particion": part.name, "version": args.version})
+        mlflow.log_metrics(_finite_metrics({f"sel_{k}": v for k, v in persist_metrics.items()}))
+        _log_frames({"predictions.parquet": sel_persistence[PREDICTIONS_COLUMNS]})
+    results["persistence"] = {"sel": persist_metrics}
+    log.info("Persistencia %s -> sel_weighted_rmse=%s", part.name, persist_metrics.get("weighted_rmse"))
+
+    if not args.no_upload:
+        mlflow_log.upload_state(args.mlflow_bucket, args.mlflow_prefix, args.mlflow_dir, None)
+    summary_path = os.path.join(output_dir, f"refit-{part.name}-summary.json")
+    with open(summary_path, "w", encoding="utf-8") as handle:
+        json.dump(results, handle, ensure_ascii=False, indent=2, default=str)
+    log.info("Resumen de refit escrito en %s", summary_path)
+    return 0
+
+
 def _flag(name: str) -> list[str]:
     """`--foo-bar` + alias `--foo_bar`.
 
@@ -520,6 +724,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(*_flag("pollutants"), nargs="*", default=None)
     parser.add_argument(*_flag("skip-persistence"), action="store_true")
     parser.add_argument(*_flag("no-upload"), action="store_true", help="No leer/escribir S3 (pruebas locales).")
+    parser.add_argument(*_flag("mode"), choices=("search", "refit"), default="search",
+                        help="search: búsqueda + final (actual). refit: reajuste en una partición con hiperparámetros de runs fuente.")
+    parser.add_argument(*_flag("partition"), default="ae-dmd", choices=tuple(pt.PARTITIONS),
+                        help="Partición para --mode refit (defecto ae-dmd).")
+    parser.add_argument(*_flag("source-run-ids"), default=None,
+                        help="Solo refit: slug:pollutant=run_id separados por coma (un run lightgbm por serie).")
+    parser.add_argument(*_flag("mlflow-runs"), default="all",
+                        help="Descarga selectiva de MLflow: all | none | IDs separados por coma (defecto all).")
+    parser.add_argument(*_flag("rounds-from-source"), type=lambda s: s.lower() in ("1", "true", "yes"), default=True,
+                        help="Solo refit: num_boost_round = árboles del booster v1 del run fuente, sin validación (D11).")
     return parser.parse_args(argv)
 
 
