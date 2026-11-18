@@ -118,11 +118,12 @@ def _arrays(win: aed.Windows):
     return (win.x_mp, win.x_aux, win.x_mp, win.mp_real, win.y_aux, win.aux_real)
 
 
-def fit_context(ctx: Context, cfg: AEConfig, epochs: int, patience: int):
+def fit_context(ctx: Context, cfg: AEConfig, epochs: int, patience: int, use_valid: bool = True):
+    """`use_valid=False` entrena `epochs` completas sin early stopping (D11, ae-dmd-prep v2)."""
     from ae import models as aeml
 
     models = aeml.build_models(cfg, aed.N_MP, aed.N_AUX, aed.AUX_INPUT_DIM, aed.CAL_DIM)
-    valid = _arrays(ctx.va) if ctx.va is not None and len(ctx.va) else None
+    valid = _arrays(ctx.va) if use_valid and ctx.va is not None and len(ctx.va) else None
     history = aeml.fit(models, cfg, _arrays(ctx.tr), valid, epochs=epochs, patience=patience)
     return models, history
 
@@ -454,10 +455,12 @@ def run_final_partition(grid: aed.HourlyGrid, cfg: AEConfig, args, part: pt.Part
     empty = [len(w) if w is not None else 0 for w in (ctx.tr, ctx.va, ctx.se, ctx.te)]
     if min(empty) == 0:
         raise RuntimeError(f"Sin muestras en algún tramo (train/es/sel/test = {empty}) con L={cfg.length}.")
-    log.info("Partición %s: entrenando %s L=%d d=%d seed=%d (train=%d es=%d sel=%d test=%d)",
-             part.name, cfg.arch, cfg.length, cfg.d, cfg.seed, *empty)
+    log.info("Partición %s: entrenando %s L=%d d=%d seed=%d (train=%d es=%d sel=%d test=%d, early_stopping=%s)",
+             part.name, cfg.arch, cfg.length, cfg.d, cfg.seed, *empty, args.early_stopping)
     t_fit = time.perf_counter()
-    models, history = fit_context(ctx, cfg, args.epochs, args.patience)
+    # D11: con early_stopping=off, `epochs` completas; `es` sigue midiendose como diagnostico.
+    models, history = fit_context(ctx, cfg, args.epochs, args.patience,
+                                  use_valid=args.early_stopping == "on")
     fit_seconds = time.perf_counter() - t_fit
     epochs_run = len(history.history.get("loss", []))
     curve, curve_best = curve_metrics(history.history)
@@ -520,6 +523,7 @@ def run_final_partition(grid: aed.HourlyGrid, cfg: AEConfig, args, part: pt.Part
             "particion": part.name, "seed": cfg.seed}
     bounds = json.loads(pt.to_json(part))["bounds"]
     params = {**config_to_params(cfg, version), "version": version, "particion": part.name,
+              "early_stopping": args.early_stopping,
               "partition_bounds": json.dumps(bounds, sort_keys=True),
               "gate_thresholds": json.dumps(gate["thresholds"], sort_keys=True),
               **{f"runtime_{k}": v for k, v in runtime_versions().items()}}
@@ -1054,6 +1058,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="holdout (actual) o ae-dmd: early stopping en es, selección en sel, test solo latentes (ae-dmd-prep).")
     parser.add_argument(*_flag("mlflow-runs"), default="all",
                         help="Descarga selectiva de MLflow: all | none | IDs separados por coma (defecto all).")
+    parser.add_argument(*_flag("early-stopping"), choices=("on", "off"), default="on",
+                        help="Solo partición ae-dmd: off = epochs completas sin early stopping (D11, ae-dmd-prep v2).")
     parser.add_argument(*_flag("no-upload"), action="store_true")
     return parser.parse_args(argv)
 

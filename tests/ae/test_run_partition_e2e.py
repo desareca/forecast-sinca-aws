@@ -184,6 +184,20 @@ def test_normalizador_solo_usa_train(tmp_path, monkeypatch):
     assert not mask[spans["es"][0]:].any()
 
 
+def test_early_stopping_off_entrena_epochs_completas(tmp_path):
+    """13.1 (D11): con --early-stopping off se corren todas las épocas y el param queda registrado."""
+    from ae import run as aerun
+
+    validated = _write_validated(tmp_path / "validated")
+    argv = _args(tmp_path, validated, "--mode", "final", "--arch", "mlp", "--partition", "ae-dmd",
+                 "--seeds", "0", "--dmd-after-final", "false", "--early-stopping", "off", "--epochs", "3")
+    assert aerun.run(aerun.parse_args(argv)) == 0
+    run = _ae_run(tmp_path)
+    assert run.data.metrics["epochs_run"] == 3
+    assert run.data.params["early_stopping"] == "off"
+    assert "es_recon_rmse_mean" in run.data.metrics  # `es` sigue como diagnóstico
+
+
 def test_config_guarda_particion(partition_run):
     tmp, _ = partition_run
     seed_dir = tmp / "model" / AE_NAME

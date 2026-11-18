@@ -31,8 +31,28 @@ def _features(validated: pathlib.Path):
     return build_features(data["sinca"], data["open_meteo"], data["feriados"])
 
 
-def _source_runs(mlflow_dir: pathlib.Path, series) -> dict[tuple[str, str], str]:
-    """Crea un run `lightgbm` fuente por serie con `DEFAULT_PARAMS` y devuelve `{(slug, pollutant): run_id}`."""
+SOURCE_ROUNDS = 7  # árboles del booster v1 sintético de cada run fuente (13.2)
+
+
+def _source_booster(path: pathlib.Path, rounds: int = SOURCE_ROUNDS) -> None:
+    """Booster LightGBM mínimo con `rounds` árboles, guardado como lo hace `save_booster` del v1."""
+    import lightgbm as lgb
+    import numpy as np
+
+    from train.train import FEATURE_COLUMNS
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(200, len(FEATURE_COLUMNS)))
+    booster = lgb.train({"objective": "regression", "verbose": -1}, lgb.Dataset(x, label=x[:, 0]),
+                        num_boost_round=rounds)
+    booster.save_model(str(path))
+
+
+def _source_runs(mlflow_dir: pathlib.Path, series, with_booster: bool = True) -> dict[tuple[str, str], str]:
+    """Crea un run `lightgbm` fuente por serie con `DEFAULT_PARAMS` y devuelve `{(slug, pollutant): run_id}`.
+
+    Con `with_booster`, cada run lleva su `<run_name>.txt` (como el v1): el refit toma de ahí las rondas.
+    """
     import mlflow
 
     from train import mlflow_log
@@ -42,9 +62,14 @@ def _source_runs(mlflow_dir: pathlib.Path, series) -> dict[tuple[str, str], str]
     out: dict[tuple[str, str], str] = {}
     for station, pollutant in series:
         slug = mlflow_log.station_slug(station)
-        with mlflow.start_run(run_name=f"fuente-{slug}-{pollutant}") as run:
+        name = f"fuente-{slug}-{pollutant}"
+        with mlflow.start_run(run_name=name) as run:
             mlflow.set_tags({"modelo": "lightgbm", "tipo": "entrenamiento"})
             mlflow.log_params({**DEFAULT_PARAMS, "estacion": station, "pollutant": pollutant, "version": 1})
+            if with_booster:
+                path = mlflow_dir.parent / f"{name}.txt"
+                _source_booster(path)
+                mlflow.log_artifact(str(path))
         out[(slug, pollutant)] = run.info.run_id
     return out
 
@@ -180,3 +205,54 @@ def test_run_fuente_de_otra_serie_es_error(refit_env):
     with pytest.raises(SystemExit):
         tr.run(tr.parse_args(_argv(refit_env["tmp"], refit_env["validated"], _sources_text(swapped))))
     assert len(_all_runs(refit_env["tmp"])) == before
+
+
+def test_refit_usa_rondas_del_booster_fuente_sin_validacion(tmp_path, monkeypatch):
+    """13.2 (D11): num_boost_round = árboles del booster v1 y fit_model sin valid_df (no mira `es`)."""
+    from features.build import series_list
+    from train import train as tr
+
+    validated = _write_validated(tmp_path / "validated")
+    features = _features(validated)
+    series = series_list(features)
+    sources = _source_runs(tmp_path / "mlflow", series)
+
+    calls: list[tuple[bool, int | None]] = []
+    real = tr.fit_model
+
+    def spy(*args, **kwargs):
+        valid = args[4] if len(args) > 4 else kwargs.get("valid_df")
+        calls.append((valid is None, kwargs.get("num_boost_round")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tr, "fit_model", spy)
+    assert tr.run(tr.parse_args(_argv(tmp_path, validated, _sources_text(sources)))) == 0
+    assert len(calls) == 6
+    assert all(sin_valid for sin_valid, _ in calls)
+    assert all(rounds == SOURCE_ROUNDS for _, rounds in calls)
+
+    run = next(r for r in _all_runs(tmp_path) if r.info.run_name.endswith("-lightgbm-aedmd-v1"))
+    assert run.data.params["num_boost_round"] == str(SOURCE_ROUNDS)
+    assert run.data.params["early_stopping"] == "off"
+    assert run.data.params["rounds_source"] == "v1-booster"
+    from mlflow.tracking import MlflowClient
+
+    import lightgbm as lgb
+    local = MlflowClient().download_artifacts(run.info.run_id, f"{run.info.run_name}.txt", dst_path=str(tmp_path / "dl"))
+    assert lgb.Booster(model_file=local).num_trees() == SOURCE_ROUNDS
+
+
+def test_run_fuente_sin_booster_es_error_claro(tmp_path):
+    """13.2: un run fuente sin `.txt` no se usa con rondas del booster (error claro, antes de entrenar)."""
+    from train import train as tr
+
+    validated = _write_validated(tmp_path / "validated")
+    features = _features(validated)
+    from features.build import series_list
+
+    series = series_list(features)
+    sources = _source_runs(tmp_path / "mlflow", series, with_booster=False)
+    before = len(_all_runs(tmp_path))
+    with pytest.raises(SystemExit, match="booster"):
+        tr.run(tr.parse_args(_argv(tmp_path, validated, _sources_text(sources))))
+    assert len(_all_runs(tmp_path)) == before
