@@ -59,3 +59,6 @@ mlflow-v2/
 mlflow-op/
 validated-op/
 logs/
+
+# Zip de la Lambda de deep-koopman (lo genera archive_file)
+infra/.build/

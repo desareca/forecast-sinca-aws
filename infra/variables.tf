@@ -92,3 +92,9 @@ variable "scraper_schedule_timezone" {
   type        = string
   default     = "America/Santiago"
 }
+
+variable "operator_email" {
+  description = "Email del operador para los avisos de deep-koopman (local: terraform.tfvars; CI: secret OPERATOR_EMAIL)"
+  type        = string
+  sensitive   = true
+}
