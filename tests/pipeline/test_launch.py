@@ -27,3 +27,10 @@ def test_profile_explicito_se_respeta(monkeypatch):
     monkeypatch.setenv("AWS_PROFILE", "perfil-ajeno")
     args = launch.parse_args(["--profile", "personal"])
     assert args.profile == "personal"
+
+
+def test_entry_point_koopman():
+    args = launch.parse_args(["--entry-point", "koopman/run.py"])
+    assert args.entry_point in launch.ENTRY_POINTS
+    hp = launch.base_hyperparameters("koopman/run.py", args)
+    assert set(hp) == {"data-bucket", "mlflow-bucket", "mlflow-prefix"}

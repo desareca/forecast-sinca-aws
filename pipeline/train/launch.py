@@ -42,6 +42,12 @@ Uso:
         --hp mode=refit --hp partition=ae-dmd --hp version=1 --hp mlflow_runs=none \
         --hp source_run_ids=<slug:pollutant=run_id,...> --wait
 
+    # deep-koopman: humo manual (tarea 8.1; el resto de la campaña la lanza Step Functions).
+    python pipeline/train/launch.py \
+        --profile <AWS_PROFILE> --role-arn <training_role_arn> \
+        --image-uri <train_ecr_repository_url>:tf-cpu-v2 --entry-point koopman/run.py \
+        --hp fase=smoke --hp experiment=sinca-smoke --hp campana=humo --max-run 3600 --wait
+
 Los ARNs salen de los outputs de Terraform (`training_role_arn`,
 `train_ecr_repository_url`). La imagen SIEMPRE lleva tag explícito (nunca
 `:latest`): ver `docker/`.
@@ -56,7 +62,7 @@ from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 ENTRY_POINT = "train/train.py"  # baseline LightGBM (default)
-ENTRY_POINTS = ("train/train.py", "ae/run.py")
+ENTRY_POINTS = ("train/train.py", "ae/run.py", "koopman/run.py")
 _TAG_RE = re.compile(r"^[^@\s]+:(?!latest$)[A-Za-z0-9_.\-]+$")
 
 
@@ -77,7 +83,7 @@ def base_hyperparameters(entry_point: str, args: argparse.Namespace) -> dict:
         "mlflow-bucket": args.mlflow_bucket,
         "mlflow-prefix": args.mlflow_prefix,
     }
-    if entry_point == "ae/run.py":
+    if entry_point in ("ae/run.py", "koopman/run.py"):
         return common
     return {
         **common,
@@ -105,7 +111,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--role-arn", default=os.environ.get("TRAINING_ROLE_ARN"))
     parser.add_argument("--image-uri", default=os.environ.get("TRAIN_IMAGE_URI"))
     parser.add_argument("--entry-point", default=ENTRY_POINT, choices=ENTRY_POINTS,
-                        help="Script dentro de pipeline/: train/train.py (LightGBM) o ae/run.py (autoencoders).")
+                        help="Script dentro de pipeline/: train/train.py (LightGBM), ae/run.py (autoencoders) "
+                             "o koopman/run.py (deep-koopman).")
     parser.add_argument("--hp", action="append", default=[], metavar="CLAVE=VALOR",
                         help="Hiperparámetro extra para el entry point (repetible).")
     parser.add_argument("--instance-type", default=os.environ.get("TRAIN_INSTANCE_TYPE", "ml.m5.large"))
@@ -151,7 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     code_location = f"s3://{args.mlflow_bucket}/{args.mlflow_prefix}/code"
     output_path = f"s3://{args.mlflow_bucket}/model-artifacts"
     hyperparameters = {**base_hyperparameters(args.entry_point, args), **parse_hp(args.hp)}
-    base_job_name = "sinca-zona-ae-train" if args.entry_point == "ae/run.py" else "sinca-baseline-train"
+    base_job_name = {"ae/run.py": "sinca-zona-ae-train", "koopman/run.py": "sinca-koop-train"}.get(
+        args.entry_point, "sinca-baseline-train")
 
     estimator = Estimator(
         image_uri=args.image_uri,
