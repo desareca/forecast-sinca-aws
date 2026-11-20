@@ -30,8 +30,9 @@ CODE = "_mlflow/code/deep-koopman"
 PREFIJO_JOB = "sinca-koop-"
 SEEDS = (0, 1, 2)
 H = 3600
-MAX_RUN = {"smoke": H, "f1": 3 * H, "decgru": 4 * H, "variantes": 6 * H, "b": 3 * H, "f2": 3 * H, "f3": 3 * H,
-           "compuerta": H, "cierre": 3 * H, "test": H}
+# Re-humo 8.2 (paso compilado), estimado por job ≤ 0.46 h salvo variantes 0.79 h: margen ≥ 2×.
+MAX_RUN = {"smoke": H, "f1": H, "decgru": H, "variantes": 2 * H, "b": H, "f2": H, "f3": H,
+           "compuerta": H, "cierre": H, "test": H}
 GATES = ("f1", "b1", "b2", "b3", "b4", "f2", "f3")
 
 

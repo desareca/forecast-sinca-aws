@@ -207,6 +207,9 @@ class Job:
         from analysis import load as analysis_load
 
         self.runs = analysis_load.list_runs(self.state, experiment_name=None)
+        # runs del stage ya publicados (descargados como padres/referencias): no se vuelven a subir (8.2)
+        self.previos = {r for r, _ in mlflow_log.runs_de_stage(self.state, STAGE)} \
+            if pathlib.Path(self.state, mlflow_log.DB_FILENAME).exists() else set()
         data = load_validated(args.data_bucket, local_dir=args.local_validated_dir)
         self.grid = aed.build_grid(data["sinca"], data["open_meteo"], data["feriados"])
         self.data = data
@@ -689,7 +692,7 @@ def ejecutar(args, s3=None, descargar: bool = True) -> dict:
     if args.no_upload:
         return out
     res = mlflow_log.publish_new_runs(job.state, STAGE, s3, job.last_modified, args.mlflow_bucket, args.mlflow_prefix,
-                                      on_conflict_dir=str(pathlib.Path(args.model_dir) / "conflicto"))
+                                      published=job.previos, on_conflict_dir=str(pathlib.Path(args.model_dir) / "conflicto"))
     verificados = {r: [p.name for p in mlflow_log.run_files(job.state, r)] for r in ids}
     marcador(s3, args.mlflow_bucket, args.campana, args.clave,
              {"clave": args.clave, "run_ids": ids, "artefactos": verificados, "publicado": res["runs"],

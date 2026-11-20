@@ -85,7 +85,7 @@ def test_fallo_de_publicacion_no_deja_marcador(refs):
     finally:
         (state / ".download.json").unlink()
     m = json.loads(s3.objects["model-artifacts/orquestacion/deep-koopman/camp-test/jobs/smoke-gru-s0.json"])
-    assert set(out["run_ids"]) <= set(m["publicado"])
+    assert set(out["run_ids"]) == set(m["publicado"])  # los runs del stage que ya había no se vuelven a subir
 
 
 def test_help(capsys):
