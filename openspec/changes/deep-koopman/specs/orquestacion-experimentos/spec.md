@@ -2,26 +2,35 @@
 
 ## Purpose
 
-Ejecución en serie, en AWS, de una campaña de Training Jobs con compuertas, pausas con aprobación
-del operador, avisos y modo seco, sin que el implementador espere en sesión.
+Ejecución en serie, en AWS, de una campaña de Training Jobs con lista fija de jobs, selección
+preregistrada antes de test, reanudación por job, avisos y modo seco, sin aprobaciones intermedias
+del operador.
 
 ## ADDED Requirements
 
-### Requirement: Máquina de estados en serie
+### Requirement: Campaña en serie con lista fija
 
-La campaña SHALL ejecutarse como una máquina de estados Standard de Step Functions que lanza cada Training Job con integración síncrona y nunca más de uno a la vez. La rama tras cada compuerta SHALL leerse de la decisión escrita en S3 por el job de compuerta; la orquestación no SHALL contener reglas de decisión propias.
+La campaña SHALL ejecutarse como una máquina de estados Standard de Step Functions que recorre una lista fija de jobs (entrenamiento → selección → cierre → test), lanza cada Training Job con integración síncrona y nunca más de uno a la vez. La máquina no SHALL ramificar según resultados ni esperar aprobaciones; las reglas de selección viven en el código de evaluación.
 
 #### Scenario: Sin solape
 - **WHEN** una fase tiene varios jobs
 - **THEN** cada job empieza solo después de que el anterior terminó
 
-#### Scenario: Rama desconocida
-- **WHEN** la decisión en S3 trae una rama fuera de la lista permitida
-- **THEN** la ejecución falla y avisa, sin lanzar jobs nuevos
+#### Scenario: Sin pausas
+- **WHEN** termina el job de selección
+- **THEN** el cierre y el test se lanzan sin esperar intervención del operador
+
+### Requirement: Selección antes de test
+
+El job de test SHALL evaluar solo la configuración que el job de selección registró en S3 y MLflow, y SHALL fallar si ese registro no existe. La selección SHALL quedar registrada antes de que se lance el cierre.
+
+#### Scenario: Selección ausente
+- **WHEN** el job de test no encuentra el registro de selección de la campaña
+- **THEN** termina con error sin evaluar en test
 
 ### Requirement: Salto de jobs completados
 
-Antes de lanzar cada job o compuerta, la máquina SHALL comprobar su marcador de éxito en S3, que el job escribe solo después de publicar su run con los artefactos requeridos, y SHALL saltarlo si existe. Los marcadores SHALL identificarse por campaña y clave estable del job, no por ejecución.
+Antes de lanzar cada job, la máquina SHALL comprobar su marcador de éxito en S3, que el job escribe solo después de publicar su run con los artefactos requeridos, y SHALL saltarlo si existe. Los marcadores SHALL identificarse por campaña y clave estable del job, no por ejecución.
 
 #### Scenario: Reanudar tras un fallo
 - **WHEN** el job 8 de 12 de una fase falló y se inicia una nueva ejecución de la misma campaña
@@ -35,17 +44,9 @@ Cada job de entrenamiento SHALL guardar al final de cada época un checkpoint (p
 - **WHEN** un job falla después de guardar la época 2 de 4 y se vuelve a lanzar con la misma clave
 - **THEN** el nuevo job empieza en la época 3 y termina con 4 épocas en total
 
-### Requirement: Pausas con aprobación
-
-La máquina SHALL detenerse con un token de tarea ante: rama de ambigüedad o cambio de diseño, compuerta final fallida y siempre antes de test, y SHALL continuar solo cuando el operador devuelve el token con la rama elegida por comando autenticado con su profile.
-
-#### Scenario: Pausa antes de test
-- **WHEN** termina el cierre
-- **THEN** la máquina espera la aprobación del operador y no lanza el job de test sin ella
-
 ### Requirement: Avisos
 
-El sistema SHALL avisar por email (tópico SNS) el resultado de cada compuerta con sus cifras clave, cada pausa con el comando de aprobación, el cierre, el resultado de test y todo fin de ejecución `FAILED`, `TIMED_OUT` o `ABORTED`. El email del operador NO SHALL estar en el repo.
+El sistema SHALL avisar por email (tópico SNS) el inicio de la campaña, el fin de cada fase con un resumen breve, la configuración seleccionada con sus cifras clave, el cierre, el resultado de test y todo fin de ejecución `FAILED`, `TIMED_OUT` o `ABORTED`. El email del operador NO SHALL estar en el repo.
 
 #### Scenario: Fallo de un job
 - **WHEN** un Training Job de la campaña termina en `Failed`
@@ -61,12 +62,8 @@ La máquina SHALL reintentar a lo más 2 veces, con espera creciente, solo los e
 
 ### Requirement: Modo seco
 
-La campaña SHALL poder ejecutarse en modo seco, donde los jobs no entrenan ni escriben en MLflow y las compuertas devuelven ramas forzadas por la entrada, para recorrer las ramas principales (pasa, B1, pausa y aprobación, pausa de test), la reanudación con salto de jobs y la retoma desde checkpoint, y verificar los avisos.
+La campaña SHALL poder ejecutarse en modo seco con una semilla, donde los jobs no entrenan ni escriben en MLflow, para recorrer la lista fija completa (más selección, cierre y test) y, en la misma prueba, verificar la falla forzada a mitad de un job, la reanudación con salto por marcador, la retoma desde checkpoint y los avisos.
 
-#### Scenario: Reanudación seca
-- **WHEN** en modo seco se fuerza un fallo tras la época 2 del job 8 de F1 y luego se reanuda la campaña
-- **THEN** la reanudación salta los jobs 1–7 y el job 8 retoma en la época 3
-
-#### Scenario: Recorrido seco
-- **WHEN** se ejecuta en modo seco con las ramas `b1` y `pausa` forzadas
-- **THEN** la ejecución pasa por B1 y por las dos pausas, termina con éxito y deja un aviso por cada compuerta, pausa y cierre, sin runs nuevos en MLflow
+#### Scenario: Recorrido seco con falla y reanudación
+- **WHEN** en modo seco con semilla 0 se fuerza un fallo tras la época 2 del job 3 de F1 y luego se lanza una nueva ejecución de la misma campaña
+- **THEN** la primera ejecución termina `FAILED` sin reintento y con aviso; la segunda salta los jobs 1–2, el job 3 retoma en la época 3 y la campaña termina con éxito, con los avisos de inicio, fin de cada fase, selección, cierre y test, sin runs nuevos en MLflow

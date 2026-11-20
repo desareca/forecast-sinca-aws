@@ -3,9 +3,10 @@
 > Fuente de verdad: `project-decisions.md` §9; detalle en `design.md` (D1–D20). Change exploratorio.
 > **Todo el cómputo de experimentos en Training Jobs**, orquestados por Step Functions en serie (D18);
 > local solo tests (`.\.venv\Scripts\python -m pytest`, sintéticos) y edición. **[OPERADOR]** =
-> infra, lanzamientos, aprobaciones o escrituras en S3/MLflow; delegable al implementador con
-> confirmación previa (como en `ae-dmd-prep`). Las compuertas y pausas son estados de la máquina:
-> el implementador no espera en sesión; transcribe resultados al log cuando llegan los avisos.
+> infra, lanzamientos o escrituras en S3/MLflow; delegable al implementador con confirmación previa
+> (como en `ae-dmd-prep`). **Enmienda (tras 8.2): campaña completa en serie, sin compuertas que
+> ramifiquen ni pausas** (D11, D12, D14, D18); las tareas 6.1–6.2 y 7.1–7.3 quedan como historia y se
+> reabren como 6.5–6.6 y 7.8–7.11. El implementador transcribe resultados al log cuando llegan los avisos.
 > Profile siempre explícito (`<AWS_PROFILE>` de `.env`); CLI vía WSL, boto3 en Windows con `AWS_CA_BUNDLE`.
 > Si algo no calza, anotarlo en `## Notas de implementación`; si bloquea, volver al arquitecto.
 
@@ -43,12 +44,14 @@
 - [x] 5.2 `identificabilidad.py`: contribuciones y aportes (`A_j`), dominantes (≥ 80 %), bootstrap DMD sobre el latente (B = 200, 7 días), emparejamiento entre semillas, compuerta y coherencia DMD-latente vs `K` (D11). Tests: dominantes idénticos al repetir; sistema sintético con los mismos modos en 3 "semillas" → aprueba; un modo ausente en una semilla → no aprueba; jacobiano = exacto cuando el decoder es lineal. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_identificabilidad.py -q`.
 - [x] 5.3 Eliminación de bloques (D13) con `operador.modos` (regla 1.6 enmendada, diario protegido). Test: un bloque de ruido sintético se elimina; el diario se conserva aunque quitarlo no empeore. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman -q`.
 
-## 6. CLI, compuerta y entry point (D1, D14, D15, D20)
+## 6. CLI, selección y entry point (D1, D14, D15, D20)
 
 - [x] 6.1 `pipeline/koopman/run.py`: `--fase {smoke,f1,b1,b2,b3,b4,f2,f3,cierre,test,compuerta}`, `--de <fase>` (compuerta), `--encoder`, `--variantes`, `--seed`, `--parent-from <json S3>`, `--mlflow-runs`, `--experiment`, `--version`, `--force-test`, `--no-upload`, `--dry` (sin MLflow ni entrenamiento; escribe la rama forzada si es compuerta), `--dry-ckpt` (entrenamiento sintético de 4 épocas con checkpoints) y `--dry-fallar-en <época>` (falla tras guardar esa época, para 9.2); al terminar con éxito (tras publicar) escribe el marcador `<campaña>/jobs/<clave>.json` (D2); descarga selectiva (D1), registro D15, publicación D2; `test` con guardia de una sola evaluación. Test e2e sintético `--no-upload` (2 épocas, `smoke`), test de `--dry` (0 escrituras en MLflow) y test de que un fallo de publicación no deja marcador. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman -q`; `run.py --help`.
 - [x] 6.2 `pipeline/koopman/compuerta.py`: reglas de D9 (7.1), D11, D12 y D14 → JSON de decisión (`rama` ∈ {`pasa`, `b1`, `b2`, `b3`, `b4`, `c`, `pausa`, `continuar`}, ganadores por semilla con `run_id`, cifras clave, motivo) en `model-artifacts/orquestacion/deep-koopman/<campaña>/<fase>.json`. Tests con resultados sintéticos: compuerta aprobada → `pasa`; fallo con desbalance → `b1`; sin desbalance → `b2`; fallo tras B4 → `c`; empate ambiguo → `pausa`; conv1d sigue solo si iguala o supera. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_compuerta.py -q`.
 - [x] 6.3 `pipeline/train/launch.py`: `koopman/run.py` en `ENTRY_POINTS` y ejemplo de humo en el docstring. Verificar: `.\.venv\Scripts\python -m pytest tests/pipeline -q`.
 - [x] 6.4 `pipeline/koopman/README.md` (fases, compuerta, modo seco, publicación) y suite completa en verde. Verificar: `.\.venv\Scripts\python -m pytest tests -q` (≥ 0.2 + nuevos).
+- [ ] 6.5 (enmienda sin ramas) `pipeline/koopman/seleccion.py` y `--fase seleccion` (D14): candidatas, orden de simplicidad fijo, filtro por identificabilidad (D11), reemplazo solo con mejora significativa, controles y `decgru` reportados; escribe `<campaña>/seleccion.json` y un run `sinca-zona-koop-seleccion-aedmd-v{n}`. Quitar `compuerta.py`, `--fase compuerta`, `--de` y las ramas forzadas (`ramas_forzadas`); F2/F3 resuelven el padre desde el marcador de F1/F2 de la misma clave de encoder y semilla. Tests sintéticos: con una identificable gana aunque otra no identificable sea mejor; sin identificables gana por precisión y la interpretabilidad queda "no cumple"; empate → la más simple; `decgru` mejor → se reporta y no se elige. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_seleccion.py -q`.
+- [ ] 6.6 (enmienda sin ramas) `--fase cierre` y `--fase test` leen `seleccion.json` y fallan si no existe; `--dry` de selección, cierre y test escribe JSON sintéticos; actualizar `README.md`. Tests: test sin selección → error sin runs; e2e seco de la lista completa sin MLflow. Verificar: `.\.venv\Scripts\python -m pytest tests -q`.
 
 ## 7. Orquestación: código e infra (D18, D19)
 
@@ -57,8 +60,12 @@
 - [x] 7.3 `scripts/koopman/preparar_ejecucion.py`: empaqueta `pipeline/` en `sourcedir.tar.gz` (sube a `_mlflow/code/deep-koopman/<sha>/`), resuelve el digest de `tf-cpu-v2`, arma la entrada (`campaña`, jobs de D17 por fase con `clave` y `CheckpointConfig`, `max_run`, `modo`, `ramas_forzadas`, `fallar_en`, `desde`) e imprime el comando `aws stepfunctions start-execution … --profile <AWS_PROFILE>`; `--plan` sin AWS. Tests: entrada del modo real con 12 jobs en F1, 6 en B1 y F3 (principal + `icap`); nombres ≤ 63 caracteres y con prefijo `sinca-koop-`; misma `campaña` → mismas claves y URIs de checkpoint, nombres distintos por ejecución. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_preparar.py -q`.
 - [x] 7.4 Terraform (D19): `infra/orquestacion-koopman.tf` (state machine, Lambda con `archive_file`, SNS + suscripción + política del tópico, regla EventBridge, roles), `archive_file` con `output_file_mode = "0666"`, variable `operator_email` con `sensitive = true` (placeholder en `terraform.tfvars.example`), `-var="operator_email=${{ secrets.OPERATOR_EMAIL }}"` en el plan y el apply de `.github/workflows/infra-cd.yml`, provider `archive` en `providers.tf`, y en `infra/iam-oidc.tf` acciones explícitas de `states`/`lambda`/`sns`/`events` más `states.amazonaws.com` y `lambda.amazonaws.com` en la condición `iam:PassedToService`. Verificar: `terraform -chdir=infra fmt -check` y `terraform -chdir=infra init -backend=false; terraform -chdir=infra validate`.
 - [x] 7.5 **[OPERADOR]** Crear el secret del repo `OPERATOR_EMAIL` (Settings → Secrets → Actions). Verificar: el plan de CI del PR de la rama corre y no muestra el email.
-- [x] 7.6 **[OPERADOR]** PR de la rama → `terraform plan` en CI (revisar, pegar resumen en notas). Un solo `terraform -chdir=infra plan` + `apply` local con su profile, revisando el plan. Confirmar la suscripción del email. No mergear otros PR de `infra/**` hasta 9.3.
+- [x] 7.6 **[OPERADOR]** PR de la rama → `terraform plan` en CI (revisar, pegar resumen en notas). Un solo `terraform -chdir=infra plan` + `apply` local con su profile, revisando el plan. Confirmar la suscripción del email. No mergear otros PR de `infra/**` hasta 9.2.
 - [x] 7.7 **[OPERADOR]** Verificación: `aws stepfunctions describe-state-machine`, `aws sns list-subscriptions-by-topic` (suscripción confirmada) y `aws iam simulate-principal-policy` del rol de Step Functions (permite `CreateTrainingJob` sobre `sinca-koop-x`, deniega `sinca-otro-x`). Pegar outputs.
+- [ ] 7.8 (enmienda sin ramas) ASL (D18): aviso de inicio → `Map` (concurrencia 1) por fase F1 → B → F2 → F3 → selección → cierre → test → aviso final; por ítem, `estado_job` → `Choice` saltar/lanzar → `createTrainingJob.sync` con `CheckpointConfig`; avisos de fin de fase (lanzados/saltados) y de selección, cierre y test vía `resumen`; sin `waitForTaskToken` ni `Choice` de ramas; `Retry` solo transitorio. Test del ASL: ningún `waitForTaskToken`; único `Choice` = salto por marcador; `Map` con concurrencia 1; test alcanzable solo después de selección y cierre. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_asl.py -q` y `asl-validator` sobre la plantilla renderizada.
+- [ ] 7.9 (enmienda sin ramas) Lambda reducida a `estado_job` y `resumen` (lee un JSON del prefijo y devuelve su texto, ≤ 800 caracteres); quitar el modo `rama`. Mismo nombre y recurso. Tests: marcador presente/ausente, 403 → error; `resumen` de `seleccion.json` sintético. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_lambda.py -q`.
+- [ ] 7.10 (enmienda sin ramas) `preparar_ejecucion.py`: lista fija de D17 (48 jobs en orden, `MAX_RUN` del re-humo); quitar `ramas_forzadas` y `desde`; `--dry-ckpt` y `--fallar-en <fase>:<n>:<época>` para el modo seco, que usa `seeds = [0]` por defecto. Tests: modo real con 12 jobs en F1, 15 en B, 6 en F2, 12 en F3, selección, cierre y test; modo seco con 18 jobs (semilla 0); claves estables por campaña. Verificar: `.\.venv\Scripts\python -m pytest tests/koopman/test_preparar.py -q` y `terraform -chdir=infra validate` (con `-backend=false` y `TF_DATA_DIR` temporal, como en 7.4).
+- [ ] 7.11 **[OPERADOR]** `terraform -chdir=infra plan` + `apply` local revisando el plan. Criterio: solo 2 cambios en sitio (definición de la máquina y código de la Lambda); 0 creados, 0 destruidos, IAM sin cambios. Pegar el resumen.
 
 ## 8. Humo (manual)
 
@@ -67,31 +74,29 @@
 
 ## 9. Ejecución seca (D20; con el operador)
 
-- [ ] 9.1 **[OPERADOR]** `preparar_ejecucion.py --modo seco --ramas-forzadas "f1=b1,b1=pasa,f2=pausa"` y `start-execution`. Aprobar las dos pausas con el comando del email. Criterio: ejecución `SUCCEEDED` pasando por B1, la pausa de rama y la de test; un email por compuerta, pausa, cierre y test; 0 runs nuevos en MLflow. Pegar el historial resumido.
-- [ ] 9.2 **[OPERADOR]** Reanudación seca (D20): `--modo seco --dry-ckpt --fallar-en f1:8:2` y `start-execution` → `FAILED` sin reintento y aviso de EventBridge; luego una nueva ejecución con la misma `campaña`. Criterio: en el historial no hay `CreateTrainingJob` para los jobs 1–7 de F1; el log del job 8 dice que retoma en la época 3 y termina con 4 épocas; la campaña sigue hasta la pausa de test. Decisión go/no-go del lanzamiento real.
+- [ ] 9.1 **[OPERADOR]** Ejecución seca única (D20): `preparar_ejecucion.py --modo seco --dry-ckpt --fallar-en f1:3:2 --campaña <seca>` y `start-execution` → `FAILED` sin reintento y aviso de EventBridge; luego una nueva ejecución con la misma campaña. Criterio: la segunda ejecución no lanza los jobs 1–2 de F1 (sin `CreateTrainingJob` en el historial), el job 3 retoma en la época 3 y termina con 4, los 18 jobs de la semilla 0 quedan con marcador y la ejecución termina `SUCCEEDED`; emails de inicio, fin de cada fase, selección, cierre, test y fallo; 0 runs nuevos en MLflow. Pegar el historial resumido. Decisión go/no-go del lanzamiento real.
+- [ ] 9.2 **[OPERADOR]** PR solo de infra (`infra/**`, `infra-cd.yml`, Lambda y ASL) a `main`. Criterio: el plan de CI muestra 0 cambios (incluido `source_code_hash` de la Lambda) y el apply de `main` es no-op. Desde aquí se pueden mergear otros PR de `infra/**`.
 
-- [ ] 9.3 **[OPERADOR]** PR solo de infra (`infra/**`, `infra-cd.yml`, Lambda y ASL) a `main`. Criterio: el plan de CI muestra 0 cambios (incluido `source_code_hash` de la Lambda) y el apply de `main` es no-op. Desde aquí se pueden mergear otros PR de `infra/**`.
+## 10. Campaña real
 
-## 10. Ejecución real (F1 → B → F2 → F3 → cierre)
-
-- [ ] 10.1 **[OPERADOR]** `preparar_ejecucion.py --modo real` y `start-execution`. Responder las pausas que lleguen por email (rama `pausa` o `c`) con el comando indicado. Criterio: la ejecución llega a la pausa antes de test. Si termina en la rama `c` con C1/C2: vuelve al arquitecto (tareas nuevas).
-- [ ] 10.2 Por cada compuerta resuelta (F1, B1–B4 si corrieron, F2, F3): resumen en `output/deep-koopman/<fase>.md` (no versionado) desde el JSON de decisión y los runs, y entrada en `EXPERIMENT-LOG.md` (F1: precisión vs 7.1/LightGBM/persistencia, compuerta por encoder, dominantes, variantes K, decoder GRU vs lineal, coherencia, razón `L_lin`/`L_rec`; F3: `icap` vs principal). Verificar: sin IDs de cuenta ni ARNs.
+- [ ] 10.1 **[OPERADOR]** `preparar_ejecucion.py --modo real --campaña <real>` y `start-execution`. Criterio: `SUCCEEDED` hasta el aviso final (selección, cierre y test incluidos). Si falla: revisar el aviso, corregir y relanzar con la misma campaña (salta lo hecho y retoma checkpoints).
+- [ ] 10.2 Por fase, al llegar su aviso: resumen en `output/deep-koopman/<fase>.md` (no versionado) y entrada en `EXPERIMENT-LOG.md` (F1: precisión vs 7.1/LightGBM/persistencia, identificabilidad por configuración, dominantes, variantes K, decoder GRU vs lineal, coherencia, razón `L_lin`/`L_rec`; B1–B4; F2; F3 con `icap`; tabla de candidatas y selección aplicada). Verificar: sin IDs de cuenta ni ARNs.
 - [ ] 10.3 `BillableTimeInSeconds` de los jobs `sinca-koop-*` (lectura) en las notas, frente a D17.
 
 ## 11. Test e interpretabilidad (D16)
 
-- [ ] 11.1 **[OPERADOR]** Revisar el modelo final (cierre) y aprobar la pausa de test con el comando del email.
-- [ ] 11.2 Pegar la tabla por serie de test (vs LightGBM, persistencia y 7.1) y el veredicto D12 + interpretabilidad §9 del aviso final y del run de test.
-- [ ] 11.3 Interpretabilidad: el job de test escribe las tablas (espectro con intervalos, formas de modo, episodios por modo, estabilidad, `B`, coherencia) como parquet; `notebooks/deep_koopman.ipynb` solo las lee y grafica con matplotlib (con outputs; excepción en `.gitignore`). Verificar: el notebook corre de punta a punta sobre los artefactos descargados.
+- [ ] 11.1 Pegar la tabla por serie de test de la configuración seleccionada (vs LightGBM, persistencia y 7.1) y el veredicto D12 + interpretabilidad §9.
+- [ ] 11.2 Interpretabilidad: el job de test escribe las tablas (espectro con intervalos, formas de modo, episodios por modo, estabilidad, `B`, coherencia) como parquet; `notebooks/deep_koopman.ipynb` solo las lee y grafica con matplotlib (con outputs; excepción en `.gitignore`). Verificar: el notebook corre de punta a punta sobre los artefactos descargados.
 
 ## 12. Registro y verificación
 
-- [ ] 12.1 `EXPERIMENT-LOG.md` (cierre: respuesta a la pregunta del change, test, veredicto, costo real), `README.md` y copia de las decisiones de S3 en `pipeline/koopman/decisiones.json`. Verificar: sin IDs de cuenta ni ARNs.
+- [ ] 12.1 `EXPERIMENT-LOG.md` (cierre: respuesta a la pregunta del change, test, veredicto, costo real), `README.md` y copia de `seleccion.json` en `pipeline/koopman/decisiones.json`. Verificar: sin IDs de cuenta ni ARNs.
 - [ ] 12.2 Verificación de punta a punta: `.\.venv\Scripts\python -m pytest tests -q`; funciones del dashboard sin errores sobre el estado publicado; `openspec validate deep-koopman --strict` válido.
 
 ## Workflow follow-up
 
 - [ARQUITECTO] Riesgo alto (IAM nuevo): relectura completa del change antes de archivar.
+- [ARQUITECTO] Si ninguna configuración es identificable: evaluar C1 (encoder lineal Hankel/PCA con `K` y pérdidas entrenados) o C2 (ensamble de semillas) como change o tareas nuevas.
 - [ARQUITECTO] `project-decisions.md` §8/§9: resultado de 7.2, Step Functions como orquestación de campañas, y si `dmd-localizado` sigue o se replantea.
 - [ARQUITECTO] `## Notas de este proyecto` en `modules/compute/blueprint.md` (orquestación con Step Functions en serie, tiempos reales de Koopman), `modules/cicd/blueprint.md` (apply local único desde la rama + PR solo de infra con plan 0 cambios; variables sensibles vía secrets; zip reproducible con `output_file_mode`) y `modules/tracking-experimentos/blueprint.md` (publicación desde jobs).
 - [OPERADOR] Limpiar a mano `model-artifacts/checkpoints/deep-koopman/` y los marcadores de las campañas secas cuando ya no hagan falta (nada se borra automáticamente).

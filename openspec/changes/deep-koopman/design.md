@@ -20,12 +20,12 @@
 
 ## Goals / Non-Goals
 
-**Goals:** saber si un Koopman entrenado da modos identificables entre semillas (compuerta tras F1)
+**Goals:** saber si un Koopman entrenado da modos identificables entre semillas (criterio D11)
 sin perder la precisión de 7.1; reportar D12 e interpretabilidad del §9.
 
 **Non-Goals:** `A₂₄`, fbDMD y recorte; meteo exógena en el horizonte; K condicionado (LPV) y red de
 autovalores (→ `dmd-localizado`); meteo futura; híbridos; grillas de `d`, `L`, mezcla de bloques o
-λ (salvo B1); ensamble y encoder lineal salvo decisión en la pausa C; cómputo local de experimentos;
+λ (salvo B1); ensamble y encoder lineal (C1/C2: follow-up del arquitecto); cómputo local de experimentos;
 cambios al dashboard más allá de no romperse.
 
 ## Decisions
@@ -59,8 +59,8 @@ cambios al dashboard más allá de no romperse.
 
 `modelo.py` (encoders, decoders, capa `K` por bloques, `B`), `perdidas.py`, `entrenar.py` (bucle,
 calentamiento, currículo), `inicio.py` (arranque en caliente, init de `K`), `identificabilidad.py`
-(aportes, dominantes, emparejamiento, bootstrap, compuerta), `evaluar.py` (rollout con `u`, decode,
-Duan, arnés de `operador`), `compuerta.py` (reglas → JSON de decisión, D14/D18), `run.py` (CLI
+(aportes, dominantes, emparejamiento, bootstrap, criterio), `evaluar.py` (rollout con `u`, decode,
+Duan, arnés de `operador`), `seleccion.py` (reglas preregistradas → selección, D14), `run.py` (CLI
 `--fase`, `--dry`), `decisiones.json` (registro), `README.md`. Tests en
 `tests/koopman/` (sintéticos, pocas épocas).
 
@@ -156,7 +156,7 @@ Duan, arnés de `operador`), `compuerta.py` (reglas → JSON de decisión, D14/D
 - Puntaje: media de 6 series; por encoder, media de 3 semillas. Diferencias emparejadas contra
   GRU+DMD+Duan de 7.1 (media de semillas) y entre variantes.
 
-### D11. Identificabilidad (preregistro)
+### D11. Identificabilidad (preregistro; criterio de selección y reporte, no compuerta)
 
 - Contribución del modo `j` en `t`: `c_j(t)` = parte del promedio decodificado de 24 h (espacio log1p
   normalizado) que viene del bloque `j` de `z_{t+24|t}` (decoder lineal: exacta; GRU: jacobiano del
@@ -165,40 +165,46 @@ Duan, arnés de `operador`), `compuerta.py` (reglas → JSON de decisión, D14/D
   con ≥ 80 % de `Σ_j A_j`. El diario no se exige como dominante (el promedio lo cancela); se reporta.
 - Bootstrap: DMD exacto sobre el latente aprendido de train, bloques de 7 días, B = 200,
   emparejado con `K` (D8 de 7.1: húngaro sobre representantes, ±25 %, reales solo vida media).
-- Compuerta: cada dominante de cada semilla tiene pareja en las otras dos, aparece en ≥ 80 % del
-  bootstrap de cada semilla y sus intervalos de período y vida media se solapan entre semillas.
+- Identificable: cada dominante de cada semilla tiene pareja en las otras dos, aparece en ≥ 80 % del
+  bootstrap de cada semilla y sus intervalos de período y vida media se solapan entre semillas. Se
+  calcula para cada configuración al evaluarla; no ramifica la campaña.
 
-### D12. Remedios
+### D12. Variantes de remedio (siempre)
 
-- **B1 (decisión del operador)**: barrido λ_lin ∈ {0.1, 10} en F1 del GRU (3 semillas × 2), solo si
-  la compuerta falla y `L_lin` normalizado al final de F1 > 10× `L_rec`. Si B1 aprueba, se detiene;
-  si no, B2–B4 siguen con λ_lin = 1. Si no hay desbalance, B1 no se corre.
-- Orden: B2 (`L_cons = ‖enc([dec(z), meteo, máscaras]) − z‖²`), B3 (`L1 = mean_t Σ_bloques ‖z_bloque‖₂`),
-  B4 (`d = 8`: diario + 2 libres + 2 reales). Cada uno sobre F1 del encoder principal, 3 semillas;
-  se detiene en el primero que aprueba.
-- Si B4 falla: pausa de la máquina (D18); el operador elige C1 (encoder lineal Hankel/PCA con `K` y pérdidas entrenados) o C2
-  (ensamble de semillas para precisión; interpretabilidad solo de modos robustos). Cualquiera
-  requiere tareas nuevas (vuelve al arquitecto).
+- Se entrenan siempre, como variantes de F1 del encoder GRU (3 semillas c/u): B1 λ_lin ∈ {0.1, 10};
+  B2 `L_cons = ‖enc([dec(z), meteo, máscaras]) − z‖²`; B3 `L1 = mean_t Σ_bloques ‖z_bloque‖₂`; B4 `d = 8`
+  (diario + 2 libres + 2 reales). Se reporta la razón `L_lin`/`L_rec` normalizada de F1.
+- C1 (encoder lineal Hankel/PCA con `K` y pérdidas entrenados) y C2 (ensamble de semillas) quedan
+  como follow-up del arquitecto si nada es identificable; no están en la máquina.
 
 ### D13. Eliminación de modos
 
 Regla 1.6 enmendada sobre `K` entrenado: quitar un bloque = anular su fila/columna en `K`, su fila
-en `B` y su contribución al decode, sin reentrenar; Duan reestimado si aplica. Se reporta en cada
-fase; los bloques finales se fijan tras F3 (o la última fase corrida).
+en `B` y su contribución al decode, sin reentrenar; Duan reestimado si aplica. Se aplica a cada
+configuración al evaluarla; la selección (D14) toma los bloques de la elegida y el cierre los fija.
 
-### D14. Decisiones por fase
+### D14. Selección preregistrada (job `--fase seleccion`, antes del cierre)
 
-Un job de compuerta (`--fase compuerta --de <fase>`, solo evaluación) aplica las reglas (D9 de 7.1,
-D11, D12) y escribe la decisión en S3 (D18): precisión = diferencia emparejada (cuenta solo si el
-intervalo excluye 0); empate → la opción más simple (decoder lineal < GRU; estructurado < denso;
-GRU < conv1d; sin `icap` < con `icap`). Rama `pausa` ante ambigüedad o cambio de diseño. El
-implementador copia las decisiones a `koopman/decisiones.json` al cerrar (registro versionado).
+- Candidatas: configuraciones con decoder lineal que no son de control (`kden`, `perlib`, `sinbu`,
+  `decgru` se reportan, no se eligen): F1 GRU, F1 conv1d, B1 (0.1, 10), B2, B3, B4, F2 GRU, F2 conv1d,
+  F3 GRU, F3 conv1d, F3 `icap` GRU, F3 `icap` conv1d.
+- Orden de simplicidad (fijo): F1 < B1 λ0.1 < B1 λ10 < B2 < B3 < B4 < F2 < F3 < F3 `icap`; dentro de
+  cada uno, GRU < conv1d.
+- Si alguna candidata es identificable (D11), se elige solo entre esas; si no, entre todas y la
+  interpretabilidad queda "no cumple". Se parte de la más simple; una más compleja la reemplaza solo
+  si la diferencia emparejada de RMSE ponderado (media de 6 series y de semillas) tiene intervalo
+  < 0 (empate → la más simple).
+- Decoder GRU significativamente mejor que el lineal: se reporta; el lineal sigue como principal.
+- Salida: `model-artifacts/orquestacion/deep-koopman/<campaña>/seleccion.json` (configuración, run
+  por semilla, bloques finales de D13, tabla de candidatas, orden aplicado) y un run de MLflow con el
+  mismo contenido, ambos antes del cierre. El implementador lo copia a `koopman/decisiones.json`.
 
 ### D15. Runs
 
 | Run | Nombre |
 |---|---|
 | Fase/variante | `sinca-zona-koop-{enc}-{fase}{var}-aedmd-v{n}-s{seed}`; `enc` ∈ `gru`, `conv1ds`; `fase` ∈ `f1`, `b1`, `b2`, `b3`, `b4`, `f2`, `f3`, `cierre`; `var` ∈ ``, `kden`, `perlib`, `sinbu`, `decgru`, `ll01`, `ll10`, `icap` |
+| Selección | `sinca-zona-koop-seleccion-aedmd-v{n}` (tag `stage=deep-koopman`, artefacto `seleccion.json`) |
 | Test por serie | `sinca-{slug}-{pollutant}-koop-{enc}-aedmd-v{n}-s{seed}` (contrato LightGBM, `evaluacion=test`) |
 
 Artefactos: `encoder.keras`, `decoder.keras`, `koopman.npz` (parámetros de bloque, `K`, `B`),
@@ -207,87 +213,75 @@ Artefactos: `encoder.keras`, `decoder.keras`, `koopman.npz` (parámetros de bloq
 
 ### D16. Cierre y test
 
-Encoder y decoder congelados; `K`, `B` (y Duan si el final es F1/F2) se reentrenan 20 épocas con la
-pérdida de la fase final sobre train+es+sel (hasta 2026-06-30), con los bloques fijados en D13. Un
-job de test aparte, tras pausa del operador; guardia de una sola evaluación (`--force-test`).
-Referencias: `lightgbm-v1` holdout, persistencia y test de GRU+DMD+Duan de 7.1.
+El cierre lee `seleccion.json`: encoder y decoder congelados; `K`, `B` (y Duan si la seleccionada es
+F1/B/F2) se reentrenan 20 épocas con su pérdida sobre train+es+sel (hasta 2026-06-30), con los
+bloques fijados en D13. Luego el job de test (sin pausa) evalúa solo esa configuración, una vez
+(guardia; `--force-test` solo por orden del operador); falla si no hay selección. Referencias:
+`lightgbm-v1` holdout, persistencia y test de GRU+DMD+Duan de 7.1.
 
-### D17. Jobs y costo
+### D17. Jobs y costo (tiempos del re-humo 8.2)
 
-**Los tiempos, costos y `max_run` vigentes salen del re-humo (tarea 8.2), con margen ≥ 1.5× sobre
-lo medido**; la tabla siguiente es la estimación previa al humo.
-
-Tarifa ~USD 0.115/h (`ml.m5.large`, no verificada en consola). Tiempos estimados desde v2 (GRU 60
-épocas ~40 min) × ~2 por `L_lin` (dos pasadas de encoder).
+Tiempos por job del re-humo (paso compilado; notas 8.2 de `tasks.md`), tarifa ~USD 0.115/h
+(`ml.m5.large`, no verificada en consola). `MAX_RUN` vigentes en `preparar_ejecucion.py` (margen ≥ 2×:
+1 h; variantes de K 2 h).
 
 | Grupo | Jobs | h c/u | h | USD |
 |---|---|---|---|---|
-| Humo | 1 | 0.3 | 0.3 | 0.03 |
-| F1 GRU lineal / conv1d / GRU+decGRU | 3 / 3 / 3 | 1.3 / 0.5 / 1.7 | 10.5 | 1.21 |
-| F1 variantes K (3 por job) | 3 | 4.0 | 12.0 | 1.38 |
-| F2, F3 (GRU; ×2 si sigue conv1d) | 3–6, 3–6 | 0.9, 0.7 | 4.8–9.6 | 0.55–1.10 |
-| F3 variante `icap` | 3 | 0.7 | 2.1 | 0.24 |
-| Cierre + test | 2 | 0.5, 0.3 | 0.8 | 0.09 |
-| Compuertas (F1, F2, F3; solo evaluación) | 3 | 0.2 | 0.6 | 0.07 |
-| **Base** | **27–33** | | **31–36** | **~3.6–4.1** |
-| Contingente B1 (λ_lin) + compuerta | 0–7 | 1.3 / 0.2 | 0–8.0 | 0–0.92 |
-| Contingentes B2–B4 + compuertas | 0–12 | 1.3 / 0.2 | 0–12.3 | 0–1.42 |
-| **Máximo** | **52** | | **~56** | **~6.5** |
-| Ejecución seca (D20, 2 pruebas, aparte) | ~35 | 0.1 | ~3.5 | ~0.40 |
+| F1 GRU / conv1d / decGRU / variantes K (3 por job) | 3 / 3 / 3 / 3 | 0.29 / 0.13 / 0.46 / 0.79 | 5.0 | 0.58 |
+| B1 (λ 0.1, 10) / B2 / B3 / B4 | 6 / 3 / 3 / 3 | 0.29 / 0.39 / 0.29 / 0.29 | 4.7 | 0.54 |
+| F2 GRU / conv1d | 3 / 3 | 0.20 / 0.11 | 0.9 | 0.11 |
+| F3 y F3 `icap`, GRU / conv1d | 6 / 6 | 0.15 / 0.09 | 1.4 | 0.17 |
+| Selección + cierre + test | 3 | 0.1 / 0.19 / 0.1 | 0.4 | 0.05 |
+| **Campaña completa** | **48** | | **~12.4** | **~1.45** |
+| Ejecución seca (D20: 1 semilla, con falla y reanudación) | 18 + 1 relanzado | ~0.035 | ~0.7 | ~0.08 |
 
-Orquestación (Step Functions Standard, Lambda, SNS, EventBridge) y checkpoints en S3 (KB a pocos MB
-por job): ≈ USD 0. Los checkpoints abaratan los reintentos (no se repiten épocas hechas). Techo con reintentos: < USD 8. `max_run`: humo 1 h; F1 3 h (decGRU 4 h; variantes 6 h); F2/F3 3 h.
+Orquestación (Step Functions, Lambda, SNS, EventBridge) y checkpoints en S3: ≈ USD 0. Techo con
+reintentos: < USD 3.
 
-### D18. Orquestación (Step Functions, en serie)
+### D18. Orquestación (Step Functions, en serie, sin ramas ni pausas)
 
-- Máquina Standard `sinca-deep-koopman`: F1 → compuerta → `Choice` {pasa → F2; `b1` → B1 → compuerta;
-  `b2` → B2 → compuerta → … B4; `pausa`; `c` → pausa C} → F2 → compuerta → F3 (+ `icap`) →
-  compuerta → cierre → pausa antes de test → test → aviso final. Sin paralelismo: cada fase es un
-  `Map` con `MaxConcurrency = 1` sobre la lista de jobs de la fase, cada uno
-  `arn:aws:states:::sagemaker:createTrainingJob.sync`.
-- Entrada de la ejecución (la arma `scripts/koopman/preparar_ejecucion.py`): URI de la imagen por
-  digest, `sourcedir.tar.gz` de `pipeline/` subido a `_mlflow/code/deep-koopman/<sha>/`, ARN del rol de
-  training, jobs por fase (D17) con hiperparámetros (`sagemaker_program = koopman/run.py`,
-  `sagemaker_submit_directory`), `max_run`, `modo` (`real` | `seco`), `campaña` (id estable entre
-  ejecuciones). Cada job tiene una `clave` estable `<fase>-<enc><var>-s<seed>` y un nombre único
-  `sinca-koop-<clave>-<id de ejecución corto>` (≤ 63), más su `CheckpointConfig` (D9).
-- Decisiones: cada job de compuerta escribe `model-artifacts/orquestacion/deep-koopman/<campaña>/<fase>.json`
-  (`rama`, ganadores por semilla con `run_id`, cifras clave). Prefijo dentro de lo que el rol de
-  training ya escribe: sin cambiar su IAM. Una Lambda chica (Python, ~20 líneas) lee el JSON,
-  valida `rama` contra la lista permitida y la devuelve con el resumen; no aplica reglas. F2/F3
-  resuelven su `parent_run_id` desde ese JSON.
-- Pausas: `arn:aws:states:::sns:publish.waitForTaskToken` (sin Lambda) con el comando de aprobación
-  `aws stepfunctions send-task-success --task-token <token> --task-output '{"rama": "..."}' --profile <AWS_PROFILE>`
-  (o `send-task-failure` para abortar); `TimeoutSeconds` 7 días. En: rama `pausa` (ambigüedad o
-  cambio de diseño), fallo tras B4 (opciones C1/C2: la ejecución termina con "requiere tareas
-  nuevas") y siempre antes de test. Sin link de aprobación por Lambda URL: una URL pública con el
-  token como única autenticación no es segura y con `AWS_IAM` no es simple.
+- Máquina Standard `sinca-deep-koopman`: aviso de inicio → F1 → B → F2 → F3 → selección → cierre →
+  test → aviso final. Cada fase es un `Map` con `MaxConcurrency = 1` sobre la lista fija de jobs de
+  la entrada, cada uno `arn:aws:states:::sagemaker:createTrainingJob.sync`, con aviso de fin de fase
+  (jobs lanzados y saltados). Sin `Choice` de ramas ni `waitForTaskToken`: las reglas viven en
+  `seleccion.py` y la máquina solo ejecuta.
+- Entrada (la arma `scripts/koopman/preparar_ejecucion.py`): URI de la imagen por digest,
+  `sourcedir.tar.gz` de `pipeline/` en `_mlflow/code/deep-koopman/<sha>/`, ARN del rol de training,
+  `campaña` (id estable entre ejecuciones), la lista de D17 con `clave` estable
+  `<fase>-<enc><var>-s<seed>`, nombre único `sinca-koop-<clave>-<id de ejecución corto>` (≤ 63),
+  hiperparámetros (`sagemaker_program = koopman/run.py`, `sagemaker_submit_directory`), `max_run`,
+  `CheckpointConfig` (D9) y `modo` (`real` | `seco`). F2/F3 resuelven su padre como el run de F1/F2
+  con el mismo encoder y semilla en la misma campaña (marcador de D2).
+- **Salto por job**: dentro del `Map`, antes de cada job, la Lambda (`estado_job`) hace `HeadObject`
+  del marcador de D2 y un `Choice` de dos salidas (saltar o lanzar) decide; es el único `Choice`. El
+  marcador se prefiere a consultar MLflow: la Lambda no necesita el sqlite (~19 MB) y el marcador
+  solo existe si el run se publicó con sus artefactos.
+- **Lambda reducida** a `estado_job` y `resumen` (lee un JSON del prefijo de orquestación y devuelve
+  su texto para SNS; usado para selección, cierre y test); se quita el modo `rama`. Se mantiene en
+  vez de usar `aws-sdk:s3` desde la máquina: separa 404 de 403 sin dar lectura S3 al rol de Step
+  Functions.
 - Avisos: tópico SNS `sinca-deep-koopman-avisos` con suscripción email (variable `operator_email`,
   `sensitive = true`: local en `infra/terraform.tfvars`, gitignored; en CI,
   `-var="operator_email=${{ secrets.OPERATOR_EMAIL }}"` en `infra-cd.yml`, enmascarado en los logs
-  públicos de Actions; placeholder en `.example`). Mensajes: resultado de cada compuerta
-  (rama, puntaje vs 7.1, compuerta de identificabilidad), cada pausa (con el comando), cierre y
-  test (veredicto D12). Fallos: regla EventBridge sobre `Step Functions Execution Status Change`
-  (`FAILED`, `TIMED_OUT`, `ABORTED`) de esta máquina → SNS.
+  públicos de Actions; placeholder en `.example`). Mensajes: inicio, fin de cada fase, selección
+  elegida (cifras clave), cierre y test (veredicto D12). Fallos: regla EventBridge sobre
+  `Step Functions Execution Status Change` (`FAILED`, `TIMED_OUT`, `ABORTED`) → SNS.
 - Reintentos: `Retry` solo en `SageMaker.AmazonSageMakerException` y
   `SageMaker.ResourceLimitExceededException` (2 intentos, 5 min, backoff 2). Un job `Failed`
   (`States.TaskFailed`, error de código) no se reintenta: la ejecución falla y avisa.
-- **Salto por job** (en toda ejecución): dentro del `Map`, antes de cada job, la Lambda (modo
-  `estado_job`) hace `HeadObject` del marcador de D2 y un `Choice` salta el job si existe. Se eligió
-  el marcador sobre consultar MLflow: la Lambda no necesita el sqlite (~19 MB) ni MLflow, y el
-  marcador solo existe si el run se publicó con sus artefactos. Las compuertas también tienen
-  marcador (su JSON de decisión) y se saltan igual.
-- Reanudar tras un fallo: nueva ejecución con la misma `campaña`; salta los jobs y compuertas con
-  marcador y el job interrumpido retoma desde su último checkpoint (D9). `desde = <fase>` queda
-  como atajo opcional.
+- Reanudar tras un fallo: nueva ejecución con la misma `campaña`; salta los jobs con marcador y el
+  job interrumpido retoma desde su último checkpoint (D9).
 
 ### D19. Infra e IAM (Terraform)
 
 - `infra/orquestacion-koopman.tf` (+ `infra/lambda/decision_rama/handler.py`, empaquetada con
   `archive_file` con `output_file_mode = "0666"` para un zip reproducible entre Windows/WSL y el
-  Linux de CI, sin diffs perpetuos de `source_code_hash`; provider `hashicorp/archive` nuevo): state machine (ASL en
+  Linux de CI; provider `hashicorp/archive`): state machine (ASL en
   `infra/stepfunctions/deep-koopman.asl.json` con `templatefile`), Lambda, SNS + suscripción y
-  política del tópico (publica EventBridge), regla EventBridge, roles.
+  política del tópico (publica EventBridge), regla EventBridge, roles. Ya aplicado (7.6).
+- **Próximo apply** (tras esta enmienda): actualiza en sitio la definición de la máquina y el código
+  de la Lambda (nombre y recurso iguales, para no recrearla); sin recursos nuevos ni destruidos y
+  sin cambios de IAM. Plan esperado: 2 cambios en sitio.
 - Rol de Step Functions: `sagemaker:CreateTrainingJob`, `DescribeTrainingJob`, `StopTrainingJob`
   (y `AddTags` si se etiquetan) sobre `training-job/sinca-koop-*`; `iam:PassRole` solo a
   `sinca-training-role` con `iam:PassedToService = sagemaker.amazonaws.com`; `events:PutTargets`,
@@ -297,42 +291,42 @@ por job): ≈ USD 0. Los checkpoints abaratan los reintentos (no se repiten épo
 - Rol de la Lambda: `s3:GetObject` en `sinca-mlflow/model-artifacts/orquestacion/deep-koopman/*`,
   `s3:ListBucket` sobre `sinca-mlflow` con condición `s3:prefix` = ese prefijo (para que un marcador
   ausente dé 404 y no 403) y logs de su log group (retención 30 días).
-- Rol de training: sin cambios. Ya tiene `Get/PutObject` en `model-artifacts/*` (decisiones,
+- Rol de training: sin cambios. Ya tiene `Get/PutObject` en `model-artifacts/*` (selección,
   marcadores y checkpoints) y `ListBucket` sobre el bucket, que pide la sincronización de
   checkpoints.
 - `sinca-github-infra-role`: acciones explícitas de `states`, `lambda`, `sns`, `events` y las de
-  IAM ya presentes, para que el `plan` de CI refresque los recursos nuevos; la condición
-  `iam:PassedToService` de su `iam:PassRole` suma `states.amazonaws.com` y `lambda.amazonaws.com`
-  (hoy solo `ecs-tasks` y `sagemaker`).
+  IAM ya presentes; la condición `iam:PassedToService` de su `iam:PassRole` suma
+  `states.amazonaws.com` y `lambda.amazonaws.com`.
 - Flujo: `terraform plan` en el PR de la rama (infra-cd, con el secret `OPERATOR_EMAIL`); un solo
-  `terraform plan` + `apply` local del operador (profile admin) revisando el plan; confirmar la
-  suscripción del email. Tras la ejecución seca exitosa, **PR solo de infra** (`infra/**`,
-  `infra-cd.yml`, Lambda y ASL) a `main`: su plan de CI debe mostrar 0 cambios y el apply de `main`
-  queda no-op. El resto del change se mergea al cierre.
+  `terraform plan` + `apply` local del operador revisando el plan. Tras la ejecución seca exitosa,
+  **PR solo de infra** (`infra/**`, `infra-cd.yml`, Lambda y ASL) a `main`: su plan de CI debe
+  mostrar 0 cambios y el apply de `main` queda no-op. El resto del change se mergea al cierre.
 
 ### D20. Ejecución seca
 
-`modo = seco`: cada job corre `koopman/run.py --dry` (sin MLflow, sin entrenar; ~5 min de arranque)
-y las compuertas escriben la rama forzada en la entrada (`ramas_forzadas`). Una ejecución recorre:
-F1 → `b1` → pasa → F2 → `pausa` (aprobación por comando) → F3 → cierre → pausa de test (aprobación) →
-test → aviso final. Una segunda prueba usa `--dry-ckpt` (entrenamiento sintético de 4 épocas con
-checkpoints reales) en F1 y `--dry-fallar-en 8:2` (el job 8 de F1 falla tras guardar la época 2):
-la ejecución falla sin reintento y avisa por EventBridge; una nueva ejecución con la misma
-`campaña` salta los jobs 1–7 (sin `CreateTrainingJob` en el historial), el job 8 retoma en la
-época 3 (log y `epochs_run = 4`) y la campaña sigue. Se verifican los emails de cada paso.
+Una sola prueba, con 1 semilla (`preparar_ejecucion.py --modo seco` usa `seeds = [0]` por defecto):
+la lista fija de la semilla 0 (F1 4, B 5, F2 2, F3 4) más selección, cierre y test, todos en modo
+seco (`--dry`: sin MLflow ni entrenamiento; selección, cierre y test escriben JSON sintéticos), con
+`--dry-ckpt` (4 épocas sintéticas con checkpoints reales) en F1 y `--fallar-en f1:3:2` (el job 3 de
+F1 falla tras guardar la época 2). Primera ejecución: `FAILED` sin reintento y aviso de EventBridge.
+Segunda ejecución con la misma `campaña`: salta los jobs 1–2 de F1 (marcador), el job 3 retoma en la
+época 3 (`epochs_run = 4`) y la campaña sigue hasta el final. Se verifican los avisos de inicio, fin
+de cada fase, selección, cierre, test y fallo. ~40 min, ~USD 0.1.
 
 ## Risks / Trade-offs
 
 - [Entrenamiento inestable por rollout de 24 pasos] → techo de `ρ`, currículo, clipping, calentamiento.
-- [Tiempos de job subestimados] → `max_run` holgado; humo mide el tiempo por época y se reestima
-  el costo antes de F1.
-- [Arranque asimétrico GRU/conv1d] → anotado; conv1d pasa solo si iguala o supera.
+- [Sin pausas, un error de diseño se detecta al final] → la campaña cuesta ~USD 1.5; el operador
+  revisa los avisos de fin de fase y puede detener la ejecución (`stop-execution`) y reanudarla.
+- [Selección sobre muchas candidatas con `sel` corto] → orden de simplicidad fijo y reemplazo solo
+  con mejora significativa; test una sola vez sobre la elegida.
+- [Arranque asimétrico GRU/conv1d] → anotado; ambos llegan a F3 y compiten en la selección.
 - [Bootstrap por DMD sobre el latente ≠ incertidumbre del entrenamiento] → la estabilidad entre
   semillas es la prueba principal; el bootstrap es complemento.
 - [Escritura concurrente del sqlite] → `Map` con `MaxConcurrency = 1` y D2.
 - [Marcador escrito y run no publicado, o al revés] → el marcador se escribe solo después de
   publicar; un run publicado sin marcador se repite y deja un run duplicado, que se marca
-  `descartado` (aviso en el resumen de la compuerta).
+  `descartado`.
 - [IAM nuevo (roles de Step Functions y Lambda, ampliación del rol OIDC de infra)] → riesgo alto
   (`WORKFLOW.md`): mínimo privilegio por ARN/prefijo, apply del operador con el plan a la vista,
   relectura completa del change al cierre.
@@ -341,11 +335,10 @@ la ejecución falla sin reintento y avisa por EventBridge; una nueva ejecución 
   mergear otros PR de `infra/**` entre el apply local y el PR solo de infra; ese PR va apenas pasa
   la ejecución seca.
 - [Email del operador en logs públicos] → variable `sensitive` y secret de Actions.
-- [Token de tarea en un email] → solo llega al operador; no hay URL pública de aprobación.
 
 ## Migration Plan
 
 Código y tests locales → infra (plan en CI, apply local del operador) → humo manual → ejecución
-seca (D20) → PR solo de infra a `main` (0 cambios) → ejecución real: F1 → compuerta (→ B1–B4) → F2 → F3 → cierre → ⏸ test → aviso final. Rollback:
-runs con `stage=deep-koopman` se marcan `descartado` o se borran con `scripts/mlflow/maintenance.py`;
-respaldos en `_mlflow/backups/`.
+seca (D20) → PR solo de infra a `main` (0 cambios) → campaña real: F1 → B → F2 → F3 → selección →
+cierre → test → aviso final. Rollback: runs con `stage=deep-koopman` se marcan `descartado` o se
+borran con `scripts/mlflow/maintenance.py`; respaldos en `_mlflow/backups/`.

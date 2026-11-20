@@ -30,7 +30,7 @@ El operador SHALL ser global, horario y autónomo en el horizonte: `z_{t+1} = K 
 
 #### Scenario: Variantes de control
 - **WHEN** se entrena la variante de K denso, la de período diario libre o la sin `B·u`
-- **THEN** se registran como variantes de F1 del encoder GRU y no reemplazan al principal sin decisión del operador
+- **THEN** se registran como variantes de F1 del encoder GRU, se reportan y no son candidatas a la selección
 
 ### Requirement: Información permitida y presupuesto fijo
 
@@ -88,33 +88,33 @@ El aporte de un modo SHALL ser la suma ponderada (`w` de la métrica) del cuadra
 - **WHEN** se calculan los dominantes dos veces sobre el mismo modelo
 - **THEN** el conjunto y los aportes son idénticos
 
-### Requirement: Compuerta de identificabilidad
+### Requirement: Criterio de identificabilidad
 
-Tras F1, la compuerta SHALL aprobar solo si cada modo dominante aparece en las 3 semillas (emparejamiento húngaro, período y vida media a ≤ 25 %; reales solo vida media) y en ≥ 80 % del bootstrap de cada semilla, con intervalos de período y vida media que se solapan entre semillas. El bootstrap SHALL re-estimar DMD sobre el latente aprendido en bloques de 7 días de `train`.
+Para cada configuración, el sistema SHALL calcular y reportar si es identificable: cada modo dominante aparece en las 3 semillas (emparejamiento húngaro, período y vida media a ≤ 25 %; reales solo vida media) y en ≥ 80 % del bootstrap de cada semilla, con intervalos de período y vida media que se solapan entre semillas. El bootstrap SHALL re-estimar DMD sobre el latente aprendido en bloques de 7 días de `train`. El criterio no ramifica la campaña.
 
 #### Scenario: Modo presente en dos semillas
 - **WHEN** un modo dominante de una semilla no tiene pareja en una de las otras dos
-- **THEN** la compuerta no aprueba
+- **THEN** la configuración se reporta como no identificable
 
-### Requirement: Remedios de identificabilidad
+### Requirement: Campaña completa
 
-Si la compuerta no aprueba, el sistema SHALL probar en orden, uno a la vez y solo con el encoder principal: B1 λ_lin ∈ {0.1, 10} (solo si `L_lin` normalizado > 10× `L_rec` al final de F1), B2 consistencia encoder∘decoder, B3 L1 sobre amplitudes, B4 `d = 8`, deteniéndose en el primero que apruebe. Si ninguno aprueba, el change SHALL pausarse para decisión del operador entre C1 (encoder lineal Hankel/PCA con K y pérdida entrenados) y C2 (ensamble de semillas).
+La campaña SHALL entrenar siempre la lista fija de configuraciones: en F1, GRU lineal, conv1d somero lineal, GRU con decoder GRU y las variantes de K del GRU; las variantes de remedio del GRU en F1 (B1 λ_lin ∈ {0.1, 10}, B2 consistencia encoder∘decoder, B3 L1 sobre amplitudes, B4 `d = 8`); F2, F3 y F3 `icap` para GRU y conv1d somero con decoder lineal, cada uno desde su propio F1 por semilla. Todo con 3 semillas.
 
-#### Scenario: Sin desbalance
-- **WHEN** la compuerta falla y `L_lin` normalizado al final de F1 es ≤ 10× `L_rec`
-- **THEN** B1 no se ejecuta y se pasa a B2
+#### Scenario: Sin ramas
+- **WHEN** una configuración de F1 no es identificable
+- **THEN** la campaña sigue con la misma lista de jobs, sin agregar ni omitir ninguno
 
-#### Scenario: Remedio que aprueba
-- **WHEN** B3 aprueba la compuerta
-- **THEN** B4 no se ejecuta y F2 parte del modelo de B3
+### Requirement: Selección preregistrada
 
-### Requirement: Selección de encoder
+Antes de test, un job de selección SHALL elegir la configuración final sobre `sel` con reglas fijas: candidatas = configuraciones de decoder lineal no de control; si alguna es identificable, se elige solo entre ellas; se parte de la más simple del orden preregistrado y una más compleja la reemplaza solo si mejora el RMSE ponderado con intervalo emparejado bajo 0. Si ninguna es identificable, se elige por precisión y la interpretabilidad queda "no cumple".
 
-El conv1d somero SHALL pasar a F2 solo si en F1 iguala o supera al GRU en identificabilidad (resultado de la compuerta) y no es significativamente peor en precisión.
+#### Scenario: Decoder GRU mejor
+- **WHEN** el decoder GRU no lineal es significativamente mejor que el lineal en F1
+- **THEN** se reporta y el decoder lineal sigue siendo el principal
 
-#### Scenario: conv1d peor
-- **WHEN** el conv1d somero no aprueba la compuerta y el GRU sí
-- **THEN** F2 y F3 se entrenan solo con GRU
+#### Scenario: Selección registrada antes de test
+- **WHEN** termina el job de selección
+- **THEN** la configuración elegida, el orden aplicado y las cifras quedan en S3 y en MLflow antes de que exista cualquier run de test
 
 ### Requirement: Eliminación de modos
 
@@ -126,15 +126,15 @@ Tras cada fase, el sistema SHALL aplicar la regla 1.6 enmendada sobre `K` entren
 
 ### Requirement: Cómputo en AWS
 
-Entrenamiento, evaluación y compuertas de todas las fases SHALL correr en SageMaker Training Jobs CPU, uno por semilla y en serie, orquestados según `orquestacion-experimentos`. El cómputo local SHALL limitarse a tests unitarios con datos sintéticos.
+Entrenamiento, evaluación, selección, cierre y test SHALL correr en SageMaker Training Jobs CPU, uno por semilla y en serie, orquestados según `orquestacion-experimentos`. El cómputo local SHALL limitarse a tests unitarios con datos sintéticos.
 
-#### Scenario: Decisión de compuerta
-- **WHEN** termina el job de compuerta de una fase
-- **THEN** escribe en S3 la rama elegida por las reglas, los ganadores por semilla y las cifras clave
+#### Scenario: Job de entrenamiento terminado
+- **WHEN** un job de entrenamiento publica su run
+- **THEN** escribe su marcador de éxito en S3 con los `run_id` y los artefactos verificados
 
 ### Requirement: Confirmación única en test
 
-El modelo final SHALL reajustar `K` y `B` (y Duan si aplica) con datos hasta 2026-06-30, con encoder y decoder congelados y los bloques fijados, y evaluarse una sola vez en test contra LightGBM `lightgbm-v1`, persistencia y el test de GRU+DMD+Duan de 7.1, sobre filas comunes.
+La configuración seleccionada SHALL reajustar `K` y `B` (y Duan si aplica) con datos hasta 2026-06-30, con encoder y decoder congelados y los bloques fijados, y evaluarse una sola vez en test contra LightGBM `lightgbm-v1`, persistencia y el test de GRU+DMD+Duan de 7.1, sobre filas comunes. Las demás configuraciones no SHALL evaluarse en test.
 
 #### Scenario: Una sola evaluación
 - **WHEN** ya existe un run de test del Koopman en esta versión

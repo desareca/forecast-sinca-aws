@@ -17,15 +17,18 @@ perder la precisión de 7.1? Razonamiento base: `docs/ae-dmd-propuesta-experimen
   decaimiento en escala log y techo, y control `B·u` con el calendario conocido.
 - **Receta incremental** F1 (reconstrucción + linealidad a 1 paso) → F2 (+ multi-paso 24 h con
   currículo) → F3 (+ RMSE ponderado del promedio 24 h en µg/m³, y variante sobre ICAP_zona con máximo suave), con estabilización desde el inicio.
-- **Compuerta de identificabilidad preregistrada tras F1** y remedios en orden (B1 λ_lin solo si hay
-  desbalance, B2 consistencia, B3 L1 de amplitudes, B4 `d = 8`); si siguen fallando, pausa del operador (C1/C2).
+- **Campaña completa sin ramas** (enmienda del operador tras el re-humo, campaña ~USD 1.5): F1 con
+  GRU, conv1d somero, decoder GRU y variantes de K; remedios B1–B4 siempre, como variantes de F1;
+  F2, F3 y F3 `icap` para ambos encoders. Criterio de identificabilidad preregistrado como regla de
+  selección y reporte, no como compuerta.
+- **Selección preregistrada** sobre `sel` en un job propio, registrada antes del cierre; test una
+  sola vez sobre la elegida.
 - **Evaluación** con el arnés de `pipeline/operador` (mismas filas, bootstrap emparejado, criterio
   D12, diagnósticos, interpretabilidad), contra GRU+DMD+Duan de 7.1, LightGBM y persistencia.
 - **Todo el cómputo de experimentos en SageMaker Training Jobs** (CPU, imagen `tf-cpu-v2`); local
   solo tests y edición. Publicación al sqlite compartido desde el job, con los resguardos de 7.1.
-- **Orquestación con AWS Step Functions, en serie**: compuertas como estados (`Choice` con la rama que
-  escribe el job de compuerta), pausas del operador con token de tarea (siempre antes de test),
-  avisos por SNS/email y fallos por EventBridge. Infra en Terraform; prueba en modo seco antes del
+- **Orquestación con AWS Step Functions, en serie**: lista fija de jobs, sin ramas ni pausas,
+  reanudable por marcador y con checkpoints; avisos por SNS/email y fallos por EventBridge. Infra en Terraform; prueba en modo seco antes del
   lanzamiento real. El humo se lanza a mano.
 - Cierre con reajuste a junio y una sola evaluación en test.
 
@@ -34,10 +37,11 @@ perder la precisión de 7.1? Razonamiento base: `docs/ae-dmd-propuesta-experimen
 ### New Capabilities
 
 - `koopman-entrenado`: Koopman entrenado de extremo a extremo sobre las 6 series de MP: modelo,
-  operador estructurado, pérdidas, entrenamiento estable, compuerta de identificabilidad, remedios,
+  operador estructurado, pérdidas, entrenamiento estable, criterio de identificabilidad, campaña
+  completa, selección preregistrada,
   evaluación, confirmación en test e interpretabilidad.
-- `orquestacion-experimentos`: ejecución en serie de una campaña de Training Jobs con compuertas,
-  pausas con aprobación, avisos y modo seco.
+- `orquestacion-experimentos`: ejecución en serie de una campaña de Training Jobs con lista fija,
+  selección antes de test, reanudación por job, checkpoints, avisos y modo seco.
 
 ### Modified Capabilities
 
@@ -49,13 +53,13 @@ perder la precisión de 7.1? Razonamiento base: `docs/ae-dmd-propuesta-experimen
 ## Impact
 
 - Código nuevo: `pipeline/koopman/` (modelo, pérdidas, entrenamiento, inicialización,
-  identificabilidad, compuerta, evaluación, CLI, README), `scripts/koopman/preparar_ejecucion.py`,
+  identificabilidad, selección, evaluación, CLI, README), `scripts/koopman/preparar_ejecucion.py`,
   `tests/koopman/`. Infra: `infra/orquestacion-koopman.tf`, ASL, Lambda, ampliación de
   `infra/iam-oidc.tf`. Cambios acotados: `pipeline/train/launch.py` (entry point nuevo),
   `pipeline/train/mlflow_log.py` (publicación con resguardos reutilizable por los jobs y por
   `scripts/mlflow/publish_state.py`). Reutiliza `pipeline/ae/`, `pipeline/operador/` sin cambiar su
   comportamiento.
-- AWS: ~27–33 Training Jobs `ml.m5.large` (hasta 52 con contingencias), escritura serializada en
+- AWS: 48 Training Jobs `ml.m5.large`, ~12 h, escritura serializada en
   `sinca-mlflow/_mlflow/`; Step Functions, Lambda, SNS y EventBridge nuevos (IAM nuevo: riesgo alto);
-  sin red ni imágenes nuevas. Costo estimado ~USD 3,6–4,1
-  (~USD 6,5 con todas las contingencias; orquestación ≈ USD 0; techo < USD 8; `design.md` D17).
+  sin red ni imágenes nuevas. Costo estimado ~USD 1,5
+  (orquestación ≈ USD 0; ejecución seca ~USD 0,1; `design.md` D17).

@@ -2,7 +2,7 @@
 
 ### Requirement: Rol de orquestación de experimentos
 
-El rol de Step Functions SHALL limitarse a crear, describir y detener Training Jobs con prefijo `sinca-koop-`, pasar solo `sinca-training-role` a SageMaker, gestionar la regla de eventos que usa la integración síncrona con SageMaker, invocar la Lambda de decisión y publicar en el tópico de avisos.
+El rol de Step Functions SHALL limitarse a crear, describir y detener Training Jobs con prefijo `sinca-koop-`, pasar solo `sinca-training-role` a SageMaker, gestionar la regla de eventos que usa la integración síncrona con SageMaker, invocar la Lambda de orquestación y publicar en el tópico de avisos.
 
 #### Scenario: Job fuera del prefijo
 - **WHEN** el rol intenta crear un Training Job cuyo nombre no empieza con `sinca-koop-`
@@ -12,12 +12,12 @@ El rol de Step Functions SHALL limitarse a crear, describir y detener Training J
 - **WHEN** se inspecciona la política del rol
 - **THEN** `iam:PassRole` solo apunta a `sinca-training-role` con `iam:PassedToService = sagemaker.amazonaws.com`
 
-### Requirement: Rol de la Lambda de decisión
+### Requirement: Rol de la Lambda de orquestación
 
-El rol de la Lambda de decisión SHALL tener solo lectura (`GetObject`, y `ListBucket` condicionado a ese prefijo) del prefijo de orquestación de la campaña en S3 (decisiones y marcadores) y escritura en su log group. El rol de training no SHALL necesitar permisos nuevos para decisiones, marcadores ni checkpoints.
+El rol de la Lambda de orquestación SHALL tener solo lectura (`GetObject`, y `ListBucket` condicionado a ese prefijo) del prefijo de orquestación de la campaña en S3 (marcadores y selección) y escritura en su log group. El rol de training no SHALL necesitar permisos nuevos para selección, marcadores ni checkpoints.
 
 #### Scenario: Lectura acotada
-- **WHEN** la Lambda intenta leer un objeto fuera del prefijo de decisiones
+- **WHEN** la Lambda intenta leer un objeto fuera del prefijo de orquestación
 - **THEN** la llamada se deniega
 
 ### Requirement: Permisos del rol de infra para la orquestación
