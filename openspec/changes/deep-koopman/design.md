@@ -195,6 +195,11 @@ configuración al evaluarla; la selección (D14) toma los bloques de la elegida 
   si la diferencia emparejada de RMSE ponderado (media de 6 series y de semillas) tiene intervalo
   < 0 (empate → la más simple).
 - Decoder GRU significativamente mejor que el lineal: se reporta; el lineal sigue como principal.
+- Runs inválidos (decisión del operador, 2026-11-20): si una configuración da pronósticos no finitos o su
+  evaluación no puede calcularse, el job no falla: registra el run con `valido=false` y el motivo y escribe
+  su marcador; la selección excluye esa configuración (cualquier semilla inválida) y la lista en el reporte.
+  Si no queda ninguna candidata válida, la selección falla (cierre y test no corren). Otros errores sí
+  fallan el job.
 - Salida: `model-artifacts/orquestacion/deep-koopman/<campaña>/seleccion.json` (configuración, run
   por semilla, bloques finales de D13, tabla de candidatas, orden aplicado) y un run de MLflow con el
   mismo contenido, ambos antes del cierre. El implementador lo copia a `koopman/decisiones.json`.
@@ -213,7 +218,7 @@ Artefactos: `encoder.keras`, `decoder.keras`, `koopman.npz` (parámetros de bloq
 
 ### D16. Cierre y test
 
-El cierre lee `seleccion.json`: encoder y decoder congelados; `K`, `B` (y Duan si la seleccionada es
+El cierre lee `seleccion.json` (la elegida es siempre válida, D14): encoder y decoder congelados; `K`, `B` (y Duan si la seleccionada es
 F1/B/F2) se reentrenan 20 épocas con su pérdida sobre train+es+sel (hasta 2026-06-30), con los
 bloques fijados en D13. Luego el job de test (sin pausa) evalúa solo esa configuración, una vez
 (guardia; `--force-test` solo por orden del operador); falla si no hay selección. Referencias:

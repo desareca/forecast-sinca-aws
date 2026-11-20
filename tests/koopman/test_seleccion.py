@@ -65,3 +65,21 @@ def test_escribir_json():
     key = S.escribir(S.seleccionar({**C("f1")}), s3, "b", "camp", "seleccion")
     assert key == "model-artifacts/orquestacion/deep-koopman/camp/seleccion.json"
     assert json.loads(s3.objects[key])["configuracion"] == "f1-gru"
+
+
+def _inv(fase, enc="gru", var="principal"):
+    return {S.nombre_config(fase, enc, var): {"fase": fase, "encoder": enc, "variante": var, "runs": {0: "x", 1: "y"},
+                                               "motivos": {1: "koop-f2-s1: pronóstico no finito"}}}
+
+
+def test_invalidas_se_excluyen_y_se_reportan():
+    s = S.seleccionar({**C("f1", media=30.0)}, invalidas=_inv("f2"))
+    assert s["configuracion"] == "f1-gru" and s["orden"] == ["f1-gru"]
+    assert list(s["invalidas"]) == ["f2-gru"] and "no finito" in s["invalidas"]["f2-gru"]["motivos"]["1"]
+    fila = next(f for f in s["tabla"] if f["configuracion"] == "f2-gru")
+    assert fila["valido"] is False and "no finito" in fila["motivo"] and "inválidas (excluidas): f2-gru" in s["resumen"]
+
+
+def test_todas_invalidas_falla_con_mensaje_claro():
+    with pytest.raises(ValueError, match="Todas las candidatas quedaron inválidas.*f1-gru.*f2-gru"):
+        S.seleccionar({**C("f1", var="kden")}, invalidas={**_inv("f1"), **_inv("f2")})

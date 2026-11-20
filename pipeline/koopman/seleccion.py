@@ -42,15 +42,22 @@ def diferencia(a, b) -> dict:
     return {k: float(v) for k, v in evm.diferencia(a, b).items()}
 
 
-def seleccionar(cand: dict, ref71=None) -> dict:
+def seleccionar(cand: dict, ref71=None, invalidas: dict | None = None) -> dict:
     """`cand = {nombre: {"fase", "encoder", "variante", "puntaje", "identificable": bool,
-    "runs": {seed: run_id}, "bloques": {seed: [...]}}}` → selección (D14)."""
+    "runs": {seed: run_id}, "bloques": {seed: [...]}}}` → selección (D14). `invalidas = {nombre: {"fase",
+    "encoder", "variante", "runs", "motivos"}}`: configuraciones con algún run `valido=false` (salida no finita
+    o evaluación no calculable; decisión del operador 2026-11-20): se excluyen y se listan en el reporte."""
+    invalidas = invalidas or {}
     for n, c in cand.items():
         if c.get("puntaje") is None or not np.isfinite(c["puntaje"].media):
             raise ValueError(f"Resultado faltante o no finito: {n}")
     candidatas = sorted((n for n, c in cand.items() if es_candidata(c["fase"], c["encoder"], c["variante"])),
                         key=lambda n: rango(cand[n]))
     if not candidatas:
+        inv = [n for n, c in invalidas.items() if es_candidata(c["fase"], c["encoder"], c["variante"])]
+        if inv:
+            raise ValueError("Todas las candidatas quedaron inválidas (pronóstico no finito o evaluación no "
+                             f"calculable): {', '.join(sorted(inv))}. Sin selección: cierre y test no corren.")
         raise ValueError("Sin candidatas para la selección")
     identificables = [n for n in candidatas if cand[n].get("identificable")]
     pool = identificables or candidatas
@@ -69,7 +76,12 @@ def seleccionar(cand: dict, ref71=None) -> dict:
                 "candidata": es_candidata(c["fase"], c["encoder"], c["variante"])}
         if ref71 is not None:
             fila["diff_71"] = diferencia(c["puntaje"], ref71)
-        tabla.append(fila)
+        tabla.append({**fila, "valido": True})
+    for n, c in sorted(invalidas.items()):
+        tabla.append({"configuracion": n, "fase": c["fase"], "encoder": c["encoder"], "variante": c["variante"],
+                      "wrmse_media": float("nan"), "identificable": False, "valido": False,
+                      "candidata": es_candidata(c["fase"], c["encoder"], c["variante"]),
+                      "motivo": "; ".join(str(m) for m in c.get("motivos", {}).values())})
     decoder_gru = None
     if "f1-gru-decgru" in cand and "f1-gru" in cand:
         d = diferencia(cand["f1-gru-decgru"]["puntaje"], cand["f1-gru"]["puntaje"])
@@ -81,8 +93,11 @@ def seleccionar(cand: dict, ref71=None) -> dict:
             "bloques_finales": {str(s): b for s, b in (c.get("bloques") or {}).items()},
             "interpretabilidad": interp, "identificables": identificables, "orden": candidatas, "pasos": pasos,
             "tabla": tabla, "decoder_gru_vs_lineal": decoder_gru,
+            "invalidas": {n: {"motivos": {str(s): m for s, m in v.get("motivos", {}).items()}}
+                          for n, v in sorted(invalidas.items())},
             "resumen": (f"Seleccionada {actual} (wRMSE sel {c['puntaje'].media:.2f}); interpretabilidad {interp}; "
                         f"identificables: {', '.join(identificables) or 'ninguna'}"
+                        + (f"; inválidas (excluidas): {', '.join(sorted(invalidas))}" if invalidas else "")
                         + ("; decoder GRU significativamente mejor que el lineal (se reporta, no se elige)"
                            if decoder_gru and decoder_gru["significativamente_mejor"] else "")),
             "fecha": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}

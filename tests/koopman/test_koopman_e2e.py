@@ -160,3 +160,37 @@ def test_seleccion_cierre_y_test_de_punta_a_punta(refs):
     out = R.ejecutar(R.parse_args(base + ["--fase", "test", "--seleccion", str(ruta)]), descargar=False)
     t = out["json"]["test"]
     assert t["configuracion"] == "f1-conv1ds" and "veredicto_precision" in t and len(out["run_ids"]) == 12  # 6 series × 2
+
+
+def test_salida_no_finita_run_invalido_con_marcador_y_excluido(refs):
+    """Decisión del operador (2026-11-20): pronóstico no finito → run `valido=false` con motivo, marcador escrito,
+    el job no falla y la selección excluye la configuración; si no queda ninguna candidata, la selección falla.
+    Caso real del fixture: GRU `hidden = 8 < d` en frío (semilla 1, sin AE v2) da pronósticos inf."""
+    from analysis import load as analysis_load
+    from koopman import run as R
+
+    tmp, state, validated, _, _ = refs
+    base = _argv(tmp, state, validated, "--campana", "camp-nan")[2:]
+    s3 = FakeS3()
+    (state / ".download.json").write_text(json.dumps({"last_modified": T0.isoformat()}))
+    try:
+        out = R.ejecutar(R.parse_args(base + ["--fase", "f1", "--seed", "1", "--epocas", "0",
+                                              "--checkpoint-dir", str(tmp / "ck-nan1")]), s3=s3, descargar=False)
+    finally:
+        (state / ".download.json").unlink()
+    run = analysis_load.run_by_id(str(state), out["run_ids"][0])
+    assert run["tags"]["valido"] == "false" and "no finito" in run["params"]["motivo"]
+    m = json.loads(s3.objects["model-artifacts/orquestacion/deep-koopman/camp-nan/jobs/f1-gru-s1.json"])
+    assert m["run_ids"] == out["run_ids"] and m["publicado"] == out["run_ids"]
+    # sola, la configuración inválida deja la selección sin candidatas: falla con mensaje claro
+    with pytest.raises(ValueError, match="Todas las candidatas quedaron inválidas"):
+        R.ejecutar(R.parse_args(base + ["--no-upload", "--fase", "seleccion"]), descargar=False)
+    # con candidatas válidas, la inválida (f1-gru: s0 válida, s1 no) se excluye y se lista
+    nu = base + ["--no-upload"]
+    R.ejecutar(R.parse_args(nu + ["--fase", "f1", "--seed", "0", "--epocas", "0", "--checkpoint-dir", str(tmp / "ck-nan0")]),
+               descargar=False)
+    for s in (0, 1):
+        R.ejecutar(R.parse_args(nu + ["--fase", "f1", "--encoder", "conv1ds", "--seed", str(s), "--epocas", "1",
+                                      "--checkpoint-dir", str(tmp / f"ck-nanc{s}")]), descargar=False)
+    sel = R.ejecutar(R.parse_args(nu + ["--fase", "seleccion"]), descargar=False)["json"]["seleccion"]
+    assert sel["configuracion"] == "f1-conv1ds" and list(sel["invalidas"]) == ["f1-gru"] and "f1-gru" not in sel["orden"]

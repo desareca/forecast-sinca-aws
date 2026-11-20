@@ -83,6 +83,18 @@ def factores_duan(modelo: KoopmanModelo, ctx, positions_train) -> np.ndarray:
     return ro.duan_factores(log_real, lp, real)
 
 
+class EvaluacionNoCalculable(ValueError):
+    """Salida no finita (NaN/inf) o evaluación no calculable. Decisión del operador (2026-11-20): el job no
+    falla; registra el run con `valido=false` y el motivo, escribe su marcador y la selección lo excluye."""
+
+
+def exigir_finito(nombre: str, valores, que: str) -> None:
+    a = np.asarray(valores, dtype=float)
+    malos = int((~np.isfinite(a)).sum())
+    if malos:
+        raise EvaluacionNoCalculable(f"{nombre}: {que} no finito en {malos} de {a.size} valores")
+
+
 def evaluar_modelo(modelo: KoopmanModelo, ctx, ev: evm.Evaluador, nombre: str, duan_S: np.ndarray | None = None,
                    ref71: evm.Puntaje | None = None) -> dict:
     """Pronóstico sobre las filas fijas, puntaje, tabla D12, diferencia vs 7.1 y diagnósticos."""
@@ -92,8 +104,15 @@ def evaluar_modelo(modelo: KoopmanModelo, ctx, ev: evm.Evaluador, nombre: str, d
     if duan_S is not None:
         dec = np.clip(np.exp(lp) * duan_S[None] - 1.0, 0.0, None)  # = ro.aplicar_duan por hora
         forecast = dec.mean(axis=1)
-    yhat = ev.alinear(nombre, ctx.grid.index[pos], forecast)
+    if np.isfinite(forecast).all():
+        yhat = ev.alinear(nombre, ctx.grid.index[pos], forecast)
+    else:
+        try:
+            yhat = ev.alinear(nombre, ctx.grid.index[pos], forecast)
+        except ValueError as exc:
+            raise EvaluacionNoCalculable(f"{nombre}: pronóstico no finito ({exc})") from exc
     p = ev.puntaje(yhat)
+    exigir_finito(nombre, p.media, "puntaje")
     tabla = ev.tabla(p)
     out = {"nombre": nombre, "yhat": yhat, "puntaje": p, "tabla": tabla, "positions": pos,
            "frames": {"predictions.parquet": ev.predicciones(yhat),

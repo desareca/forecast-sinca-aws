@@ -348,6 +348,7 @@ def evaluar_completo(job: Job, modelo: KoopmanModelo, nombre: str, con_duan: boo
         pos_tr = pos_tr[: job.args.max_filas]
     if con_duan:
         S = EV.factores_duan(modelo, job.ctx, pos_tr)
+        EV.exigir_finito(nombre, S, "factor de Duan")
         out["duan"] = EV.evaluar_modelo(modelo, job.ctx, ev, nombre + "-duan", duan_S=S, ref71=ref71)
         out["duan_S"] = S
     # identificabilidad (D11) y coherencia
@@ -359,6 +360,7 @@ def evaluar_completo(job: Job, modelo: KoopmanModelo, nombre: str, con_duan: boo
     if job.args.max_filas:
         pos_fit = pos_fit[: job.args.max_filas]
     zl = ID.latente(modelo, job.ctx.ng, pos_fit)
+    EV.exigir_finito(nombre, zl, "latente")
     local = job.grid.index[pos_fit].tz_convert(pt.TZ).tz_localize(None) if job.grid.index.tz is not None else job.grid.index[pos_fit]
     boot = ID.bootstrap_latente(modelo, zl, pos_fit, local.normalize().to_numpy(), B=job.args.bootstrap_modos)
     out.update(aportes=a, dominantes=dom, tabla_modos=ID.tabla_modos(modelo, a, dom), boot=boot,
@@ -412,7 +414,7 @@ def registrar(job: Job, modelo: KoopmanModelo, fase: str, var: str, seed: int, e
     enc = modelo.config["encoder"]
     name = run_name(enc, fase, var, a.version, seed)
     tags = {"modelo": f"koop-{enc}", "stage": STAGE, "particion": PARTICION, "fase": fase, "variante": var,
-            "seed": str(seed), "campana": a.campana}
+            "seed": str(seed), "campana": a.campana, "valido": "true"}
     if parent_run_id:
         tags["parent_run_id"] = parent_run_id
     params = {"tipo": "koopman", "fase": fase, "variante": var, "encoder": enc, "decoder": modelo.config["decoder"],
@@ -455,6 +457,32 @@ def registrar(job: Job, modelo: KoopmanModelo, fase: str, var: str, seed: int, e
     return run_id
 
 
+def registrar_invalido(job: Job, modelo: KoopmanModelo, fase: str, var: str, seed: int, entreno: dict, info: dict,
+                       parent_run_id: str | None, segundos: float, motivo: str) -> str:
+    """Run con tag `valido=false` y el motivo (salida no finita o evaluación no calculable; decisión del operador
+    2026-11-20). Guarda pesos y configuración (un hijo de F2/F3 puede cargarlo y quedará inválido a su vez)."""
+    a = job.args
+    enc = modelo.config["encoder"]
+    tags = {"modelo": f"koop-{enc}", "stage": STAGE, "particion": PARTICION, "fase": fase, "variante": var,
+            "seed": str(seed), "campana": a.campana, "valido": "false"}
+    if parent_run_id:
+        tags["parent_run_id"] = parent_run_id
+    params = {"tipo": "koopman", "fase": fase, "variante": var, "encoder": enc, "decoder": modelo.config["decoder"],
+              "d": modelo.d, "version": a.version, "arranque": info.get("arranque"), "clave": a.clave,
+              "motivo": motivo[:480]}
+    historia = entreno.get("historia", [])
+    cfg = {"modelo": modelo.config, "fase": fase, "variante": var, "info": info, "bloques_finales": None,
+           "parent_run_id": parent_run_id, "valido": False, "motivo": motivo,
+           "cfg_perdida": {**T.FASES.get(fase, {}), **({"icap": True} if var == "icap" else {})}}
+    run_id = G.log_variante(job.state, run_name(enc, fase, var, a.version, seed), tags, params,
+                            {"segundos": segundos, "epochs_run": float(len(historia))},
+                            {"curvas.parquet": pd.DataFrame(historia)}, {"koopman_pesos.npz": modelo.pesos()},
+                            {"koopman_config.json": json.dumps(cfg, default=str), "motivo.txt": motivo},
+                            experiment=a.experiment)
+    log.warning("Run inválido %s (%s): %s", run_name(enc, fase, var, a.version, seed), run_id, motivo)
+    return run_id
+
+
 # --- Fases ------------------------------------------------------------------------------------
 
 
@@ -491,10 +519,17 @@ def fase_entrenamiento(job: Job) -> list[str]:
                              ckpt_dir=pathlib.Path(a.checkpoint_dir) / var, seed=a.seed, cfg_perdida=cfg_p,
                              log=log.info)
         t_tr = time.perf_counter() - t_tr
-        T.orden_canonico(modelo)
         t_ev = time.perf_counter()
-        ev_out = evaluar_completo(job, modelo, f"koop-{fase}{var}-s{a.seed}", con_duan=fase in ("smoke", "f1", "b1",
-                                                                                                   "b2", "b3", "b4", "f2"))
+        try:
+            EV.exigir_finito(f"koop-{fase}{var}-s{a.seed}", np.concatenate([np.ravel(w) for w in modelo.pesos().values()]),
+                             "peso del modelo")
+            T.orden_canonico(modelo)
+            ev_out = evaluar_completo(job, modelo, f"koop-{fase}{var}-s{a.seed}",
+                                      con_duan=fase in ("smoke", "f1", "b1", "b2", "b3", "b4", "f2"))
+        except EV.EvaluacionNoCalculable as exc:  # decisión del operador (2026-11-20): run inválido, el job sigue
+            ids.append(registrar_invalido(job, modelo, fase, var, a.seed, entreno, info, parent,
+                                          time.perf_counter() - t0, str(exc)))
+            continue
         n_ep = len(entreno["historia"]) - (entreno.get("retomado_en") or 0)
         extra = {"segundos_eval": time.perf_counter() - t_ev, "segundos_entreno": t_tr,
                  "segundos_entreno_por_epoca": t_tr / max(1, n_ep)}
@@ -672,9 +707,10 @@ def fase_test(job: Job) -> list[str]:
     return ids
 
 
-def candidatas_de_campana(job: Job) -> dict:
+def candidatas_de_campana(job: Job) -> tuple[dict, dict]:
     """Configuraciones de la campaña (F1, B, F2, F3 y controles) con su puntaje en `sel` (media de semillas),
-    identificabilidad (D11), runs y bloques finales (D13) por semilla."""
+    identificabilidad (D11), runs y bloques finales (D13) por semilla; aparte, las inválidas (algún run con
+    `valido=false`: salida no finita o evaluación no calculable), con sus motivos."""
     a = job.args
     runs = [r for r in job.runs if r["tags"].get("stage") == STAGE and r["tags"].get("fase") in FASES_CAMPANA
             and r["tags"].get("campana") == a.campana and not r["tags"].get("descartado")]
@@ -684,8 +720,14 @@ def candidatas_de_campana(job: Job) -> dict:
         fase, enc, var = r["tags"]["fase"], r["params"].get("encoder", "gru"), r["tags"].get("variante", "principal")
         g = grupos.setdefault(SEL.nombre_config(fase, enc, var), {"fase": fase, "encoder": enc, "variante": var, "runs": {}})
         g["runs"][int(r["tags"]["seed"])] = r
-    cand = {}
+    cand, invalidas = {}, {}
     for nombre, g in grupos.items():
+        malos = {s: r for s, r in g["runs"].items() if r["tags"].get("valido") == "false"}
+        if malos:
+            invalidas[nombre] = {"fase": g["fase"], "encoder": g["encoder"], "variante": g["variante"],
+                                 "runs": {s: r["run_id"] for s, r in g["runs"].items()},
+                                 "motivos": {s: r["params"].get("motivo", "") for s, r in malos.items()}}
+            continue
         items, sem = [], {}
         for seed, r in sorted(g["runs"].items()):
             f = pd.read_parquet(job.artefacto(r["run_id"], "predictions.parquet"))
@@ -700,14 +742,15 @@ def candidatas_de_campana(job: Job) -> dict:
                         "puntaje": evm.Puntaje.promedio(items) if len(items) > 1 else items[0], "identificable": bool(ok),
                         "runs": {s: r["run_id"] for s, r in g["runs"].items()},
                         "bloques": {s: json.loads(r["params"].get("bloques_finales") or "null") for s, r in g["runs"].items()}}
-    return cand
+    return cand, invalidas
 
 
 def fase_seleccion(job: Job) -> list[str]:
     """D14: selección preregistrada sobre la campaña; un run `sinca-zona-koop-seleccion-aedmd-v{n}` y
     `<campaña>/seleccion.json` (este, tras publicar)."""
     a = job.args
-    sel = SEL.seleccionar(candidatas_de_campana(job), EV.puntaje_71(job.state, job.runs, job.ev))
+    cand, invalidas = candidatas_de_campana(job)
+    sel = SEL.seleccionar(cand, EV.puntaje_71(job.state, job.runs, job.ev), invalidas)
     sel["campana"] = a.campana
     texto = json.dumps(sel, ensure_ascii=False, default=str)
     rid = G.log_variante(job.state, f"sinca-zona-koop-seleccion-aedmd-v{a.version}",
@@ -715,7 +758,8 @@ def fase_seleccion(job: Job) -> list[str]:
                           "campana": a.campana},
                          {"configuracion": sel["configuracion"], "interpretabilidad": sel["interpretabilidad"],
                           "version": a.version, "clave": a.clave},
-                         {"n_candidatas": len(sel["orden"]), "n_identificables": len(sel["identificables"])},
+                         {"n_candidatas": len(sel["orden"]), "n_identificables": len(sel["identificables"]),
+                          "n_invalidas": len(sel["invalidas"])},
                          {"candidatas.parquet": pd.json_normalize(sel["tabla"])}, None, {"seleccion.json": texto},
                          experiment=a.experiment)
     job.pendientes["seleccion"] = {**sel, "run_id": rid}
