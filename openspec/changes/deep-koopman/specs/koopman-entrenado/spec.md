@@ -54,11 +54,23 @@ F1 SHALL usar reconstrucción + linealidad a 1 paso; F2 SHALL agregar predicció
 
 ### Requirement: Entrenamiento estable
 
-El entrenamiento SHALL incluir: épocas iniciales con encoder congelado (solo `K`, `B` y decoder) cuando el encoder arranca en caliente, calentamiento lineal del learning rate, recorte de norma del gradiente, penalización de ortogonalidad del decoder lineal (`WᵀW ≈ I`) y orden canónico de bloques por decaimiento al registrar.
+El entrenamiento SHALL incluir: épocas iniciales con encoder congelado (solo `K`, `B` y decoder) cuando el encoder arranca en caliente, calentamiento lineal del learning rate, recorte de norma del gradiente y orden canónico de bloques por decaimiento al registrar.
 
 #### Scenario: Calentamiento congelado
 - **WHEN** un encoder GRU arranca desde una semilla GRU v2
 - **THEN** sus pesos no cambian durante las épocas de calentamiento
+
+### Requirement: Escala del decoder lineal
+
+Con decoder lineal, la pérdida SHALL incluir `L_norma = Σ_b (‖W_b‖_F² / n_b − 1)²` sobre las columnas `W_b` del decoder de cada bloque de K (`n_b` = 2 o 1), sin normalizar por escala inicial. Tras el ajuste inicial por mínimos cuadrados, cada bloque SHALL reescalarse (decoder, salida del encoder y filas de `B`) sin cambiar `K` ni las predicciones.
+
+#### Scenario: Reescalado neutro
+- **WHEN** se aplica el reescalado por bloque al modelo inicial
+- **THEN** reconstrucción y pronóstico a 24 h coinciden con los previos dentro de la tolerancia del test y `L_norma` es ≈ 0
+
+#### Scenario: Sin colapso de escala
+- **WHEN** el entrenamiento lleva el latente hacia `z → 0`
+- **THEN** `L_norma` crece y penaliza la solución
 
 ### Requirement: Evaluación común
 

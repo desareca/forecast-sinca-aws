@@ -87,7 +87,16 @@ Duan, arnés de `operador`), `compuerta.py` (reglas → JSON de decisión, D14/D
 ### D6. Decoders
 
 - Lineal (principal): Dense `z` → 24×6 (variante `linear_decoder`). Inicio: mínimos cuadrados del
-  latente inicial de train a las ventanas MP. Penalización `‖WᵀW − I‖²_F` (W 144×10).
+  latente inicial de train a las ventanas MP, seguido de un **reescalado por bloque**: para cada
+  bloque `b` de K, `s_b = ‖W_b‖_F / √n_b` (`n_b` = columnas del bloque, 2 o 1); `W_b ← W_b / s_b`,
+  filas del bloque en la Dense final del encoder y su sesgo `← s_b ·`, filas de `B` `← s_b ·`. K no
+  cambia (un escalar dentro del bloque conmuta con `ρR(θ)` y con `λ`): reconstrucción y dinámica
+  quedan idénticas y `L_norma` parte en 0.
+- **`L_norma` = Σ_b (‖W_b‖_F² / n_b − 1)²** (enmienda del operador tras el humo 8.1, reemplaza a la
+  penalización de ortogonalidad, que valía ~2·10⁴ al inicio, dominaba el gradiente y pedía una
+  ortogonalidad entre modos innecesaria: con K en bloques la mezcla entre bloques ya está fijada y
+  rotación o escala dentro de un bloque no cambian período, vida media ni aporte). Solo fija la
+  escala, para evitar el colapso `z → 0` que vuelve trivial `L_lin`. Con decoder GRU no aplica.
 - GRU no lineal (comparación preregistrada, solo F1 con encoder GRU): `RepeatVector` + GRU(64) +
   `TimeDistributed(Dense(6))`, como v2.
 
@@ -111,9 +120,10 @@ Duan, arnés de `operador`), `compuerta.py` (reglas → JSON de decisión, D14/D
   `t+k` (no codifica ventanas futuras). `L_tgt` = RMSE ponderado (`w` de la métrica) del promedio
   de 24 h en µg/m³ (`expm1` en el grafo) contra el target.
 - Normalización: cada término se divide por su valor en una muestra fija de 2048 ventanas de train
-  al inicio de la fase. λ_lin = 1, λ_pred = 1, λ_tgt = 1, λ_orth = 0.1, fijos. B2: λ_cons = 1. B3:
+  al inicio de la fase. λ_lin = 1, λ_pred = 1, λ_tgt = 1, fijos. `L_norma` no se normaliza (adimensional, parte
+  en 0), λ_norma = 1. B2: λ_cons = 1. B3:
   λ_L1 = 0.1.
-- F1 = rec + lin (+ orth). F2 = F1 + pred. F3 = F2 + tgt.
+- F1 = rec + lin (+ norma). F2 = F1 + pred. F3 = F2 + tgt.
 - **F3 variante `icap`** (decisión del operador, PA-9): `L_tgt` sobre ICAP_zona con máximo suave
   (log-sum-exp sobre las 6 series, τ = 5 puntos ICAP, fijo) y peso `1 + max(0, ICAP − 100)`, en el
   encoder principal (3 semillas). Se evalúa con D12 y las métricas ICAP de `evaluate`; ante empate
@@ -203,6 +213,9 @@ job de test aparte, tras pausa del operador; guardia de una sola evaluación (`-
 Referencias: `lightgbm-v1` holdout, persistencia y test de GRU+DMD+Duan de 7.1.
 
 ### D17. Jobs y costo
+
+**Los tiempos, costos y `max_run` vigentes salen del re-humo (tarea 8.2), con margen ≥ 1.5× sobre
+lo medido**; la tabla siguiente es la estimación previa al humo.
 
 Tarifa ~USD 0.115/h (`ml.m5.large`, no verificada en consola). Tiempos estimados desde v2 (GRU 60
 épocas ~40 min) × ~2 por `L_lin` (dos pasadas de encoder).
