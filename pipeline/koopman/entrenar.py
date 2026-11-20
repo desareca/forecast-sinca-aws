@@ -250,6 +250,35 @@ def entrenar(modelo: KoopmanModelo, datos: Datos, fase: str, escala_mp, *, en_ca
     return {"historia": historia, "escalas": escalas, "retomado_en": retomado}
 
 
+def medir_paso(modelo: KoopmanModelo, datos: Datos, cfg: dict, escala_mp, *, n: int = 10, previos: int = 2,
+               seed: int = 0) -> dict:
+    """Mide segundos por paso de optimización (humo, 8.1) con la pérdida `cfg` (`H`, `tgt`, `solo_op`…),
+    sin checkpoint ni escalas (1.0). Devuelve `s_paso`, `pasos_epoca` y `s_epoca` estimados."""
+    import time
+
+    import keras
+    import tensorflow as tf
+
+    escala_mp = tuple(tf.constant(np.asarray(a, dtype="float32")) for a in escala_mp)
+    opt = keras.optimizers.Adam(learning_rate=LR, clipnorm=CLIPNORM)
+    todas = modelo.entrenables
+    opt.build(todas)
+    rng = np.random.default_rng(seed)
+    t0 = None
+    for s in range(previos + n):
+        if s == previos:
+            t0 = time.perf_counter()
+        lote = {k: tf.constant(v) for k, v in datos.lote(rng.choice(len(datos), size=min(BATCH, len(datos)), replace=False)).items()}
+        with tf.GradientTape() as tape:
+            loss = L.total(L.terminos(modelo, lote, cfg, escala_mp, training=True), {}, L.LAMBDAS)
+        grads = tape.gradient(loss, todas)
+        opt.apply_gradients([(g if g is not None else tf.zeros_like(v), v) for g, v in zip(grads, todas)])
+        float(loss)
+    s_paso = (time.perf_counter() - t0) / n
+    pasos = int(math.ceil(len(datos) / BATCH))
+    return {"s_paso": s_paso, "pasos_epoca": pasos, "s_epoca": s_paso * pasos}
+
+
 # --- Orden canónico (D9) ---------------------------------------------------------------
 
 

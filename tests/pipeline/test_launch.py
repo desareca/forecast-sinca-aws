@@ -34,3 +34,6 @@ def test_entry_point_koopman():
     assert args.entry_point in launch.ENTRY_POINTS
     hp = launch.base_hyperparameters("koopman/run.py", args)
     assert set(hp) == {"data-bucket", "mlflow-bucket", "mlflow-prefix"}
+    assert args.checkpoint_s3_uri is None
+    uri = "s3://b/model-artifacts/checkpoints/deep-koopman/humo/smoke-gru-s0/"
+    assert launch.parse_args(["--checkpoint-s3-uri", uri]).checkpoint_s3_uri == uri

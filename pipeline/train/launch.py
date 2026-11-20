@@ -46,7 +46,8 @@ Uso:
     python pipeline/train/launch.py \
         --profile <AWS_PROFILE> --role-arn <training_role_arn> \
         --image-uri <train_ecr_repository_url>:tf-cpu-v2 --entry-point koopman/run.py \
-        --hp fase=smoke --hp experiment=sinca-smoke --hp campana=humo --max-run 3600 --wait
+        --hp fase=smoke --hp experiment=sinca-smoke --hp campana=humo --max-run 3600 \
+        --checkpoint-s3-uri s3://sinca-mlflow/model-artifacts/checkpoints/deep-koopman/humo/smoke-gru-s0/ --wait
 
 Los ARNs salen de los outputs de Terraform (`training_role_arn`,
 `train_ecr_repository_url`). La imagen SIEMPRE lleva tag explícito (nunca
@@ -124,6 +125,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--version", type=int, default=1)
     parser.add_argument("--max-run", type=int, default=7200, help="Timeout del job en segundos (2 h).")
     parser.add_argument("--job-name", default=None)
+    parser.add_argument("--checkpoint-s3-uri", default=None,
+                        help="CheckpointConfig (deep-koopman D9): s3://.../checkpoints/deep-koopman/<campaña>/<clave>/ "
+                             "sincronizado con /opt/ml/checkpoints.")
     parser.add_argument("--wait", action="store_true", help="Esperar a que el job termine.")
     parser.add_argument("--no-logs", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Armar el Estimator y mostrar la config, sin lanzar el job.")
@@ -176,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
         volume_size=30,
         disable_profiler=True,
         sagemaker_session=session,
+        **({"checkpoint_s3_uri": args.checkpoint_s3_uri, "checkpoint_local_path": "/opt/ml/checkpoints"}
+           if args.checkpoint_s3_uri else {}),
     )
 
     print(f"Training Job: image={args.image_uri} instance={args.instance_type}")
@@ -186,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         print("  entry_point=" + args.entry_point + f"  source_dir={PIPELINE_DIR}")
         print("  hyperparameters=" + str(hyperparameters))
         print("  max_run=" + str(args.max_run))
+        print("  checkpoint_s3_uri=" + str(args.checkpoint_s3_uri))
         print("(--dry-run: no se lanzó el job)")
         return 0
 

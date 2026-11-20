@@ -377,7 +377,7 @@ def metricas(ev_out: dict, historia: list[dict]) -> dict:
 
 
 def registrar(job: Job, modelo: KoopmanModelo, fase: str, var: str, seed: int, ev_out: dict, entreno: dict,
-              info: dict, parent_run_id: str | None, segundos: float) -> str:
+              info: dict, parent_run_id: str | None, segundos: float, extra: dict | None = None) -> str:
     import tempfile
 
     a = job.args
@@ -394,6 +394,7 @@ def registrar(job: Job, modelo: KoopmanModelo, fase: str, var: str, seed: int, e
     mets["segundos"] = segundos
     if entreno.get("historia"):
         mets["segundos_por_epoca"] = segundos / max(1, len(entreno["historia"]) - (entreno.get("retomado_en") or 0))
+    mets.update(extra or {})
     frames = dict(ev_out["base"]["frames"])
     frames.update({"modos.parquet": ev_out["tabla_modos"], "bootstrap_modos.parquet": ev_out["boot"],
                    "coherencia.parquet": ev_out["coherencia"], "curvas.parquet": pd.DataFrame(entreno.get("historia", [])),
@@ -456,15 +457,51 @@ def fase_entrenamiento(job: Job) -> list[str]:
             modelo, info = job.modelo_nuevo(var, a.seed, d)
             en_caliente = info.get("arranque") == "caliente"
         datos, _ = job.datos_ajuste()
+        t_tr = time.perf_counter()
         entreno = T.entrenar(modelo, datos, fase, _escala(job.ctx.norm),
                              en_caliente=en_caliente, lambdas=lambdas, epocas=a.epocas,
                              ckpt_dir=pathlib.Path(a.checkpoint_dir) / var, seed=a.seed, cfg_perdida=cfg_p,
                              log=log.info)
+        t_tr = time.perf_counter() - t_tr
         T.orden_canonico(modelo)
+        t_ev = time.perf_counter()
         ev_out = evaluar_completo(job, modelo, f"koop-{fase}{var}-s{a.seed}", con_duan=fase in ("smoke", "f1", "b1",
                                                                                                    "b2", "b3", "b4", "f2"))
-        ids.append(registrar(job, modelo, fase, var, a.seed, ev_out, entreno, info, parent, time.perf_counter() - t0))
+        n_ep = len(entreno["historia"]) - (entreno.get("retomado_en") or 0)
+        extra = {"segundos_eval": time.perf_counter() - t_ev, "segundos_entreno": t_tr,
+                 "segundos_entreno_por_epoca": t_tr / max(1, n_ep)}
+        if fase == "smoke":
+            extra.update(medir_tiempos(job, datos))
+        ids.append(registrar(job, modelo, fase, var, a.seed, ev_out, entreno, info, parent, time.perf_counter() - t0,
+                             extra=extra))
     return ids
+
+
+# Configuraciones cronometradas en el humo (8.1, D17): (nombre, encoder, decoder, cfg de pérdida).
+MEDICIONES = (
+    ("f1_gru", "gru", "lineal", {"H": 0}),
+    ("f1_gru_decgru", "gru", "gru", {"H": 0}),
+    ("f1_gru_icap", "gru", "lineal", {"H": 0, "icap": True}),
+    ("f1_conv1ds", "conv1ds", "lineal", {"H": 0}),
+    ("f2_gru_h1", "gru", "lineal", {"H": 1}),
+    ("f2_gru_h6", "gru", "lineal", {"H": 6}),
+    ("f2_gru_h24", "gru", "lineal", {"H": 24}),
+    ("f2_conv1ds_h24", "conv1ds", "lineal", {"H": 24}),
+    ("f3_gru", "gru", "lineal", {"H": 24, "tgt": True}),
+)
+
+
+def medir_tiempos(job: Job, datos: T.Datos, n: int = 10) -> dict:
+    """Segundos por paso y por época (estimados con los pasos reales de una época) de cada configuración."""
+    out = {}
+    for nombre, enc, dec, cfg in MEDICIONES:
+        m = KoopmanModelo(encoder=enc, decoder=dec, d=10, hidden=job.args.hidden, seed=0)
+        r = T.medir_paso(m, datos, cfg, _escala(job.ctx.norm), n=n)
+        log.info("Tiempo %s: %.3f s/paso, %d pasos, %.1f s/época", nombre, r["s_paso"], r["pasos_epoca"], r["s_epoca"])
+        out[f"t_{nombre}_s_paso"] = r["s_paso"]
+        out[f"t_{nombre}_s_epoca"] = r["s_epoca"]
+    out["t_pasos_epoca"] = float(r["pasos_epoca"])
+    return out
 
 
 def _padre(job: Job, seed: int) -> str:

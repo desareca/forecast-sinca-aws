@@ -70,3 +70,10 @@ def test_orden_canonico_conserva_pronostico(grilla_kp):
     assert np.all(np.diff(rho[1:3]) <= 0) and np.all(np.diff(rho[3:]) <= 0)
     f1, _ = M.pronostico(m, ctx.ng, ctx.norm, pos[:20])
     np.testing.assert_allclose(f0, f1, rtol=1e-4, atol=1e-4)
+
+
+def test_medir_paso(grilla_kp):
+    datos, esc = _datos(grilla_kp[0])
+    r = T.medir_paso(modelo_chico(), datos, {"H": 24, "tgt": True}, esc, n=2, previos=1)
+    assert r["s_paso"] > 0 and r["pasos_epoca"] == int(np.ceil(len(datos) / T.BATCH))
+    assert r["s_epoca"] == pytest.approx(r["s_paso"] * r["pasos_epoca"])
