@@ -213,3 +213,26 @@ def por_bloques(segments, bloques: list[np.ndarray], rank="gd", weights=None) ->
         eigs.append(np.linalg.eigvals(op.A))
     return Operador(A=k, U=None, rank=int(sum(ranks)), estimador="exacto-bloques",
                     meta={"ranks_bloques": np.asarray(ranks), "eig_bloques": eigs})
+
+
+def dmdc(x_segments, u_segments, weights=None, rank=None) -> Operador:
+    """`x_{t+1} = A x_t + B u_t` por mínimos cuadrados (pares dentro de segmentos; `√w` si hay pesos).
+
+    `rank`: `None` = pseudoinversa completa de `Ω = [X; U]`; entero o `"gd"` = SVD truncada de `Ω`
+    (Gavish–Donoho sobre `[X; U]`, D6). `B` queda en `meta["K_ma"]`.
+    """
+    x0, x1, w = pares(x_segments, weights=weights)
+    u0 = np.concatenate([np.asarray(u, float)[:-1] for u in u_segments if np.asarray(u).shape[0] > 1]).T
+    sw = np.sqrt(w)[None, :]
+    x0, x1, u0 = x0 * sw, x1 * sw, u0 * sw
+    omega = np.concatenate([x0, u0], axis=0)
+    r = _resolve_rank(omega, rank)
+    if r is None:
+        g = x1 @ np.linalg.pinv(omega)
+        used = omega.shape[0]
+    else:
+        uu, s, vt = np.linalg.svd(omega, full_matrices=False)
+        g = x1 @ vt[:r].T @ np.diag(1.0 / s[:r]) @ uu[:, :r].T
+        used = r
+    n = x0.shape[0]
+    return Operador(A=g[:, :n], U=None, rank=int(used), estimador="dmdc", meta={"K_ma": g[:, n:]})

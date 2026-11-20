@@ -423,3 +423,58 @@ v2 ≈ USD 0.32 a la tarifa de `design.md` (no verificada en consola). Sin los h
   - Meteo con retardos (1.1b) empeora poco pero de forma significativa; Hankel por estación (1.1f) y h = 48 (1.1g) no difieren de forma significativa: no hay señal clara de cruce entre estaciones ni de memoria (conv1d L = 72 no se habilita).
   - Todas las variantes siguen sobre la mejor referencia (intervalos de la razón > 1); mejor serie: Ñielol pm10 (GRU 0.921 [0.810, 1.063]).
 - **Decisión** (decidido por regla D9): pasan **PCA** (la más simple que ninguna otra supera de forma significativa) y **GRU** (mejor puntaje; no significativamente peor que PCA). conv1d sale (GRU lo supera de forma significativa); Hankel sale.
+
+## 2026-11-19 - dmd-operador-global 1.2: picos (pesos y Duan)
+
+- **Hipótesis**: el DMD pierde en picos por regresión a la media (H2) y por Jensen al deshacer `log1p` (H6). 1.2a pondera los pares con `w` (máx. de las 6 series, solo `t` con `t+24` en train); 1.2b corrige la retransformación con smearing de Duan (`S_{s,k}` de rollouts de train).
+- **Qué se probó**: sobre PCA y GRU (3 semillas), DMD exacto autónomo: base, Duan, pesos, pesos+Duan. Runs `…-e12base/e12b/e12a/e12ab-aedmd-v1-s{seed}`.
+- **Resultado** (media de 6 series; GRU = media de semillas; sesgo en episodios ≥ ICAP100, media de series):
+
+  | rep. | variante | RMSE pond. | razón vs mejor ref. | sesgo episodios |
+  |---|---|---|---|---|
+  | PCA | base | 39.82 | 1.349 [1.069, 1.553] | −58.1 |
+  | PCA | Duan | 32.68 | 1.109 [0.953, 1.236] | −41.1 |
+  | PCA | pesos | 29.48 | 1.003 [0.907, 1.099] | −33.1 |
+  | PCA | pesos+Duan | 39.98 | 1.363 [1.127, 1.638] | +3.5 |
+  | GRU | base | 36.29 | 1.234 [1.061, 1.346] | −47.9 |
+  | GRU | Duan | 29.73 | 1.014 [0.968, 1.066] | −27.1 |
+  | GRU | pesos | 29.56 | 1.010 [0.945, 1.130] | −22.6 |
+  | GRU | pesos+Duan | 37.96 | 1.297 [1.147, 1.589] | +8.1 |
+
+  - Duan y pesos mejoran de forma significativa sobre la base en ambas (PCA −7.14 [−9.97, −2.38] y −10.34 [−14.94, −2.93]; GRU −6.56 [−9.75, −1.81] y −6.73 [−11.04, −0.09]).
+  - Pesos frente a Duan: no significativo (PCA −3.20 [−5.19, +0.10]; GRU −0.17 [−1.42, +1.83]).
+  - Combinadas sobrecorrigen (sesgo positivo en picos y peor RMSE ponderado global).
+  - Primera vez que el operador queda en el nivel de la mejor referencia (razón ≈ 1.0, intervalos que cruzan 1).
+- **Decisión** (decidido por regla D9, "sin peso < con peso"): **Duan (1.2b)** como decisión global, sin pesos, para PCA y GRU. Nota: en PCA pesos queda en el borde de la significancia.
+
+## 2026-11-19 - dmd-operador-global 1.3: exógenas en el rollout
+
+- **Hipótesis**: si `z_aux` deja de ser estado y en cada paso se recodifica la ventana auxiliar con persistencia diurna de la meteo y calendario real (`z_mp,t+1 = K_mm·z_mp,t + K_ma·z_aux,t`), el rollout deja de "pronosticar" meteo con K (S2–S4) y mejora.
+- **Qué se probó**: PCA y GRU (3 semillas), DMD exacto + Duan (decisión 1.2): 1.3a autónoma vs 1.3b exógena (`K_mm`, `K_ma` por LS en train; Duan reestimado con el rollout exógeno). Sin meteo posterior a `t` (test de no-fuga). `K_ma` en `k_ma.parquet` y `operator.npz`. Runs `…-e13a/e13b-aedmd-v1-s{seed}`.
+- **Resultado** (media de 6 series; GRU = media de semillas):
+
+  | rep. | variante | RMSE pond. | razón vs mejor ref. | dif. exógena − autónoma |
+  |---|---|---|---|---|
+  | PCA | autónoma | 32.68 | 1.109 [0.953, 1.236] | |
+  | PCA | exógena | 32.06 | 1.089 [0.957, 1.189] | −0.62 [−1.46, +0.34] |
+  | GRU | autónoma | 29.73 | 1.014 [0.968, 1.066] | |
+  | GRU | exógena | 29.20 | 0.997 [0.951, 1.057] | −0.53 [−1.14, +0.18] |
+
+  La exógena mejora poco y en la dirección esperada (menos sesgo en picos: PCA −41.1 → −38.9; GRU −27.1 → −22.9), sin significancia.
+- **Decisión** (decidido por regla D9, "autónomo < exógeno"): queda el rollout **autónomo** en PCA y GRU.
+
+## 2026-11-19 - dmd-operador-global 1.4: horizonte (K horario vs A₂₄)
+
+- **Hipótesis**: el operador directo a 24 h (`z_t → z_{t+24}`) evita el error compuesto de `K²⁴`; se mide solo como referencia de precisión (el ciclo diario debe quedar como modo de K horario, §9).
+- **Qué se probó**: PCA y GRU (3 semillas), exacto autónomo + Duan: K horario (`e14a`) vs `A₂₄` (`e14b`, `tipo=referencia`; Duan reestimado con `A₂₄`).
+- **Resultado** (media de 6 series):
+
+  | rep. | variante | RMSE pond. | razón vs mejor ref. | dif. A₂₄ − horario |
+  |---|---|---|---|---|
+  | PCA | horario | 32.68 | 1.109 [0.953, 1.236] | |
+  | PCA | A₂₄ | 33.09 | 1.126 [0.928, 1.296] | +0.41 [−1.42, +1.61] |
+  | GRU | horario | 29.73 | 1.014 [0.968, 1.066] | |
+  | GRU | A₂₄ | 30.78 | 1.046 [0.923, 1.133] | +1.04 [−1.82, +3.21] |
+
+  `A₂₄` no mejora la precisión (peor en punto, sin significancia): el error compuesto del rollout horario no es la limitante. K horario multi-paso (1 + 24 h) queda diferido a `deep-koopman`.
+- **Decisión** (decidido por regla D9; `A₂₄` no es candidato): queda **K horario**.

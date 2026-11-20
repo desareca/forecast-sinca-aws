@@ -186,7 +186,7 @@ def hankel(ctx: Contexto, length: int = HORIZONTE, meteo: bool = False, tramos=p
     return Estado(nombre=nombre or ("hankelmet" if meteo else ("hankel" if length == 24 else f"hankel{length}")),
                   z=_hankel_z(ctx.ng, length, pos, meteo), positions=pos, split=split, d_mp=d_mp,
                   norm=ctx.norm, decode_z=decode_z, encode_fn=encode_fn, fit_split=fit_split,
-                  extra={"length": length, "meteo": meteo})
+                  extra={"length": length, "meteo": meteo, "ng": ctx.ng})
 
 
 def bloques_por_estacion(length: int = HORIZONTE) -> list[np.ndarray]:
@@ -233,7 +233,7 @@ def pca_state(ctx: Contexto, k_mp: int = 12, k_aux: int = 4, tramos=pt.TRAMOS, u
 
     return Estado(nombre="pca", z=project(x_mp, x_aux), positions=pos, split=split, d_mp=k_mp, norm=ctx.norm,
                   decode_z=decode_z, encode_fn=encode_fn, fit_split=fit_split,
-                  extra={"m_aux": m_aux, "c_aux": c_aux, "m_mp": m_mp, "c_mp": c_mp,
+                  extra={"m_aux": m_aux, "c_aux": c_aux, "m_mp": m_mp, "c_mp": c_mp, "ng": ctx.ng,
                          "proj_aux": lambda xa: (xa - m_aux) @ c_aux})
 
 
@@ -281,4 +281,4 @@ def ae_state(ctx: Contexto, latent: pd.DataFrame, decoder, encoder=None, aux_col
 
     return Estado(nombre=nombre, z=z, positions=pos, split=split, d_mp=d_mp, norm=ctx.norm, decode_z=decode_z,
                   encode_fn=encode_fn, fit_split=fit_split,
-                  extra={"encoder": encoder, "decoder": decoder, "aux_cols": sl})
+                  extra={"encoder": encoder, "decoder": decoder, "aux_cols": sl, "ng": ctx.ng})

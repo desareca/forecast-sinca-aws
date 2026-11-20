@@ -71,6 +71,8 @@ def test_apply_actualiza_meta_y_sube_solo_nuevos(estado_mlflow):
     P.apply(str(estado_mlflow), s3)
     runs_subidos = {k.split("/")[2] for k in s3.uploads if "/mlruns/" in k}
     assert runs_subidos == {r1}
+    s3.uploads.clear()
+    assert P.apply(str(estado_mlflow), s3) == [] and s3.uploads == []  # sin runs nuevos no escribe
 
 
 def test_plan_falla_sin_artefactos(estado_mlflow):

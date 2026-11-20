@@ -76,6 +76,8 @@ def plan(state_dir: str) -> list[tuple[str, str, list[pathlib.Path]]]:
 def apply(state_dir: str, client, bucket: str = BUCKET, prefix: str = PREFIX, now: dt.datetime | None = None) -> list[str]:
     meta = leer_meta(state_dir)
     nuevos = plan(state_dir)
+    if not nuevos:
+        return []
     db_key = f"{prefix}/{DB_FILENAME}"
     remote = _iso(client.head_object(Bucket=bucket, Key=db_key)["LastModified"])
     if remote != meta.get("last_modified"):
@@ -123,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
 
     client = boto3.Session(profile_name=args.profile).client("s3")
     uploaded = apply(args.state_dir, client, args.bucket)
+    if not uploaded:
+        print("Sin runs nuevos: no se escribe nada.")
+        return 0
     print(f"Subidos {len(uploaded)} objetos (respaldo: {uploaded[0]}).")
     return 0
 

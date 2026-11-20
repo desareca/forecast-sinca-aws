@@ -52,24 +52,24 @@
 
 ## 4. Picos (1.2)
 
-- [ ] 4.1 `estimadores.ponderado(segments, w)` con pesos de par `max_s w_s(target_s(t))` solo en `row_mask(…, "train")` (D5); `rollout.duan(…)` con `S_{s,k}` de rollouts de train con `t+24` en train (D7). Tests: `W = I` = exacto; con residuos log-normales sintéticos Duan corrige el sesgo de la media (±2 %); ningún `t` con `t+24` fuera de train aporta. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
-- [ ] 4.2 `run.py --etapa 1.2`: sobre las representaciones de 3.4, base vs 1.2a vs 1.2b vs 1.2a+1.2b; error en episodios y sesgo por tramo destacados. Verificar: runs `…-e12-…` y `output/dmd-operador-global/1.2.md`.
-- [ ] 4.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión global de picos. Registrar.
-- [ ] 4.4 **[OPERADOR]** Publicar.
+- [x] 4.1 `estimadores.ponderado(segments, w)` con pesos de par `max_s w_s(target_s(t))` solo en `row_mask(…, "train")` (D5); `rollout.duan(…)` con `S_{s,k}` de rollouts de train con `t+24` en train (D7). Tests: `W = I` = exacto; con residuos log-normales sintéticos Duan corrige el sesgo de la media (±2 %); ningún `t` con `t+24` fuera de train aporta. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
+- [x] 4.2 `run.py --etapa 1.2`: sobre las representaciones de 3.4, base vs 1.2a vs 1.2b vs 1.2a+1.2b; error en episodios y sesgo por tramo destacados. Verificar: runs `…-e12-…` y `output/dmd-operador-global/1.2.md`.
+- [x] 4.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión global de picos. Registrar.
+- [x] 4.4 **[OPERADOR]** Publicar.
 
 ## 5. Exógenas (1.3)
 
-- [ ] 5.1 `rollout.exogeno(…)` y ajuste `K_mm, K_ma` (con o sin pesos según 4.3), D6: AE/PCA con ventana aux del horizonte (meteo y máscaras por persistencia diurna, calendario real; AE `encode(x_mp, x_aux')[d_mp:]`, PCA proyecta); Hankel DMDc con entrada meteo persistida + calendario de cada paso, sin máscaras, GD sobre `[X; U]`. Tests: alterar meteo posterior a `t` no cambia el pronóstico; horas `τ > t` usan `τ−24` y calendario de `τ`; DMDc recupera `A, B` de un sintético. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
-- [ ] 5.2 `run.py --etapa 1.3`: 1.3a autónoma vs 1.3b exógena sobre la configuración vigente; `K_ma` como artefacto. Verificar: runs `…-e13-…` y `output/dmd-operador-global/1.3.md`.
-- [ ] 5.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión. Registrar.
-- [ ] 5.4 **[OPERADOR]** Publicar.
+- [x] 5.1 `rollout.exogeno(…)` y ajuste `K_mm, K_ma` (con o sin pesos según 4.3), D6: AE/PCA con ventana aux del horizonte (meteo y máscaras por persistencia diurna, calendario real; AE `encode(x_mp, x_aux')[d_mp:]`, PCA proyecta); Hankel DMDc con entrada meteo persistida + calendario de cada paso, sin máscaras, GD sobre `[X; U]`. Tests: alterar meteo posterior a `t` no cambia el pronóstico; horas `τ > t` usan `τ−24` y calendario de `τ`; DMDc recupera `A, B` de un sintético. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
+- [x] 5.2 `run.py --etapa 1.3`: 1.3a autónoma vs 1.3b exógena sobre la configuración vigente; `K_ma` como artefacto. Verificar: runs `…-e13-…` y `output/dmd-operador-global/1.3.md`.
+- [x] 5.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión. Registrar.
+- [x] 5.4 **[OPERADOR]** Publicar.
 
 ## 6. Horizonte (1.4)
 
-- [ ] 6.1 `estimadores.directo24(…)` (D5). Test: en un sistema lineal exacto `A₂₄ = K²⁴`. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
-- [ ] 6.2 `run.py --etapa 1.4`: K horario (vigente) vs `A₂₄` (`tipo=referencia`). Multi-paso diferido a `deep-koopman` (anotarlo en el log). Verificar: runs `…-e14-…` y `output/dmd-operador-global/1.4.md`.
-- [ ] 6.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión. Registrar.
-- [ ] 6.4 **[OPERADOR]** Publicar.
+- [x] 6.1 `estimadores.directo24(…)` (D5). Test: en un sistema lineal exacto `A₂₄ = K²⁴`. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
+- [x] 6.2 `run.py --etapa 1.4`: K horario (vigente) vs `A₂₄` (`tipo=referencia`). Multi-paso diferido a `deep-koopman` (anotarlo en el log). Verificar: runs `…-e14-…` y `output/dmd-operador-global/1.4.md`.
+- [x] 6.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión. Registrar.
+- [x] 6.4 **[OPERADOR]** Publicar.
 
 ## 7. Estimador y estabilidad (1.5)
 
@@ -126,3 +126,12 @@
 - 2.4 / 3.4: decisiones tomadas por regla D9 (delegadas por el operador); cifras en `EXPERIMENT-LOG.md` y `decisiones.json`.
 - 3.2: selección D9 implementada como: ganador = la más simple (orden hankel < hankelmet < hankelest < hankel48 < pca < conv1d < gru) que ninguna otra supera de forma significativa; pasa además la de mejor puntaje del resto si no es significativamente peor. `hankelest` y `hankel48` son ablaciones (no candidatas). Lectura secuencial alternativa (reemplazo desde Hankel): GRU es la mejor; la segunda por puntaje (conv1d) es significativamente peor y la siguiente (PCA) no; se toma {PCA, GRU}, el mismo conjunto.
 - 2.5 / 3.5: una sola publicación tras 3.4 (la de 2.5 no se hizo antes de correr 1.1): `plan` = 18 runs nuevos (7 `e10` + 11 `e11*`); `apply --yes` subió 121 objetos (sqlite + 119 artefactos); respaldo `_mlflow/backups/mlflow-20261119-2307.sqlite`; `LastModified` nuevo 2026-11-20T02:07:21+00:00 en `.download.json`. boto3 en Windows con `AWS_CA_BUNDLE` del proceso apuntando al bundle del profile (ruta Windows).
+- 4.1: par `(t, t+1)` con `t` fuera de `row_mask(train)` (últimas 24 h de train) entra con peso 1 (no aporta peso derivado del target), para que `W = I` siga siendo el exacto.
+- 4.2: `{exp}` por variante: `e12base`, `e12a` (pesos), `e12b` (Duan), `e12ab`; con `e12` solo, los 4 runs de una semilla compartirían nombre. Igual en 1.3 (`e13a`/`e13b`) y siguientes.
+- 4.3: orden de simplicidad usado: base < Duan < pesos < pesos+Duan (Duan no cambia el operador; D9 "sin peso < con peso").
+- 4.4: 16 runs `e12*` publicados (respaldo `mlflow-20261119-2312.sqlite`). Un segundo `apply` sin runs nuevos subió igual el sqlite y dejó otro respaldo (`…-2313`); desde entonces `apply` no escribe si no hay runs nuevos (test agregado).
+- 5.1: Hankel DMDc implementado y testeado (`entrada_hankel`, `estimadores.dmdc` con GD sobre `[X; U]`), no corrido: Hankel salió en 3.4. Convención común: `z_{t+1} = A z_t + B u_t`, con `u_t` observado y `u_{t+k}` (`k ≥ 1`) persistido.
+- 5.2: con Duan vigente, los factores `S_{s,k}` se reestiman con el rollout exógeno.
+- 5.4: 8 runs `e13*` publicados, 62 objetos; respaldo `mlflow-20261119-2319.sqlite`.
+- 6.1: test `A₂₄ = K²⁴` en `tests/operador/test_rollout.py`. Con Duan vigente, los factores se reestiman con el rollout de `A₂₄`.
+- 6.4: 8 runs `e14*` publicados, 58 objetos; respaldo `mlflow-20261119-2324.sqlite`.

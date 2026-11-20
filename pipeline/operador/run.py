@@ -423,20 +423,65 @@ def filas_duan(rec: Recursos, est: est_mod.Estado) -> np.ndarray:
     return pos[pt.row_mask(rec.grid.index[pos], rec.part, "train")]
 
 
+def aux_fn_de(est: est_mod.Estado):
+    """Bloque auxiliar del paso `k` del rollout exógeno (ventana persistida; Hankel: entrada DMDc)."""
+    ng = est.extra["ng"]
+    if est.nombre.startswith("hankel"):
+        return lambda pos, k: ro.entrada_hankel(ng, pos, k)
+    if "proj_aux" in est.extra:
+        proj = est.extra["proj_aux"]
+        return lambda pos, k: proj(ro.ventana_aux_persistida(ng, pos, k).reshape(len(pos), -1).astype(float))
+    enc, sl, d_mp = est.extra["encoder"], est.extra["aux_cols"], est.d_mp
+
+    def fn(pos, k):
+        xa = ro.ventana_aux_persistida(ng, pos, k)
+        xm = np.zeros((len(pos), est_mod.HORIZONTE, est_mod.N_MP), dtype=np.float32)
+        return est_mod._predict(enc, [xm, xa[..., sl]])[:, d_mp:]
+    return fn
+
+
+def aux0_de(est: est_mod.Estado, pos: np.ndarray):
+    return ro.entrada_hankel(est.extra["ng"], pos, 0) if est.nombre.startswith("hankel") else None
+
+
 def ajustar(rec: Recursos, est: est_mod.Estado, rep: str, cfg: dict) -> estim.Operador:
-    """Operador según la configuración vigente (`cfg`: pesos, duan, estimador, horizonte, rango)."""
-    rank = cfg.get("rank", {}).get(rep, rank_defecto(rep))
+    """Operador según la configuración vigente (`cfg`: pesos, duan, rollout, estimador, horizonte, rango, modos)."""
+    ranks = cfg.get("rank", {})
+    rank = ranks.get(rep_key(rep, est), ranks.get(rep, rank_defecto(rep)))
     segs = est.segments()
     w = pesos_segmentos(rec, est) if cfg.get("pesos") else None
-    if rep == "hankelest":
+    if cfg.get("rollout") == "exogeno":
+        if est.nombre.startswith("hankel"):
+            xs = [seg[:, :est.d_mp] for seg in segs]
+            us = [ro.entrada_hankel(est.extra["ng"], p, 0) for p in est.segment_positions()]
+            op = estim.dmdc(xs, us, w, rank or "gd")
+        else:
+            op = estim.dmdc([seg[:, :est.d_mp] for seg in segs], [seg[:, est.d_mp:] for seg in segs], w, rank)
+    elif cfg.get("horizonte") == "directo24":
+        op = estim.directo24(segs, rank, w)
+    elif cfg.get("estimador") == "fbdmd":
+        op = estim.fbdmd(segs, w, rank)
+    elif rep == "hankelest":
         op = estim.por_bloques(segs, est_mod.bloques_por_estacion(24), rank or "gd", weights=w)
     elif w is not None:
         op = estim.ponderado(segs, w, rank)
     else:
         op = estim.exacto(segs, rank)
+    if cfg.get("estimador") == "recorte":
+        op = estim.recorte(op)
+    if cfg.get("modos", {}).get(rep_key(rep, est)) is not None:
+        op = modos_mod_aplicar(op, cfg["modos"][rep_key(rep, est)])
     if cfg.get("duan"):
         op.meta["duan_S"] = factores_duan(rec, est, op, cfg)
     return op
+
+
+def rep_key(rep: str, est: est_mod.Estado) -> str:
+    return est.nombre if rep in FAMILIAS_AE else rep
+
+
+def modos_mod_aplicar(op: estim.Operador, conservar) -> estim.Operador:
+    return modos.operador_con_modos(op, conservar)
 
 
 def factores_duan(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: dict) -> np.ndarray:
@@ -446,9 +491,17 @@ def factores_duan(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: d
     return ro.duan_factores(log_real, log_pred, real)
 
 
-def ventanas_log(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: dict, pos: np.ndarray) -> np.ndarray:
+def estado_final(est: est_mod.Estado, op: estim.Operador, cfg: dict, pos: np.ndarray) -> np.ndarray:
+    if cfg.get("rollout") == "exogeno":
+        return ro.exogeno_estado_final(op, est, pos, aux_fn_de(est), aux0_de(est, pos))
+    return ro.estado_final(op, est.at(pos))
+
+
+def ventanas_log(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: dict, pos: np.ndarray,
+                 lote: int = 20000) -> np.ndarray:
     """Ventana pronosticada `[N, 24, 6]` en log1p (rollout de la configuración, sin Duan)."""
-    return ro.autonomo_log(op, est, pos)
+    pos = np.asarray(pos, int)
+    return np.concatenate([est.decode_log(estado_final(est, op, cfg, pos[i:i + lote])) for i in range(0, len(pos), lote)])
 
 
 def rank_gd(est: est_mod.Estado) -> int:
@@ -461,8 +514,9 @@ def pronostico(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: dict
     if "duan_S" in op.meta:
         lp = ventanas_log(rec, est, op, cfg, pos)
         dec = np.clip(np.exp(lp) * op.meta["duan_S"][None] - 1.0, 0.0, None)
-        return dec.mean(axis=1), dec
-    return ro.autonomo(op, est, pos)
+    else:
+        dec = est.decode(estado_final(est, op, cfg, pos))
+    return dec.mean(axis=1), dec
 
 
 def correr_variante(rec: Recursos, rep: str, seed: int, cfg: dict, nombre: str, mask_fn=None):
@@ -600,7 +654,196 @@ def etapa_11(rec: Recursos) -> None:
     print(propuesta)
 
 
-ETAPA_FN = {"base": etapa_base, "1.0": etapa_10, "1.1": etapa_11}
+
+def _diag_resumen(res: dict) -> dict:
+    ep = res["frames"]["episodes.parquet"]
+    tr = res["frames"]["tramos.parquet"]
+    g = tr[tr["tramo"] == "gt100"]
+    return {"episodios_wrmse": float(ep["wrmse"].mean()) if "wrmse" in ep else float("nan"),
+            "episodios_sesgo": float(ep["sesgo"].mean()) if "sesgo" in ep else float("nan"),
+            "sesgo_gt100": float(g["sesgo"].mean()) if "sesgo" in g else float("nan"),
+            "pendiente_todo": float(tr.loc[tr["tramo"] == "todo", "pendiente"].mean())}
+
+
+def params_cfg(cfg: dict) -> dict:
+    return {"pesos": bool(cfg.get("pesos")), "duan": bool(cfg.get("duan")),
+            "rollout": cfg.get("rollout", "autonomo"), "horizonte": cfg.get("horizonte", "horario"),
+            "estimador": cfg.get("estimador", "exacto")}
+
+
+def etapa_variantes(rec: Recursos, etapa: str, variantes: dict[str, tuple[dict, str]], orden: list[str],
+                    titulo: str, tipo_por_variante: dict[str, str] | None = None, candidatas: list[str] | None = None,
+                    extra_frames_fn=None) -> dict:
+    """Evalúa variantes (`nombre -> (delta de config, exp)`) sobre las representaciones vigentes.
+
+    Selección D9 por representación (orden de simplicidad `orden`); devuelve la propuesta.
+    """
+    cfg0 = dict(rec.args.config)
+    reps = cfg0["representaciones"]
+    resultados: dict[str, dict] = {}
+    filas = []
+    run_ids: dict = {}
+    ops: dict = {}
+    for rep in reps:
+        punt: dict[str, evm.Puntaje] = {}
+        diag = {}
+        for var, (delta, exp) in variantes.items():
+            cfg = {**cfg0, **delta}
+            items, ds = [], []
+            for seed in miembros(rec, rep):
+                res = correr_variante(rec, rep, seed, cfg, f"{rep}-{var}-s{seed}")
+                ae_id = rec.ae(rep, seed)["run"]["run_id"] if rep in FAMILIAS_AE else None
+                pc = params_cfg(cfg)
+                extra = {"pesos": pc["pesos"], "duan": pc["duan"], "horizonte": pc["horizonte"], "variante": var}
+                frames = extra_frames_fn(rec, res, cfg) if extra_frames_fn else None
+                run_id = registrar(rec, res, rep, exp, etapa, seed, tipo=(tipo_por_variante or {}).get(var, "operador"),
+                                   estimador=res["op"].estimador, rollout=pc["rollout"], extra_params=extra,
+                                   extra_frames=frames, ae_run_id=ae_id)
+                run_ids[(rep, var, seed)] = run_id
+                ops[(rep, var, seed)] = res["op"]
+                items.append(res["puntaje"])
+                ds.append(_diag_resumen(res))
+                filas.append({"rep": rep, **_fila(res["tabla"], f"{var}-s{seed}"), **ds[-1]})
+            punt[var] = _resumen_familia(rec, items)
+            diag[var] = {k: float(np.nanmean([d[k] for d in ds])) for k in ds[0]}
+        cands = {k: v for k, v in punt.items() if candidatas is None or k in candidatas}
+        sel = seleccionar(cands, [o for o in orden if o in cands], maximo=1)
+        base = orden[0]
+        pares_tab = pd.DataFrame([{"a": a, "b": b, **evm.diferencia(punt[a], punt[b])} for i, a in enumerate(punt)
+                                  for b in list(punt)[i + 1:]])
+        resultados[rep] = {"punt": punt, "diag": diag, "sel": sel, "pares": pares_tab,
+                           "diffs": tabla_diferencias(punt, base), "fam": pd.DataFrame(
+                               [{"variante": k, **{c: v for c, v in _fila(rec.ev.tabla(p), k).items() if c != "variante"},
+                                 **diag[k]} for k, p in punt.items()])}
+    ganadores = {rep: r["sel"]["ganador"] for rep, r in resultados.items()}
+    resultados["_runs"] = run_ids
+    resultados["_ops"] = ops
+    secciones = [("Propuesta (D9, por representación)", ", ".join(f"{k}: {v}" for k, v in ganadores.items()))]
+    for rep, r in ((k, v) for k, v in resultados.items() if not k.startswith("_")):
+        secciones += [(f"{rep} — media de 6 series (AE = media de semillas) y diagnósticos", reg.md_table(r["fam"])),
+                      (f"{rep} — diferencias emparejadas vs {orden[0]}", reg.md_table(r["diffs"])),
+                      (f"{rep} — diferencias por pares (a − b)", reg.md_table(r["pares"]))]
+    secciones.append(("Por variante y semilla", reg.md_table(pd.DataFrame(filas))))
+    for rep, r in ((k, v) for k, v in resultados.items() if not k.startswith("_")):
+        for k, p in r["punt"].items():
+            secciones.append((f"Por serie — {rep} {k}", reg.md_table(_cols(rec.ev.tabla(p)))))
+    reg.resumen_md(etapa, secciones, rec.out, {
+        "ganadores": ganadores,
+        "diferencias": {rep: r["diffs"].to_dict("records") for rep, r in resultados.items() if not rep.startswith("_")},
+        "pares": {rep: r["pares"].to_dict("records") for rep, r in resultados.items() if not rep.startswith("_")},
+        "familias": {rep: r["fam"].to_dict("records") for rep, r in resultados.items() if not rep.startswith("_")}},
+        )
+    for rep, r in ((k, v) for k, v in resultados.items() if not k.startswith("_")):
+        print(rep)
+        print(reg.md_table(r["fam"]))
+        print(reg.md_table(r["diffs"]))
+        print(reg.md_table(r["pares"]))
+    print(ganadores)
+    return resultados
+
+
+def etapa_12(rec: Recursos) -> None:
+    variantes = {"base": ({"pesos": False, "duan": False}, "e12base"), "duan": ({"pesos": False, "duan": True}, "e12b"),
+                 "pesos": ({"pesos": True, "duan": False}, "e12a"), "pesos+duan": ({"pesos": True, "duan": True}, "e12ab")}
+    etapa_variantes(rec, "1.2", variantes, ["base", "duan", "pesos", "pesos+duan"], "Picos")
+
+
+def frames_kma(rec: Recursos, res: dict, cfg: dict) -> dict:
+    op = res["op"]
+    if "K_ma" not in op.meta:
+        return {}
+    kma = pd.DataFrame(op.meta["K_ma"], columns=[f"aux_{j}" for j in range(op.meta["K_ma"].shape[1])])
+    kma.insert(0, "fila_mp", np.arange(len(kma)))
+    return {"k_ma.parquet": kma}
+
+
+def etapa_13(rec: Recursos) -> None:
+    variantes = {"autonoma": ({"rollout": "autonomo"}, "e13a"), "exogena": ({"rollout": "exogeno"}, "e13b")}
+    etapa_variantes(rec, "1.3", variantes, ["autonoma", "exogena"], "Exógenas", extra_frames_fn=frames_kma)
+
+
+def etapa_14(rec: Recursos) -> None:
+    """K horario (principal) vs A₂₄ directo (solo referencia de precisión, `tipo=referencia`)."""
+    variantes = {"horario": ({"horizonte": "horario"}, "e14a"), "directo24": ({"horizonte": "directo24"}, "e14b")}
+    etapa_variantes(rec, "1.4", variantes, ["horario", "directo24"], "Horizonte",
+                    tipo_por_variante={"directo24": "referencia"}, candidatas=["horario"])
+
+
+def fit_eig_fn(rec: Recursos, est: est_mod.Estado, rep: str, cfg: dict):
+    """Autovalores del operador re-estimado con pesos por fila (conteos del bootstrap de días)."""
+    segs = est.segments()
+    lens = np.cumsum([len(sg) for sg in segs])[:-1]
+    rank = cfg.get("rank", {}).get(rep, rank_defecto(rep))
+
+    def fn(w_rows):
+        w = list(np.split(np.asarray(w_rows, float), lens))
+        if cfg.get("estimador") == "fbdmd":
+            op = estim.fbdmd(segs, w, rank)
+        else:
+            op = estim.ponderado(segs, w, rank)
+            if cfg.get("estimador") == "recorte":
+                op = estim.recorte(op)
+        return op.eigvals()
+    return fn
+
+
+def dias_de_filas(rec: Recursos, est: est_mod.Estado) -> np.ndarray:
+    stamps = rec.grid.index[est.positions[est.fit_mask()]]
+    local = stamps.tz_convert(pt.TZ).tz_localize(None) if stamps.tz is not None else stamps
+    return local.normalize().to_numpy()
+
+
+def estabilidad_semillas(ops: dict[int, estim.Operador]) -> pd.DataFrame:
+    """Modos de la semilla de referencia (la primera) emparejados (húngaro) con los de las demás."""
+    seeds = sorted(ops)
+    ref = ops[seeds[0]].eigvals()
+    ref = ref[modos.representantes(ref)]
+    ref = ref[np.argsort(-np.abs(ref), kind="stable")]
+    out = modos.espectro(ref)[["modo", "abs", "periodo_h", "vida_media_h", "tipo"]].copy()
+    for s in seeds[1:]:
+        lam = ops[s].eigvals()
+        lam = lam[modos.representantes(lam)]
+        i, j = modos.emparejar(ref, lam)
+        per = np.full(len(ref), np.nan)
+        hl = np.full(len(ref), np.nan)
+        ok = np.zeros(len(ref), bool)
+        per[i], hl[i], ok[i] = modos.periodo_h(lam[j]), modos.vida_media_h(lam[j]), modos.aparece(ref[i], lam[j])
+        out[f"periodo_s{s}"], out[f"vida_media_s{s}"], out[f"aparece_s{s}"] = per, hl, ok
+    return out
+
+
+def etapa_15(rec: Recursos) -> None:
+    variantes = {"exacto": ({"estimador": "exacto"}, "e15a"), "recorte": ({"estimador": "recorte"}, "e15b"),
+                 "fbdmd": ({"estimador": "fbdmd"}, "e15c")}
+    res = etapa_variantes(rec, "1.5", variantes, ["exacto", "recorte", "fbdmd"], "Estimador")
+    cfg0 = dict(rec.args.config)
+    secciones = []
+    for rep in cfg0["representaciones"]:
+        ganador = res[rep]["sel"]["ganador"]
+        cfg = {**cfg0, "estimador": ganador}
+        ops = {}
+        for seed in miembros(rec, rep):
+            est = rec.estado(rep, seed)
+            op = res["_ops"][(rep, ganador, seed)]
+            ops[seed] = op
+            boot = modos.bootstrap_modos(op.eigvals(), fit_eig_fn(rec, est, rep, cfg), dias_de_filas(rec, est),
+                                         B=rec.args.bootstrap_modos, dias=evm.DIAS_DEFAULT, seed=0)
+            run_id = res["_runs"][(rep, ganador, seed)]
+            boot.to_parquet(reg.artifacts_dir(rec.state, run_id) / "bootstrap_modos.parquet", index=False)
+            secciones.append((f"Bootstrap por modo — {rep} s{seed} ({ganador}, B = {rec.args.bootstrap_modos})",
+                              reg.md_table(boot)))
+        if len(ops) > 1:
+            secciones.append((f"Estabilidad entre semillas — {rep} ({ganador})", reg.md_table(estabilidad_semillas(ops))))
+    path = rec.out / "1.5.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\n" + "\n".join(f"## {t}\n\n{x}\n" for t, x in secciones),
+                    encoding="utf-8")
+    for t, x in secciones:
+        print(t)
+        print(x)
+
+
+ETAPA_FN = {"base": etapa_base, "1.0": etapa_10, "1.1": etapa_11, "1.2": etapa_12, "1.3": etapa_13,
+            "1.4": etapa_14, "1.5": etapa_15}
 
 
 # --- CLI ---------------------------------------------------------------------------
@@ -618,6 +861,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output-dir", default=str(reg.OUTPUT_DIR))
     p.add_argument("--decisiones", default=str(reg.DECISIONES_PATH))
     p.add_argument("--bootstrap", type=int, default=evm.B_DEFAULT, help="Remuestreos B (D8: 2000).")
+    p.add_argument("--bootstrap-modos", type=int, default=200, help="Re-estimaciones por modo (D8: 200).")
     p.add_argument("--force-test", action="store_true", help="Repite la evaluación en test (solo por orden del operador).")
     return p.parse_args(argv)
 

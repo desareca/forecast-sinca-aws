@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 
 from .estado import HORIZONTE, Estado
-from .estimadores import Operador
+from .estimadores import Operador  # noqa: F401
 
 
 def estado_final(op: Operador, z0: np.ndarray, pasos: int = HORIZONTE) -> np.ndarray:
@@ -63,3 +63,55 @@ def ventanas_reales_log(grid, positions: np.ndarray) -> tuple[np.ndarray, np.nda
     mp = grid.mp.to_numpy(dtype=float)[idx]
     real = grid.mp_real.to_numpy()[idx] & ok[..., None] & np.isfinite(mp)
     return np.log1p(np.clip(np.nan_to_num(mp), 0, None)), real
+
+
+# --- Rollout exógeno (1.3b, D6): solo el bloque MP es estado ---------------------
+
+
+def fuente_persistida(t_pos: np.ndarray, end: np.ndarray, length: int = HORIZONTE) -> tuple[np.ndarray, np.ndarray]:
+    """Para la ventana que termina en `end`: horas `τ` y su fuente (`τ` si `τ ≤ t`; si no, `τ − 24`)."""
+    tau = np.asarray(end, int)[:, None] - length + 1 + np.arange(length)[None, :]
+    src = np.where(tau <= np.asarray(t_pos, int)[:, None], tau, tau - 24)
+    return tau, src
+
+
+def ventana_aux_persistida(ng, t_pos: np.ndarray, k: int, length: int = HORIZONTE) -> np.ndarray:
+    """Ventana auxiliar `[N, L, 34]` que termina en `t+k`: meteo y máscaras por persistencia diurna, calendario real."""
+    t_pos = np.asarray(t_pos, int)
+    tau, src = fuente_persistida(t_pos, t_pos + k, length)
+    vals = ng.aux_z.to_numpy(dtype=np.float32)[src]
+    avail = ng.aux_avail.to_numpy(dtype=np.float32)[src]
+    cal = ng.cal.to_numpy(dtype=np.float32)[np.clip(tau, 0, len(ng.index) - 1)]
+    return np.concatenate([vals, avail, cal], axis=-1)
+
+
+def entrada_hankel(ng, t_pos: np.ndarray, k: int) -> np.ndarray:
+    """Entrada DMDc de Hankel en `t+k`: 12 canales meteo (persistencia diurna si `t+k > t`) + 10 de calendario."""
+    t_pos = np.asarray(t_pos, int)
+    tau = t_pos + k
+    src = np.where(tau <= t_pos, tau, tau - 24)
+    vals = ng.aux_z.to_numpy(dtype=float)[src]
+    cal = ng.cal.to_numpy(dtype=float)[np.clip(tau, 0, len(ng.index) - 1)]
+    return np.concatenate([vals, cal], axis=1)
+
+
+def exogeno_estado_final(op: Operador, est: Estado, positions, aux_fn, aux0=None, pasos: int = HORIZONTE) -> np.ndarray:
+    """`z_mp,t+k+1 = K_mm z_mp,t+k + K_ma z_aux,t+k`; `z_aux,t+k = aux_fn(t, k)` para `k ≥ 1`.
+
+    `aux0`: entrada en `t` (por defecto, el bloque auxiliar del estado observado). Devuelve el estado
+    en `t+24` como `[z_mp | z_aux]` (o solo `z_mp` si el estado no tiene bloque auxiliar).
+    """
+    positions = np.asarray(positions, int)
+    z = est.at(positions)
+    zmp = z[:, :est.d_mp]
+    zaux = z[:, est.d_mp:] if aux0 is None else aux0
+    kma = op.meta["K_ma"]
+    for k in range(pasos):
+        zmp = zmp @ op.A.T + zaux @ kma.T
+        zaux = aux_fn(positions, k + 1)
+    return np.concatenate([zmp, zaux], axis=1) if est.d > est.d_mp else zmp
+
+
+def exogeno(op: Operador, est: Estado, positions, aux_fn, aux0=None, pasos: int = HORIZONTE):
+    dec = est.decode(exogeno_estado_final(op, est, positions, aux_fn, aux0, pasos))
+    return dec.mean(axis=1), dec

@@ -25,5 +25,50 @@
     },
     "fecha": "2026-11-19",
     "nota": "Decidido por regla D9 (delegado): PCA = la más simple no superada significativamente (GRU−PCA −3.53 [−6.69, +0.58]); GRU = mejor puntaje (36.29), no significativamente peor que PCA. conv1d sale (GRU−conv1d −2.48 [−4.14, −0.30]). GRU no se descarta (rango 1.17 < semiancho 7.85). 1.1g no gana claro (−1.25 [−2.20, +0.01])."
+  },
+  "1.2": {
+    "ganador": "duan",
+    "config": {
+      "representaciones": [
+        "pca",
+        "gru"
+      ],
+      "principal": "pca",
+      "pesos": false,
+      "duan": true
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decidido por regla D9 (delegado): Duan y pesos superan a la base de forma significativa en PCA y GRU; pesos vs Duan no significativo (PCA −3.20 [−5.19, +0.10]; GRU −0.17 [−1.42, +1.83]); queda la más simple (sin peso < con peso): Duan. pesos+Duan sobrecorrige."
+  },
+  "1.3": {
+    "ganador": "autonoma",
+    "config": {
+      "representaciones": [
+        "pca",
+        "gru"
+      ],
+      "principal": "pca",
+      "pesos": false,
+      "duan": true,
+      "rollout": "autonomo"
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decidido por regla D9 (delegado): exógena − autónoma no significativa (PCA −0.62 [−1.46, +0.34]; GRU −0.53 [−1.14, +0.18]); queda la más simple (autónomo)."
+  },
+  "1.4": {
+    "ganador": "horario",
+    "config": {
+      "representaciones": [
+        "pca",
+        "gru"
+      ],
+      "principal": "pca",
+      "pesos": false,
+      "duan": true,
+      "rollout": "autonomo",
+      "horizonte": "horario"
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decidido por regla D9 (delegado): A₂₄ es solo referencia; A₂₄ − horario PCA +0.41 [−1.42, +1.61], GRU +1.04 [−1.82, +3.21]. Multi-paso diferido a deep-koopman."
   }
 }
