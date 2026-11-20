@@ -533,3 +533,27 @@ v2 ≈ USD 0.32 a la tarifa de `design.md` (no verificada en consola). Sin los h
   - Modos PCA: diario 24.3 / 882 (protegido), reales con vida media de 494 y 287 h.
   - GRU − PCA: −6.37 [−15.71, +4.63].
 - **Decisión del operador (2026-11-19, antes de ver test)**: candidato oficial **GRU** (Duan, autónomo, horario, exacto, modos de 1.6 v2), apartándose del desempate "más simple": GRU fue mejor en todas las etapas y con `sel` de 3 meses nada es significativo. **PCA** va a test como dato secundario, sin efecto en el veredicto. Enmienda en `design.md` (D9/D11) y spec.
+
+## 2026-11-20 - dmd-operador-global: cierre, test único y veredicto
+
+- **Configuración final** (decisión del operador, registrada antes del test): **GRU** L = 24, d = 16 (3 semillas, encoder congelado), DMD exacto autónomo horario a rango completo, Duan, modos de 1.6 v2 (5/5/6; diario protegido), K y Duan reajustados con datos hasta 2026-06-30 y modos fijados por emparejamiento húngaro (19/19 emparejados). PCA va como secundario, sin efecto en el veredicto.
+- **Test** (2026-07-01 → 2026-10-04, una sola evaluación; filas comunes con `lightgbm-v1` holdout y persistencia, n mínimo 1473 por serie; bootstrap de bloques de 7 días, B = 2000; GRU = media de semillas):
+
+  | serie | RMSE pond. GRU | mejor ref. | razón vs mejor ref. | skill vs persistencia |
+  |---|---|---|---|---|
+  | PLC II pm25 | 28.08 | LightGBM | 1.054 [0.881, 1.612] | +0.001 [−0.195, +0.185] |
+  | Ñielol pm25 | 27.38 | persistencia | 1.071 [0.830, 1.089] | −0.071 [−0.089, +0.170] |
+  | Las Encinas pm25 | 28.93 | persistencia | 1.069 [0.977, 1.119] | −0.069 [−0.119, +0.023] |
+  | PLC II pm10 | 23.29 | persistencia | 0.941 [0.844, 1.092] | +0.059 [−0.092, +0.156] |
+  | Ñielol pm10 | 16.82 | LightGBM | 0.931 [0.837, 1.161] | +0.131 [+0.025, +0.223] |
+  | Las Encinas pm10 | 20.73 | LightGBM | 1.114 [1.011, 1.287] | +0.110 [+0.021, +0.179] |
+  | **media** | **24.20** | | **1.030 [0.975, 1.176]** | **+0.027 [−0.029, +0.098]** |
+
+  PCA (secundario): 43.06, razón 1.826 [1.293, 2.037], skill −0.728 [−1.007, −0.096] (cumple la razón en 3/6).
+- **Veredicto D12** (único):
+  - Precisión: **cumple**. Razón ≤ 1.05 en 6/6 (ninguna serie con el intervalo entero sobre 1.05; Las Encinas pm10 queda en el borde, con el límite inferior en 1.011); PLC II con skill > 0 en ambas series (pm25 +0.001, marginal); piso cumplido en las 6 series.
+  - Interpretabilidad (§9, calculada en el cierre, todos los modos conservados como dominantes): **no cumple**. 5 modos (≤ 10), pero solo el diario (≈ 24.2 h) está en las 3 semillas y en ≥ 80 % del bootstrap, y sus vidas medias (288–361 h) no se solapan entre semillas.
+  - **Global: no cumple.**
+- **Interpretabilidad** (`notebooks/dmd_operador_global.ipynb`): espectro con intervalos, formas de modo y desfases por estación y contaminante, descomposición de episodios (en GRU por jacobiano del decoder), estabilidad. `K_ma` no aplica (rollout autónomo).
+- **Tiempo de CPU** (local, sin Training Jobs): ~8 min de pared para todas las etapas (base 6 s, 1.0 18 s, 1.1 27 s, 1.2 35 s, 1.3 126 s, 1.4 25 s, 1.5 64 s, 1.6 v2 113 s, cierre 64 s, test 18 s), más las corridas en seco. Costo AWS: solo S3.
+- **Observación para el arquitecto**: entre semillas solo el modo diario es identificable; los demás modos (lentos y de baja frecuencia) cambian con la semilla del AE. La precisión del operador lineal global ya está en el nivel de la mejor referencia; lo que falta es un espectro estable. Esto sirve para priorizar entre `deep-koopman` (K entrenable con un latente que fije los modos) y `dmd-localizado` (que necesita vidas medias medibles por encima del ruido bootstrap).
