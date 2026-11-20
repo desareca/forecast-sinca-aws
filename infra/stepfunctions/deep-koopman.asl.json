@@ -1,32 +1,17 @@
 {
-  "Comment": "deep-koopman: campaña de Training Jobs en serie con compuertas, pausas y avisos (D18).",
-  "StartAt": "Desde",
+  "Comment": "deep-koopman: campaña fija de Training Jobs en serie (F1, B, F2, F3, selección, cierre, test) con salto por marcador y avisos; sin ramas ni pausas (D18).",
+  "StartAt": "AvisoInicio",
   "States": {
-    "Desde": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.desde",
-          "StringEquals": "f2",
-          "Next": "F2"
-        },
-        {
-          "Variable": "$.desde",
-          "StringEquals": "f3",
-          "Next": "F3"
-        },
-        {
-          "Variable": "$.desde",
-          "StringEquals": "cierre",
-          "Next": "Cierre"
-        },
-        {
-          "Variable": "$.desde",
-          "StringEquals": "test",
-          "Next": "PausaTest"
-        }
-      ],
-      "Default": "F1"
+    "AvisoInicio": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: inicio",
+        "Message.$": "States.Format('Campaña {} iniciada (modo {}): F1, B, F2, F3, selección, cierre y test en serie.', $.campana, $.modo)"
+      },
+      "ResultPath": null,
+      "Next": "F1"
     },
     "F1": {
       "Type": "Map",
@@ -73,6 +58,10 @@
           },
           "F1Saltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
           "F1Job": {
@@ -124,132 +113,19 @@
               }
             ],
             "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "CompuertaF1"
-    },
-    "CompuertaF1": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_f1",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "CompuertaF1Marcador",
-        "States": {
-          "CompuertaF1Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "CompuertaF1Hecho"
+            "Next": "F1Lanzado"
           },
-          "CompuertaF1Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "CompuertaF1Saltar"
-              }
-            ],
-            "Default": "CompuertaF1Job"
-          },
-          "CompuertaF1Saltar": {
+          "F1Lanzado": {
             "Type": "Pass",
-            "End": true
-          },
-          "CompuertaF1Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
             "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
             },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
             "End": true
           }
         }
       },
-      "ResultPath": null,
-      "Next": "LeerF1"
-    },
-    "LeerF1": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${lambda_arn}",
-        "Payload": {
-          "modo": "rama",
-          "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.f1"
-        }
-      },
-      "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
-      },
-      "ResultPath": "$.dec_f1",
+      "ResultPath": "$.res_f1",
       "Next": "AvisoF1"
     },
     "AvisoF1": {
@@ -257,68 +133,15 @@
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta f1",
-        "Message.$": "States.Format('Compuerta f1 (campaña {}): rama {}. {}', $.campana, $.dec_f1.rama, $.dec_f1.resumen)"
+        "Subject": "deep-koopman: fin de F1",
+        "Message.$": "States.Format('Fase F1 terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_f1))"
       },
       "ResultPath": null,
-      "Next": "RamaF1"
+      "Next": "B"
     },
-    "RamaF1": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "pasa",
-          "Next": "F2"
-        },
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "b1",
-          "Next": "B1"
-        },
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "b2",
-          "Next": "B2"
-        },
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "b3",
-          "Next": "B3"
-        },
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "b4",
-          "Next": "B4"
-        },
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "c",
-          "Next": "PausaC"
-        },
-        {
-          "Variable": "$.dec_f1.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaF1"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaF1": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras F1)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras F1', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_f1",
-      "Next": "RamaF1"
-    },
-    "B1": {
+    "B": {
       "Type": "Map",
-      "ItemsPath": "$.fases.b1",
+      "ItemsPath": "$.fases.b",
       "MaxConcurrency": 1,
       "ItemSelector": {
         "item.$": "$$.Map.Item.Value",
@@ -329,9 +152,9 @@
         "ProcessorConfig": {
           "Mode": "INLINE"
         },
-        "StartAt": "B1Marcador",
+        "StartAt": "BMarcador",
         "States": {
-          "B1Marcador": {
+          "BMarcador": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
@@ -346,24 +169,28 @@
               "existe.$": "$.Payload.existe"
             },
             "ResultPath": "$.marcador",
-            "Next": "B1Hecho"
+            "Next": "BHecho"
           },
-          "B1Hecho": {
+          "BHecho": {
             "Type": "Choice",
             "Choices": [
               {
                 "Variable": "$.marcador.existe",
                 "BooleanEquals": true,
-                "Next": "B1Saltar"
+                "Next": "BSaltar"
               }
             ],
-            "Default": "B1Job"
+            "Default": "BJob"
           },
-          "B1Saltar": {
+          "BSaltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
-          "B1Job": {
+          "BJob": {
             "Type": "Task",
             "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
             "Parameters": {
@@ -412,1083 +239,31 @@
               }
             ],
             "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "CompuertaB1"
-    },
-    "CompuertaB1": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_b1",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "CompuertaB1Marcador",
-        "States": {
-          "CompuertaB1Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "CompuertaB1Hecho"
+            "Next": "BLanzado"
           },
-          "CompuertaB1Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "CompuertaB1Saltar"
-              }
-            ],
-            "Default": "CompuertaB1Job"
-          },
-          "CompuertaB1Saltar": {
+          "BLanzado": {
             "Type": "Pass",
-            "End": true
-          },
-          "CompuertaB1Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
             "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
             },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
             "End": true
           }
         }
       },
-      "ResultPath": null,
-      "Next": "LeerB1"
+      "ResultPath": "$.res_b",
+      "Next": "AvisoB"
     },
-    "LeerB1": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${lambda_arn}",
-        "Payload": {
-          "modo": "rama",
-          "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.b1"
-        }
-      },
-      "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
-      },
-      "ResultPath": "$.dec_b1",
-      "Next": "AvisoB1"
-    },
-    "AvisoB1": {
+    "AvisoB": {
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta b1",
-        "Message.$": "States.Format('Compuerta b1 (campaña {}): rama {}. {}', $.campana, $.dec_b1.rama, $.dec_b1.resumen)"
+        "Subject": "deep-koopman: fin de B",
+        "Message.$": "States.Format('Fase B terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_b))"
       },
       "ResultPath": null,
-      "Next": "RamaB1"
-    },
-    "RamaB1": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "pasa",
-          "Next": "F2"
-        },
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "b1",
-          "Next": "B1"
-        },
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "b2",
-          "Next": "B2"
-        },
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "b3",
-          "Next": "B3"
-        },
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "b4",
-          "Next": "B4"
-        },
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "c",
-          "Next": "PausaC"
-        },
-        {
-          "Variable": "$.dec_b1.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaB1"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaB1": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras B1)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras B1', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_b1",
-      "Next": "RamaB1"
-    },
-    "B2": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.b2",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "B2Marcador",
-        "States": {
-          "B2Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "B2Hecho"
-          },
-          "B2Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "B2Saltar"
-              }
-            ],
-            "Default": "B2Job"
-          },
-          "B2Saltar": {
-            "Type": "Pass",
-            "End": true
-          },
-          "B2Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
-            "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
-            },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "CompuertaB2"
-    },
-    "CompuertaB2": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_b2",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "CompuertaB2Marcador",
-        "States": {
-          "CompuertaB2Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "CompuertaB2Hecho"
-          },
-          "CompuertaB2Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "CompuertaB2Saltar"
-              }
-            ],
-            "Default": "CompuertaB2Job"
-          },
-          "CompuertaB2Saltar": {
-            "Type": "Pass",
-            "End": true
-          },
-          "CompuertaB2Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
-            "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
-            },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "LeerB2"
-    },
-    "LeerB2": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${lambda_arn}",
-        "Payload": {
-          "modo": "rama",
-          "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.b2"
-        }
-      },
-      "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
-      },
-      "ResultPath": "$.dec_b2",
-      "Next": "AvisoB2"
-    },
-    "AvisoB2": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta b2",
-        "Message.$": "States.Format('Compuerta b2 (campaña {}): rama {}. {}', $.campana, $.dec_b2.rama, $.dec_b2.resumen)"
-      },
-      "ResultPath": null,
-      "Next": "RamaB2"
-    },
-    "RamaB2": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "pasa",
-          "Next": "F2"
-        },
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "b1",
-          "Next": "B1"
-        },
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "b2",
-          "Next": "B2"
-        },
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "b3",
-          "Next": "B3"
-        },
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "b4",
-          "Next": "B4"
-        },
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "c",
-          "Next": "PausaC"
-        },
-        {
-          "Variable": "$.dec_b2.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaB2"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaB2": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras B2)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras B2', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_b2",
-      "Next": "RamaB2"
-    },
-    "B3": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.b3",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "B3Marcador",
-        "States": {
-          "B3Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "B3Hecho"
-          },
-          "B3Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "B3Saltar"
-              }
-            ],
-            "Default": "B3Job"
-          },
-          "B3Saltar": {
-            "Type": "Pass",
-            "End": true
-          },
-          "B3Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
-            "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
-            },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "CompuertaB3"
-    },
-    "CompuertaB3": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_b3",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "CompuertaB3Marcador",
-        "States": {
-          "CompuertaB3Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "CompuertaB3Hecho"
-          },
-          "CompuertaB3Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "CompuertaB3Saltar"
-              }
-            ],
-            "Default": "CompuertaB3Job"
-          },
-          "CompuertaB3Saltar": {
-            "Type": "Pass",
-            "End": true
-          },
-          "CompuertaB3Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
-            "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
-            },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "LeerB3"
-    },
-    "LeerB3": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${lambda_arn}",
-        "Payload": {
-          "modo": "rama",
-          "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.b3"
-        }
-      },
-      "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
-      },
-      "ResultPath": "$.dec_b3",
-      "Next": "AvisoB3"
-    },
-    "AvisoB3": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta b3",
-        "Message.$": "States.Format('Compuerta b3 (campaña {}): rama {}. {}', $.campana, $.dec_b3.rama, $.dec_b3.resumen)"
-      },
-      "ResultPath": null,
-      "Next": "RamaB3"
-    },
-    "RamaB3": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "pasa",
-          "Next": "F2"
-        },
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "b1",
-          "Next": "B1"
-        },
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "b2",
-          "Next": "B2"
-        },
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "b3",
-          "Next": "B3"
-        },
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "b4",
-          "Next": "B4"
-        },
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "c",
-          "Next": "PausaC"
-        },
-        {
-          "Variable": "$.dec_b3.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaB3"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaB3": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras B3)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras B3', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_b3",
-      "Next": "RamaB3"
-    },
-    "B4": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.b4",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "B4Marcador",
-        "States": {
-          "B4Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "B4Hecho"
-          },
-          "B4Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "B4Saltar"
-              }
-            ],
-            "Default": "B4Job"
-          },
-          "B4Saltar": {
-            "Type": "Pass",
-            "End": true
-          },
-          "B4Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
-            "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
-            },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "CompuertaB4"
-    },
-    "CompuertaB4": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_b4",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "CompuertaB4Marcador",
-        "States": {
-          "CompuertaB4Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "CompuertaB4Hecho"
-          },
-          "CompuertaB4Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "CompuertaB4Saltar"
-              }
-            ],
-            "Default": "CompuertaB4Job"
-          },
-          "CompuertaB4Saltar": {
-            "Type": "Pass",
-            "End": true
-          },
-          "CompuertaB4Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
-            "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
-            },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "LeerB4"
-    },
-    "LeerB4": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${lambda_arn}",
-        "Payload": {
-          "modo": "rama",
-          "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.b4"
-        }
-      },
-      "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
-      },
-      "ResultPath": "$.dec_b4",
-      "Next": "AvisoB4"
-    },
-    "AvisoB4": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta b4",
-        "Message.$": "States.Format('Compuerta b4 (campaña {}): rama {}. {}', $.campana, $.dec_b4.rama, $.dec_b4.resumen)"
-      },
-      "ResultPath": null,
-      "Next": "RamaB4"
-    },
-    "RamaB4": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "pasa",
-          "Next": "F2"
-        },
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "b1",
-          "Next": "B1"
-        },
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "b2",
-          "Next": "B2"
-        },
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "b3",
-          "Next": "B3"
-        },
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "b4",
-          "Next": "B4"
-        },
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "c",
-          "Next": "PausaC"
-        },
-        {
-          "Variable": "$.dec_b4.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaB4"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaB4": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras B4)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras B4', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_b4",
-      "Next": "RamaB4"
-    },
-    "PausaC": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta fallida tras B4 (C1/C2)",
-        "Message.$": "States.Format('La compuerta falló tras B4 en la campaña {}. Elegir C1 o C2 (requiere tareas nuevas). Para cerrar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"c\"\\}\\' --profile <AWS_PROFILE>', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_c",
-      "Next": "RequiereTareasNuevas"
-    },
-    "RequiereTareasNuevas": {
-      "Type": "Fail",
-      "Error": "RequiereTareasNuevas",
-      "Cause": "Compuerta de identificabilidad fallida tras B4: C1/C2 requieren tareas nuevas."
-    },
-    "RamaInvalida": {
-      "Type": "Fail",
-      "Error": "RamaInvalida",
-      "Cause": "Rama fuera de la lista permitida para la fase."
+      "Next": "F2"
     },
     "F2": {
       "Type": "Map",
@@ -1535,6 +310,10 @@
           },
           "F2Saltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
           "F2Job": {
@@ -1586,132 +365,19 @@
               }
             ],
             "ResultPath": null,
-            "End": true
-          }
-        }
-      },
-      "ResultPath": null,
-      "Next": "CompuertaF2"
-    },
-    "CompuertaF2": {
-      "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_f2",
-      "MaxConcurrency": 1,
-      "ItemSelector": {
-        "item.$": "$$.Map.Item.Value",
-        "comun.$": "$.comun",
-        "campana.$": "$.campana"
-      },
-      "ItemProcessor": {
-        "ProcessorConfig": {
-          "Mode": "INLINE"
-        },
-        "StartAt": "CompuertaF2Marcador",
-        "States": {
-          "CompuertaF2Marcador": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName": "${lambda_arn}",
-              "Payload": {
-                "modo": "estado_job",
-                "bucket.$": "$.comun.bucket",
-                "key.$": "$.item.marcador"
-              }
-            },
-            "ResultSelector": {
-              "existe.$": "$.Payload.existe"
-            },
-            "ResultPath": "$.marcador",
-            "Next": "CompuertaF2Hecho"
+            "Next": "F2Lanzado"
           },
-          "CompuertaF2Hecho": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.marcador.existe",
-                "BooleanEquals": true,
-                "Next": "CompuertaF2Saltar"
-              }
-            ],
-            "Default": "CompuertaF2Job"
-          },
-          "CompuertaF2Saltar": {
+          "F2Lanzado": {
             "Type": "Pass",
-            "End": true
-          },
-          "CompuertaF2Job": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
             "Parameters": {
-              "TrainingJobName.$": "$.item.nombre",
-              "AlgorithmSpecification": {
-                "TrainingImage.$": "$.comun.imagen",
-                "TrainingInputMode": "File"
-              },
-              "RoleArn.$": "$.comun.rol",
-              "HyperParameters.$": "$.item.hp",
-              "ResourceConfig": {
-                "InstanceCount": 1,
-                "InstanceType.$": "$.comun.instancia",
-                "VolumeSizeInGB": 30
-              },
-              "StoppingCondition": {
-                "MaxRuntimeInSeconds.$": "$.item.max_run"
-              },
-              "OutputDataConfig": {
-                "S3OutputPath.$": "$.comun.salida"
-              },
-              "CheckpointConfig": {
-                "S3Uri.$": "$.item.ckpt_uri",
-                "LocalPath": "/opt/ml/checkpoints"
-              },
-              "Tags": [
-                {
-                  "Key": "proyecto",
-                  "Value": "sinca"
-                },
-                {
-                  "Key": "campana",
-                  "Value.$": "$.campana"
-                }
-              ]
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
             },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "SageMaker.AmazonSageMakerException",
-                  "SageMaker.ResourceLimitExceededException"
-                ],
-                "IntervalSeconds": 300,
-                "MaxAttempts": 2,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
             "End": true
           }
         }
       },
-      "ResultPath": null,
-      "Next": "LeerF2"
-    },
-    "LeerF2": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${lambda_arn}",
-        "Payload": {
-          "modo": "rama",
-          "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.f2"
-        }
-      },
-      "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
-      },
-      "ResultPath": "$.dec_f2",
+      "ResultPath": "$.res_f2",
       "Next": "AvisoF2"
     },
     "AvisoF2": {
@@ -1719,39 +385,11 @@
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta f2",
-        "Message.$": "States.Format('Compuerta f2 (campaña {}): rama {}. {}', $.campana, $.dec_f2.rama, $.dec_f2.resumen)"
+        "Subject": "deep-koopman: fin de F2",
+        "Message.$": "States.Format('Fase F2 terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_f2))"
       },
       "ResultPath": null,
-      "Next": "RamaF2"
-    },
-    "RamaF2": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_f2.rama",
-          "StringEquals": "continuar",
-          "Next": "F3"
-        },
-        {
-          "Variable": "$.dec_f2.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaF2"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaF2": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras F2)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras F2', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_f2",
-      "Next": "RamaF2"
+      "Next": "F3"
     },
     "F3": {
       "Type": "Map",
@@ -1798,6 +436,10 @@
           },
           "F3Saltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
           "F3Job": {
@@ -1849,16 +491,35 @@
               }
             ],
             "ResultPath": null,
+            "Next": "F3Lanzado"
+          },
+          "F3Lanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
             "End": true
           }
         }
       },
-      "ResultPath": null,
-      "Next": "CompuertaF3"
+      "ResultPath": "$.res_f3",
+      "Next": "AvisoF3"
     },
-    "CompuertaF3": {
+    "AvisoF3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: fin de F3",
+        "Message.$": "States.Format('Fase F3 terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_f3))"
+      },
+      "ResultPath": null,
+      "Next": "Seleccion"
+    },
+    "Seleccion": {
       "Type": "Map",
-      "ItemsPath": "$.fases.compuerta_f3",
+      "ItemsPath": "$.fases.seleccion",
       "MaxConcurrency": 1,
       "ItemSelector": {
         "item.$": "$$.Map.Item.Value",
@@ -1869,9 +530,9 @@
         "ProcessorConfig": {
           "Mode": "INLINE"
         },
-        "StartAt": "CompuertaF3Marcador",
+        "StartAt": "SeleccionMarcador",
         "States": {
-          "CompuertaF3Marcador": {
+          "SeleccionMarcador": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
             "Parameters": {
@@ -1886,24 +547,28 @@
               "existe.$": "$.Payload.existe"
             },
             "ResultPath": "$.marcador",
-            "Next": "CompuertaF3Hecho"
+            "Next": "SeleccionHecho"
           },
-          "CompuertaF3Hecho": {
+          "SeleccionHecho": {
             "Type": "Choice",
             "Choices": [
               {
                 "Variable": "$.marcador.existe",
                 "BooleanEquals": true,
-                "Next": "CompuertaF3Saltar"
+                "Next": "SeleccionSaltar"
               }
             ],
-            "Default": "CompuertaF3Job"
+            "Default": "SeleccionJob"
           },
-          "CompuertaF3Saltar": {
+          "SeleccionSaltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
-          "CompuertaF3Job": {
+          "SeleccionJob": {
             "Type": "Task",
             "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
             "Parameters": {
@@ -1952,69 +617,48 @@
               }
             ],
             "ResultPath": null,
+            "Next": "SeleccionLanzado"
+          },
+          "SeleccionLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
             "End": true
           }
         }
       },
-      "ResultPath": null,
-      "Next": "LeerF3"
+      "ResultPath": "$.res_seleccion",
+      "Next": "ResumenSeleccion"
     },
-    "LeerF3": {
+    "ResumenSeleccion": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${lambda_arn}",
         "Payload": {
-          "modo": "rama",
+          "modo": "resumen",
           "bucket.$": "$.comun.bucket",
-          "key.$": "$.decisiones.f3"
+          "key.$": "$.resumenes.seleccion"
         }
       },
       "ResultSelector": {
-        "rama.$": "$.Payload.rama",
-        "resumen.$": "$.Payload.resumen"
+        "texto.$": "$.Payload.texto"
       },
-      "ResultPath": "$.dec_f3",
-      "Next": "AvisoF3"
+      "ResultPath": "$.txt_seleccion",
+      "Next": "AvisoSeleccion"
     },
-    "AvisoF3": {
+    "AvisoSeleccion": {
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: compuerta f3",
-        "Message.$": "States.Format('Compuerta f3 (campaña {}): rama {}. {}', $.campana, $.dec_f3.rama, $.dec_f3.resumen)"
+        "Subject": "deep-koopman: selección",
+        "Message.$": "States.Format('Selección (campaña {}): {}', $.campana, $.txt_seleccion.texto)"
       },
       "ResultPath": null,
-      "Next": "RamaF3"
-    },
-    "RamaF3": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dec_f3.rama",
-          "StringEquals": "continuar",
-          "Next": "Cierre"
-        },
-        {
-          "Variable": "$.dec_f3.rama",
-          "StringEquals": "pausa",
-          "Next": "PausaF3"
-        }
-      ],
-      "Default": "RamaInvalida"
-    },
-    "PausaF3": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (rama pausa tras F3)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'rama pausa tras F3', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_f3",
-      "Next": "RamaF3"
+      "Next": "Cierre"
     },
     "Cierre": {
       "Type": "Map",
@@ -2061,6 +705,10 @@
           },
           "CierreSaltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
           "CierreJob": {
@@ -2112,11 +760,36 @@
               }
             ],
             "ResultPath": null,
+            "Next": "CierreLanzado"
+          },
+          "CierreLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
             "End": true
           }
         }
       },
-      "ResultPath": null,
+      "ResultPath": "$.res_cierre",
+      "Next": "ResumenCierre"
+    },
+    "ResumenCierre": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${lambda_arn}",
+        "Payload": {
+          "modo": "resumen",
+          "bucket.$": "$.comun.bucket",
+          "key.$": "$.resumenes.cierre"
+        }
+      },
+      "ResultSelector": {
+        "texto.$": "$.Payload.texto"
+      },
+      "ResultPath": "$.txt_cierre",
       "Next": "AvisoCierre"
     },
     "AvisoCierre": {
@@ -2124,22 +797,10 @@
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: cierre listo",
-        "Message.$": "States.Format('Cierre terminado en la campaña {}. Sigue la pausa antes de test.', $.campana)"
+        "Subject": "deep-koopman: cierre",
+        "Message.$": "States.Format('Cierre (campaña {}): {}', $.campana, $.txt_cierre.texto)"
       },
       "ResultPath": null,
-      "Next": "PausaTest"
-    },
-    "PausaTest": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
-      "Parameters": {
-        "TopicArn": "${topic_arn}",
-        "Subject": "deep-koopman: pausa (antes de test)",
-        "Message.$": "States.Format('Pausa ({}) en la campaña {}. Para continuar: aws stepfunctions send-task-success --task-token {} --task-output \\'\\{\"rama\": \"<rama>\"\\}\\' --profile <AWS_PROFILE> (o send-task-failure para abortar).', 'antes de test', $.campana, $$.Task.Token)"
-      },
-      "TimeoutSeconds": 604800,
-      "ResultPath": "$.dec_test",
       "Next": "Test"
     },
     "Test": {
@@ -2187,6 +848,10 @@
           },
           "TestSaltar": {
             "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
             "End": true
           },
           "TestJob": {
@@ -2238,11 +903,36 @@
               }
             ],
             "ResultPath": null,
+            "Next": "TestLanzado"
+          },
+          "TestLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
             "End": true
           }
         }
       },
-      "ResultPath": null,
+      "ResultPath": "$.res_test",
+      "Next": "ResumenTest"
+    },
+    "ResumenTest": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${lambda_arn}",
+        "Payload": {
+          "modo": "resumen",
+          "bucket.$": "$.comun.bucket",
+          "key.$": "$.resumenes.test"
+        }
+      },
+      "ResultSelector": {
+        "texto.$": "$.Payload.texto"
+      },
+      "ResultPath": "$.txt_test",
       "Next": "AvisoFinal"
     },
     "AvisoFinal": {
@@ -2251,7 +941,7 @@
       "Parameters": {
         "TopicArn": "${topic_arn}",
         "Subject": "deep-koopman: test terminado",
-        "Message.$": "States.Format('Test terminado en la campaña {}. Veredicto D12 en model-artifacts/deep-koopman/{}/ (test_resumen.json del job de test).', $.campana, $.campana)"
+        "Message.$": "States.Format('Campaña {} terminada. {}', $.campana, $.txt_test.texto)"
       },
       "ResultPath": null,
       "Next": "Fin"

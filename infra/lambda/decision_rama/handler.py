@@ -1,13 +1,13 @@
-"""Lambda de la orquestación de `deep-koopman` (D18). Sin reglas de decisión.
+"""Lambda de la orquestación de `deep-koopman` (D18). Sin reglas de decisión (viven en `seleccion.py`).
 
-- `modo = "rama"`: lee el JSON de decisión que escribió el job de compuerta, valida `rama` contra la
-  lista permitida y devuelve `{rama, resumen}`.
 - `modo = "estado_job"`: `HeadObject` del marcador de éxito del job: existe -> `{"existe": true}`,
   404 -> `{"existe": false}`; cualquier otro error falla la tarea.
+- `modo = "resumen"`: lee un JSON del prefijo de orquestación (`seleccion.json`, `cierre.json`, `test.json`)
+  y devuelve `{"texto": ...}` para el aviso SNS: su campo `resumen` si lo trae, si no el JSON; ≤ 800 caracteres.
 """
 import json
 
-RAMAS = ("pasa", "b1", "b2", "b3", "b4", "c", "pausa", "continuar")
+MAX_TEXTO = 800
 
 _S3 = None
 
@@ -19,23 +19,6 @@ def _s3():
 
         _S3 = boto3.client("s3")
     return _S3
-
-
-class RamaInvalida(Exception):
-    pass
-
-
-def leer_rama(evento, s3):
-    obj = s3.get_object(Bucket=evento["bucket"], Key=evento["key"])
-    decision = json.loads(obj["Body"].read())
-    rama = decision.get("rama")
-    if rama not in RAMAS:
-        raise RamaInvalida(f"Rama no permitida en {evento['key']}: {rama!r}")
-    resumen = decision.get("motivo", "")
-    cifras = decision.get("cifras")
-    if cifras:
-        resumen = f"{resumen} | cifras: {json.dumps(cifras, ensure_ascii=False)[:800]}"
-    return {"rama": rama, "resumen": resumen}
 
 
 def estado_job(evento, s3):
@@ -51,11 +34,20 @@ def estado_job(evento, s3):
     return {"existe": True}
 
 
+def resumen(evento, s3):
+    obj = s3.get_object(Bucket=evento["bucket"], Key=evento["key"])
+    contenido = json.loads(obj["Body"].read())
+    texto = contenido.get("resumen") if isinstance(contenido, dict) else None
+    if not isinstance(texto, str) or not texto:
+        texto = json.dumps(contenido, ensure_ascii=False, default=str)
+    return {"texto": texto[:MAX_TEXTO]}
+
+
 def handler(evento, contexto=None, s3=None):
     s3 = s3 or _s3()
     modo = evento.get("modo")
-    if modo == "rama":
-        return leer_rama(evento, s3)
     if modo == "estado_job":
         return estado_job(evento, s3)
+    if modo == "resumen":
+        return resumen(evento, s3)
     raise ValueError(f"Modo desconocido: {modo!r}")

@@ -1,13 +1,12 @@
-"""Tarea 7.1: la máquina de estados (ASL) cumple D18."""
+"""Tareas 7.1 y 7.8: la máquina de estados (ASL) cumple D18 (campaña fija, sin ramas ni pausas)."""
 import json
 import pathlib
 import re
 
-import pytest
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ASL = ROOT / "infra" / "stepfunctions" / "deep-koopman.asl.json"
 ERRORES_D18 = {"SageMaker.AmazonSageMakerException", "SageMaker.ResourceLimitExceededException"}
+FASES = ["F1", "B", "F2", "F3", "Seleccion", "Cierre", "Test"]
 
 
 def _render():
@@ -36,7 +35,18 @@ def _siguientes(st):
     return out
 
 
-def test_referencias_validas():
+def _alcanzables(s, inicio, evitar=()):
+    vistos, pila = set(), [inicio]
+    while pila:
+        n = pila.pop()
+        if n in vistos or n in evitar:
+            continue
+        vistos.add(n)
+        pila += _siguientes(s[n])
+    return vistos
+
+
+def test_referencias_validas_y_nombres_unicos():
     asl = _render()
     s = asl["States"]
     assert asl["StartAt"] in s
@@ -48,23 +58,34 @@ def test_referencias_validas():
             for st2 in inner.values():
                 for n in _siguientes(st2):
                     assert n in inner
+    nombres = [n.split("/")[-1] for n, _ in _todos(s)]
+    assert len(nombres) == len(set(nombres))
+    assert _alcanzables(s, asl["StartAt"]) == set(s)  # sin estados huérfanos
 
 
 def test_maps_en_serie_y_jobs_con_marcador_y_checkpoint():
     asl = _render()
-    maps = [st for _, st in _todos(asl["States"]) if st["Type"] == "Map"]
-    assert maps and all(st.get("MaxConcurrency") == 1 for st in maps)
-    for st in maps:
+    maps = {n: st for n, st in asl["States"].items() if st["Type"] == "Map"}
+    assert list(maps) == FASES and all(st["MaxConcurrency"] == 1 for st in maps.values())
+    for nombre, st in maps.items():
+        assert st["ItemsPath"] == f"$.fases.{nombre.lower() if nombre != 'Seleccion' else 'seleccion'}"
         inner = st["ItemProcessor"]
         ini = inner["States"][inner["StartAt"]]
-        assert inner["StartAt"].endswith("Marcador") and ini["Parameters"]["Payload"]["modo"] == "estado_job"
+        assert ini["Parameters"]["Payload"]["modo"] == "estado_job"
         hecho = inner["States"][ini["Next"]]
         job = inner["States"][hecho["Default"]]
-        assert job["Resource"].endswith("createTrainingJob.sync")  # todo job precedido por el chequeo del marcador
-    nombres = [n.split("/")[-1] for n, _ in _todos(asl["States"])]
-    assert len(nombres) == len(set(nombres))  # nombres únicos en toda la máquina
-    jobs = [st for _, st in _todos(asl["States"]) if st.get("Resource", "").endswith("createTrainingJob.sync")]
-    assert jobs and all("CheckpointConfig" in st["Parameters"] for st in jobs)
+        assert job["Resource"].endswith("createTrainingJob.sync") and "CheckpointConfig" in job["Parameters"]
+
+
+def test_sin_pausas_ni_ramas():
+    todos = list(_todos(_render()["States"]))
+    assert not any("waitForTaskToken" in st.get("Resource", "") for _, st in todos)
+    choices = [(n, st) for n, st in todos if st["Type"] == "Choice"]
+    assert len(choices) == len(FASES)  # el único Choice es el salto por marcador, uno por Map
+    for n, st in choices:
+        assert "/" in n and [c["Variable"] for c in st["Choices"]] == ["$.marcador.existe"]
+    lambdas = [st["Parameters"]["Payload"]["modo"] for _, st in todos if st.get("Resource", "").endswith("lambda:invoke")]
+    assert set(lambdas) == {"estado_job", "resumen"}
 
 
 def test_retry_solo_transitorios():
@@ -74,26 +95,26 @@ def test_retry_solo_transitorios():
             assert r["MaxAttempts"] <= 2
 
 
-def test_test_solo_tras_la_pausa():
-    s = _render()["States"]
-    assert s["PausaTest"]["Resource"].endswith("waitForTaskToken") and s["PausaTest"]["TimeoutSeconds"] == 604800
-    # alcanzabilidad sin pasar por PausaTest
-    vistos, pila = set(), [_render()["StartAt"]]
-    while pila:
-        n = pila.pop()
-        if n in vistos or n == "PausaTest":
-            continue
-        vistos.add(n)
-        pila += _siguientes(s[n])
-    assert "Test" not in vistos and "Cierre" in vistos
+def test_orden_y_test_solo_tras_seleccion_y_cierre():
+    asl = _render()
+    s = asl["States"]
+    assert "Test" not in _alcanzables(s, asl["StartAt"], evitar={"Seleccion"})
+    assert "Test" not in _alcanzables(s, asl["StartAt"], evitar={"Cierre"})
+    assert "Cierre" not in _alcanzables(s, asl["StartAt"], evitar={"Seleccion"})
+    orden, n = [], asl["StartAt"]
+    while s[n]["Type"] != "Succeed":
+        if s[n]["Type"] == "Map":
+            orden.append(n)
+        n = s[n]["Next"]
+    assert orden == FASES
 
 
-def test_pausas_y_avisos():
+def test_avisos():
     s = _render()["States"]
-    pausas = [n for n, st in s.items() if st.get("Resource", "").endswith("sns:publish.waitForTaskToken")]
-    assert {"PausaF1", "PausaC", "PausaTest"} <= set(pausas)
-    for n in pausas:
-        assert "$$.Task.Token" in s[n]["Parameters"]["Message.$"]
-    avisos = [n for n, st in s.items() if st.get("Resource", "").endswith("sns:publish")]
-    assert {"AvisoF1", "AvisoF3", "AvisoCierre", "AvisoFinal"} <= set(avisos)
-    assert s["RamaF1"]["Default"] == "RamaInvalida" and s["RamaInvalida"]["Type"] == "Fail"
+    avisos = {n for n, st in s.items() if st.get("Resource", "").endswith("sns:publish")}
+    assert {"AvisoInicio", "AvisoF1", "AvisoB", "AvisoF2", "AvisoF3", "AvisoSeleccion", "AvisoCierre", "AvisoFinal"} <= avisos
+    for f in ("F1", "B", "F2", "F3"):
+        assert f"$.res_{f.lower()}" in s[f"Aviso{f}"]["Parameters"]["Message.$"]  # jobs lanzados y saltados
+    for cual, aviso in (("seleccion", "AvisoSeleccion"), ("cierre", "AvisoCierre"), ("test", "AvisoFinal")):
+        assert s[f"Resumen{cual.capitalize()}"]["Parameters"]["Payload"]["key.$"] == f"$.resumenes.{cual}"
+        assert f"$.txt_{cual}.texto" in s[aviso]["Parameters"]["Message.$"]

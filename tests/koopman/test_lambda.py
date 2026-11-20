@@ -1,4 +1,4 @@
-"""Tarea 7.2: Lambda de decisión (S3 falso)."""
+"""Tareas 7.2 y 7.9: Lambda reducida a `estado_job` y `resumen` (S3 falso)."""
 import importlib.util
 import json
 import pathlib
@@ -14,14 +14,28 @@ H = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(H)
 
 
-def test_rama_valida_y_desconocida():
+def test_resumen_de_seleccion_y_sin_modo_rama():
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from koopman import seleccion as S
+
+    rng = np.random.default_rng(0)
+
+    def c(fase, media):
+        return {f"{fase}-gru": {"fase": fase, "encoder": "gru", "variante": "principal", "identificable": False,
+                                "puntaje": SimpleNamespace(media=media, media_boot=media + 0.3 * rng.normal(size=2000)),
+                                "runs": {0: "r"}}}
+
     s3 = FakeS3()
-    s3.objects["d/f1.json"] = json.dumps({"rama": "b1", "motivo": "falla", "cifras": {"gru": {"wrmse": 30}}}).encode()
-    out = H.handler({"modo": "rama", "bucket": "b", "key": "d/f1.json"}, s3=s3)
-    assert out["rama"] == "b1" and "falla" in out["resumen"]
-    s3.objects["d/f2.json"] = json.dumps({"rama": "otra"}).encode()
-    with pytest.raises(H.RamaInvalida):
-        H.handler({"modo": "rama", "bucket": "b", "key": "d/f2.json"}, s3=s3)
+    key = S.escribir(S.seleccionar({**c("f1", 30.0), **c("f2", 20.0)}), s3, "b", "camp", "seleccion")
+    out = H.handler({"modo": "resumen", "bucket": "b", "key": key}, s3=s3)
+    assert out["texto"].startswith("Seleccionada f2-gru") and len(out["texto"]) <= H.MAX_TEXTO
+    s3.objects["d/x.json"] = json.dumps({"tabla": ["y" * 50] * 40}).encode()  # sin `resumen`: el JSON recortado
+    assert len(H.handler({"modo": "resumen", "bucket": "b", "key": "d/x.json"}, s3=s3)["texto"]) == H.MAX_TEXTO
+    with pytest.raises(ValueError):
+        H.handler({"modo": "rama", "bucket": "b", "key": key}, s3=s3)
 
 
 def test_marcador_presente_ausente_y_403():
