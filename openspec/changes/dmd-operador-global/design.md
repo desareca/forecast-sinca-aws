@@ -137,6 +137,15 @@ su `n`, sin recortar las del resto. Target: `features.build` (`mean(MP(t+1…t+2
   `sel` mientras ese empeoramiento no supere el intervalo bootstrap emparejado; se detiene en el
   primer empeoramiento significativo. Si quedan > 10 modos, se registra (criterio) y decide el
   operador. `d = 16` fijo.
+- **Enmienda del operador, pausa 8.3 (2026-11-19)** — reemplaza la regla 1.6 anterior: (a) PCA y AE
+  parten de rango completo (16); GD solo se reporta. (b) La eliminación compara cada candidato contra
+  la configuración inicial de 1.6 (no contra el paso previo): se quita el modo de menor empeoramiento
+  mientras el intervalo de `candidato − inicial` contenga 0 o quede bajo 0; en el primer paso
+  significativamente peor se detiene y conserva el previo. (c) El par de período ≈ 24 h nunca se
+  elimina (el target de 24 h lo cancela); sus armónicos (≈ 12 h, ≈ 8 h) solo se protegen si aparecen
+  en ≥ 80 % del bootstrap por modo. (d) Candidato oficial = GRU (Duan, autónomo, horario, exacto,
+  modos de 1.6), apartándose del desempate "más simple"; PCA va a test como dato secundario, sin
+  efecto en el veredicto.
 - La lectura es una propuesta: la decisión es del operador en cada pausa y queda en
   `decisiones.json` (`etapa`, ganador, configuración, fecha, nota). La CLI rechaza una etapa si la
   anterior no tiene decisión.
@@ -161,6 +170,8 @@ su `n`, sin recortar las del resto. Target: `features.build` (`mean(MP(t+1…t+2
   del operador). Asimetría asumida: el AE conserva normalización y encoder hasta 2026-02.
 - Rango `r` y modos de 1.6 se fijan: el operador reajustado se empareja (húngaro, D8) con los modos
   seleccionados en `sel` y se conservan los emparejados; no se re-selecciona.
+- Enmienda del operador (pausa 8.3): se reajustan y evalúan GRU (oficial, 3 semillas; veredicto con la
+  media de semillas) y PCA (secundario, sin veredicto).
 - Referencias de test: `lightgbm-v1` holdout (mismo corte) y persistencia calculada en el mismo
   proceso; filas comunes. Una sola evaluación; la CLI rechaza repetirla sin `--force-test`.
 - Rolling de 12 ventanas solo si gana Hankel/PCA, como dato adicional (no elige).

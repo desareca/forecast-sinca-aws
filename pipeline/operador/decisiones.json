@@ -87,5 +87,115 @@
     },
     "fecha": "2026-11-19",
     "nota": "Decidido por regla D9 (delegado): recorte = exacto (dif. ~0); fbDMD peor (PCA +3.98 [−0.67, +9.49]; GRU +4.28 [+2.75, +6.55]); queda el más simple (exacto)."
+  },
+  "1.6": {
+    "ganador": "gru (oficial); pca secundario",
+    "config": {
+      "representaciones": [
+        "gru",
+        "pca"
+      ],
+      "oficial": "gru",
+      "secundarias": [
+        "pca"
+      ],
+      "principal": "gru",
+      "pesos": false,
+      "duan": true,
+      "rollout": "autonomo",
+      "horizonte": "horario",
+      "estimador": "exacto",
+      "rank": {},
+      "modos": {
+        "pca": [
+          [
+            0.9659486155295014,
+            0.2556814062695274
+          ],
+          [
+            0.9985965533325917,
+            0.0
+          ],
+          [
+            0.9975858914527252,
+            0.0
+          ]
+        ],
+        "gru-s0": [
+          [
+            0.964266402961822,
+            0.25646916289073507
+          ],
+          [
+            0.9947102692905154,
+            0.013492722635018141
+          ],
+          [
+            0.9893338726464481,
+            0.0
+          ],
+          [
+            0.9984204657269722,
+            0.0
+          ],
+          [
+            0.9951078935829518,
+            0.0019802571196807974
+          ]
+        ],
+        "gru-s1": [
+          [
+            0.9648895787909777,
+            0.2553028462362163
+          ],
+          [
+            0.9841911985300904,
+            0.023808548343002896
+          ],
+          [
+            0.9947941555579678,
+            0.010338338946024444
+          ],
+          [
+            0.9920196345857459,
+            0.003038711800256374
+          ],
+          [
+            0.9977267420961484,
+            0.0006867971536582545
+          ]
+        ],
+        "gru-s2": [
+          [
+            0.9636821486685889,
+            0.25798899718640966
+          ],
+          [
+            0.9875338506107111,
+            0.022223208992598845
+          ],
+          [
+            0.9938038412394425,
+            0.007160119707678047
+          ],
+          [
+            0.989844430740558,
+            0.003949666373510701
+          ],
+          [
+            0.9976261826515781,
+            0.0
+          ],
+          [
+            0.9918724807189742,
+            0.0
+          ]
+        ]
+      },
+      "regla_16": "vs-inicial+diario-protegido",
+      "version_16": 2
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decisión del operador 2026-11-19 (pausa 8.3): regla 1.6 corregida (rango completo en PCA/AE, eliminación contra la configuración inicial, modo diario protegido; runs e16 v2). Candidato oficial GRU (Duan, autónomo, horario, exacto, modos de 1.6 v2; 5/5/6 modos), apartándose del desempate 'más simple' (GRU mejor en todas las etapas; con sel de 3 meses nada es significativo). PCA a test como dato secundario, sin efecto en el veredicto. Registrado antes de ver test."
   }
 }

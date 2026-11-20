@@ -417,10 +417,23 @@ def pesos_segmentos(rec: Recursos, est: est_mod.Estado) -> list[np.ndarray]:
     return list(np.split(w, np.cumsum(lens)[:-1]))
 
 
+def mascara_tramos(stamps, part: pt.Partition, tramos: tuple[str, ...]) -> np.ndarray:
+    """`inicio(primer tramo) <= t < fin(último tramo) − 24 h` (como `row_mask`, sobre tramos contiguos)."""
+    ts = pd.DatetimeIndex(pd.to_datetime(stamps))
+    if ts.tz is not None:
+        ts = ts.tz_convert(pt.TZ).tz_localize(None)
+    start = pt.tramo_bounds(part, tramos[0])[0].tz_localize(None)
+    stop = pt.tramo_bounds(part, tramos[-1])[1].tz_localize(None) - pd.Timedelta(hours=pt.EMBARGO_HOURS)
+    return np.asarray((ts >= start) & (ts < stop), dtype=bool)
+
+
 def filas_duan(rec: Recursos, est: est_mod.Estado) -> np.ndarray:
-    """Posiciones de ajuste con `t+24` dentro de train (`row_mask(train)`): fuente de los factores de Duan."""
+    """Posiciones de ajuste con `t+24` dentro de los tramos de ajuste: fuente de los factores de Duan."""
     pos = est.positions[est.fit_mask()]
-    return pos[pt.row_mask(rec.grid.index[pos], rec.part, "train")]
+    tramos = tuple(est.extra.get("fit_tramos") or est.fit_split)
+    if tramos == ("fit",):
+        tramos = ("train",)
+    return pos[mascara_tramos(rec.grid.index[pos], rec.part, tramos)]
 
 
 def aux_fn_de(est: est_mod.Estado):
@@ -848,78 +861,305 @@ def puntaje_op(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: dict
     return rec.ev.puntaje(yhat), forecast, dec
 
 
+ARMONICOS_H = (12.0, 8.0)
+APARICION_MIN = 0.8
+
+
+def protegidos_de(rec: Recursos, est: est_mod.Estado, rep: str, cfg: dict, op: estim.Operador, reps_l) -> tuple[list, pd.DataFrame]:
+    """Modo diario (≈ 24 h) siempre; armónicos (≈ 12 h, ≈ 8 h) solo si aparecen en ≥ 80 % del bootstrap."""
+    prot = []
+    diario = modos.modo_diario(reps_l)
+    if diario is not None:
+        prot.append(diario)
+    boot = modos.bootstrap_modos(op.eigvals(), fit_eig_fn(rec, est, rep, cfg), dias_de_filas(rec, est),
+                                 B=rec.args.bootstrap_modos, dias=evm.DIAS_DEFAULT, seed=0)
+    for h in ARMONICOS_H:
+        arm = modos.modo_diario(reps_l, h)
+        if arm is None:
+            continue
+        j = int(np.argmin(np.abs(boot["lam_re"].to_numpy() + 1j * boot["lam_im"].to_numpy() - arm)))
+        if float(boot["aparicion"].iloc[j]) >= APARICION_MIN:
+            prot.append(arm)
+    return prot, boot
+
+
 def etapa_16(rec: Recursos) -> None:
-    """Rango y modos sin grilla (D9): techo GD y eliminación hacia atrás de modos (`d = 16` fijo)."""
+    """Rango y modos (enmienda del operador, pausa 8.3): PCA/AE desde rango completo (GD solo se
+    reporta), eliminación contra la configuración inicial, modo diario protegido. `d = 16` fijo."""
     cfg0 = dict(rec.args.config)
     pos = rec.eval_positions()
     secciones, resumen = [], []
     fam: dict[str, list] = {}
     fam_full: dict[str, list] = {}
-    ranks, modos_sel = {}, {}
+    modos_sel = {}
     for rep in cfg0["representaciones"]:
         for seed in miembros(rec, rep):
             est = rec.estado(rep, seed)
             key = rep_key(rep, est)
             r_gd = rank_gd(est)
             cfg_nd = {**cfg0, "duan": False}
-            op_full = ajustar(rec, est, rep, cfg0)
-            p_full, _, _ = puntaje_op(rec, est, op_full, cfg0, pos, f"{key}-completo")
-            cfg_gd = {**cfg_nd, "rank": {**cfg0.get("rank", {}), key: r_gd}}
-            op_gd = ajustar(rec, est, rep, cfg_gd)
-            lam = op_gd.eigvals()
+            op0 = ajustar(rec, est, rep, cfg_nd)  # rango por defecto: completo en PCA/AE, GD en Hankel
+            lam = op0.eigvals()
             reps_l = list(lam[modos.representantes(lam)])
+            prot, boot = protegidos_de(rec, est, rep, cfg0, op0, reps_l)
 
-            def evaluar_fn(conservar, est=est, op_gd=op_gd, key=key):
-                op_m = modos.operador_con_modos(op_gd, conservar)
+            def evaluar_fn(conservar, est=est, op0=op0, key=key):
+                op_m = modos.operador_con_modos(op0, conservar)
                 if cfg0.get("duan"):
                     op_m.meta["duan_S"] = factores_duan(rec, est, op_m, cfg0)
                 return puntaje_op(rec, est, op_m, cfg0, pos, f"{key}-modos")[0]
 
-            kept, curva = modos.eliminacion_atras(reps_l, evaluar_fn)
-            op_fin = modos.operador_con_modos(op_gd, kept)
+            kept, curva = modos.eliminacion_atras(reps_l, evaluar_fn, protegidos=prot)
+            p_full = evaluar_fn(reps_l)
+            op_fin = modos.operador_con_modos(op0, kept)
             if cfg0.get("duan"):
                 op_fin.meta["duan_S"] = factores_duan(rec, est, op_fin, cfg0)
             forecast, dec = pronostico(rec, est, op_fin, cfg0, pos)
             res = evaluar(rec, f"{key}-e16", rec.grid.index[pos], forecast, dec, pos, op_fin)
-            d_gd = evm.diferencia(res["puntaje"], p_full)
+            d_full = evm.diferencia(res["puntaje"], p_full)
             ae_id = rec.ae(rep, seed)["run"]["run_id"] if rep in FAMILIAS_AE else None
             registrar(rec, res, rep, "e16", "1.6", seed, estimador=op_fin.estimador, rollout=cfg0.get("rollout", "autonomo"),
-                      extra_params={"rank_gd": r_gd, "n_modos": len(kept), "duan": bool(cfg0.get("duan"))},
-                      extra_frames={"curva_modos.parquet": curva}, ae_run_id=ae_id)
+                      extra_params={"rank_gd": r_gd, "n_modos": len(kept), "duan": bool(cfg0.get("duan")),
+                                    "regla_16": "vs-inicial+diario-protegido", "rank_inicial": op0.rank},
+                      extra_frames={"curva_modos.parquet": curva, "bootstrap_modos.parquet": boot}, ae_run_id=ae_id)
             fam.setdefault(rep, []).append(res["puntaje"])
             fam_full.setdefault(rep, []).append(p_full)
-            ranks[key] = r_gd
             modos_sel[key] = modos.a_lista(kept)
             esp = modos.espectro(np.asarray(kept))
-            resumen.append({"variante": key, "rank_gd": r_gd, "modos_techo": len(reps_l), "modos_final": len(kept),
-                            "wrmse_completo": p_full.media, "wrmse_final": res["puntaje"].media,
-                            "dif_final_menos_completo": d_gd["diff"], "lo": d_gd["lo"], "hi": d_gd["hi"]})
+            esp["protegido"] = [any(abs(l - p) < 1e-8 for p in prot) for l in esp["lam_re"] + 1j * esp["lam_im"]]
+            resumen.append({"variante": key, "rank_inicial": op0.rank, "rank_gd": r_gd, "modos_inicial": len(reps_l),
+                            "protegidos": len(prot), "modos_final": len(kept), "wrmse_inicial": p_full.media,
+                            "wrmse_final": res["puntaje"].media, "dif_final_menos_inicial": d_full["diff"],
+                            "lo": d_full["lo"], "hi": d_full["hi"]})
             secciones += [(f"{key} — curva de eliminación", reg.md_table(curva)),
                           (f"{key} — modos conservados", reg.md_table(esp))]
     punt = {rep: _resumen_familia(rec, items) for rep, items in fam.items()}
     punt_full = {rep: _resumen_familia(rec, items) for rep, items in fam_full.items()}
-    sel = seleccionar(punt, [r for r in SIMPLICIDAD if r in punt], maximo=1)
     fam_tab = pd.DataFrame([{"variante": k, **{c: v for c, v in _fila(rec.ev.tabla(p), k).items() if c != "variante"},
-                             "dif_vs_completo": evm.diferencia(p, punt_full[k])["diff"],
-                             "dif_lo": evm.diferencia(p, punt_full[k])["lo"], "dif_hi": evm.diferencia(p, punt_full[k])["hi"]}
+                             **{f"dif_vs_inicial{s_}": v for s_, v in zip(("", "_lo", "_hi"),
+                                                                        evm.diferencia(p, punt_full[k]).values())}}
                             for k, p in punt.items()])
     pares_tab = pd.DataFrame([{"a": a, "b": b, **evm.diferencia(punt[a], punt[b])} for a in punt for b in punt if a < b])
     reg.resumen_md("1.6", [
-        ("Propuesta (D9)", f"Ganador: {sel['ganador']}."),
+        ("Regla", "Enmienda del operador (pausa 8.3): rango completo en PCA/AE, comparación contra la "
+                  "configuración inicial, modo diario protegido (armónicos si aparición ≥ 0.8)."),
         ("Por representación (final; AE = media de semillas)", reg.md_table(fam_tab)),
         ("Diferencias entre representaciones finales", reg.md_table(pares_tab)),
         ("Por variante", reg.md_table(pd.DataFrame(resumen))),
         *secciones,
         *[(f"Por serie — {k}", reg.md_table(_cols(rec.ev.tabla(p)))) for k, p in punt.items()],
-    ], rec.out, {"ganador": sel["ganador"], "rank": ranks, "modos": modos_sel, "resumen": resumen})
+    ], rec.out, {"modos": modos_sel, "resumen": resumen})
     print(reg.md_table(fam_tab))
     print(reg.md_table(pares_tab))
     print(reg.md_table(pd.DataFrame(resumen)))
-    print({"ganador": sel["ganador"], "rank": ranks, "modos": modos_sel})
+    for t, x in secciones:
+        if "conservados" in t:
+            print(t)
+            print(x)
+
+
+
+
+TRAMOS_CIERRE = ("train", "es", "sel")
+CIERRE_JSON = "cierre.json"
+
+
+def estado_cierre(rec: Recursos, rep: str, seed: int) -> est_mod.Estado:
+    """Estado del reajuste hasta 2026-06-30 (D11): PCA reajusta normalización y PCA con train+es+sel;
+    el AE conserva normalización y encoder (hasta 2026-02) y solo cambia el tramo de ajuste de K."""
+    import dataclasses
+
+    if rep in FAMILIAS_AE:
+        e = rec.estado(rep, seed)
+        return dataclasses.replace(e, fit_split=TRAMOS_CIERRE, extra={**e.extra, "fit_tramos": TRAMOS_CIERRE})
+    if not hasattr(rec, "_ctx_cierre"):
+        rec._ctx_cierre = est_mod.contexto(rec.grid, rec.part, TRAMOS_CIERRE)
+    return rec.estado(rep, seed, ctx=rec._ctx_cierre, union_fit=True)
+
+
+def interpretabilidad_semillas(kept: dict[int, np.ndarray], boots: dict[int, pd.DataFrame]) -> pd.DataFrame:
+    """§9: por modo de la semilla de referencia, presencia en las demás semillas (húngaro), aparición en el
+    bootstrap (≥ 80 %) e intervalos de período/vida media que se solapan entre semillas."""
+    seeds = sorted(kept)
+    ref = np.asarray(kept[seeds[0]], complex)
+    rows = []
+    for m, lam in enumerate(ref):
+        row = {"modo": m, "periodo_h": float(modos.periodo_h([lam])[0]), "vida_media_h": float(modos.vida_media_h([lam])[0])}
+        presente, boot_ok, solapa = True, True, True
+        b0 = boots[seeds[0]].iloc[int(np.argmin(np.abs(boots[seeds[0]]["lam_re"] + 1j * boots[seeds[0]]["lam_im"] - lam)))]
+        boot_ok &= b0["aparicion"] >= APARICION_MIN
+        for s in seeds[1:]:
+            other = np.asarray(kept[s], complex)
+            i, j = modos.emparejar(np.array([lam]), other)
+            ok = bool(len(j) and modos.aparece(np.array([lam]), other[j])[0])
+            presente &= ok
+            if len(j):
+                bs = boots[s]
+                b1 = bs.iloc[int(np.argmin(np.abs(bs["lam_re"] + 1j * bs["lam_im"] - other[j[0]])))]
+                boot_ok &= b1["aparicion"] >= APARICION_MIN
+                for col in ("vida_media_h", "periodo_h"):
+                    lo0, hi0, lo1, hi1 = b0[f"{col}_lo"], b0[f"{col}_hi"], b1[f"{col}_lo"], b1[f"{col}_hi"]
+                    if np.isfinite([lo0, hi0, lo1, hi1]).all() and (col == "vida_media_h" or abs(lam.imag) > 1e-10):
+                        solapa &= bool(lo0 <= hi1 and lo1 <= hi0)
+            row[f"s{s}"] = ok
+        row.update({"presente_semillas": presente, "bootstrap_80": bool(boot_ok), "intervalos_solapan": solapa})
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def etapa_cierre(rec: Recursos) -> None:
+    """Reajuste hasta 2026-06-30 con rango y modos de 1.6 fijados por emparejamiento húngaro; sin test."""
+    cfg = dict(rec.args.config)
+    reps = [cfg["oficial"]] + [r for r in cfg.get("secundarias", [])]
+    out = {"oficial": cfg["oficial"], "runs": {}, "interpretabilidad": {}}
+    secciones = []
+    for rep in reps:
+        kept_s, boots = {}, {}
+        for seed in miembros(rec, rep):
+            est = estado_cierre(rec, rep, seed)
+            key = rep_key(rep, est)
+            cfg_nd = {k: v for k, v in cfg.items() if k not in ("modos", "duan")}
+            op_r = ajustar(rec, est, rep, cfg_nd)
+            op, empar = modos.fijar_modos(op_r, cfg["modos"][key])
+            if cfg.get("duan"):
+                op.meta["duan_S"] = factores_duan(rec, est, op, cfg)
+            lam_k = np.asarray([complex(*x) for x in op.meta["modos_conservados"]])
+            boot = modos.bootstrap_modos(lam_k, fit_eig_fn(rec, est, rep, cfg_nd), dias_de_filas(rec, est),
+                                         B=rec.args.bootstrap_modos, dias=evm.DIAS_DEFAULT, seed=0)
+            name = reg.run_name(rep, "cierre", rec.part.token, rec.args.version, seed)
+            ae_id = rec.ae(rep, seed)["run"]["run_id"] if rep in FAMILIAS_AE else None
+            params = {"tipo": "operador", "etapa": "cierre", "estimador": op.estimador, "rollout": cfg.get("rollout"),
+                      "rank": op.rank, "version": rec.args.version, "representacion": rep, "duan": bool(cfg.get("duan")),
+                      "n_modos": len(lam_k), "tramos_ajuste": "+".join(TRAMOS_CIERRE),
+                      "rol": "oficial" if rep == cfg["oficial"] else "secundario"}
+            run_id = reg.log_variante(rec.state, name, reg.tags_base(rep, "cierre", PARTICION, seed, ae_id), params,
+                                      {"n_modos": len(lam_k), "n_filas_ajuste": int(est.fit_mask().sum())},
+                                      {"spectrum.parquet": modos.espectro(lam_k), "bootstrap_modos.parquet": boot,
+                                       "emparejamiento.parquet": empar}, {"operator.npz": op.arrays()})
+            out["runs"][key] = run_id
+            kept_s[seed], boots[seed] = lam_k, boot
+            secciones += [(f"{key} — emparejamiento sel → cierre", reg.md_table(empar)),
+                          (f"{key} — bootstrap por modo (cierre, B = {rec.args.bootstrap_modos})", reg.md_table(boot))]
+        it = interpretabilidad_semillas(kept_s, boots)
+        ok = bool(len(it) <= 10 and it["bootstrap_80"].all() and (it["presente_semillas"].all() if len(kept_s) > 1 else True)
+                  and it["intervalos_solapan"].all())
+        out["interpretabilidad"][rep] = {"n_modos": int(len(it)), "cumple": ok, "tabla": it.to_dict("records")}
+        secciones.insert(0, (f"Interpretabilidad (§9) — {rep}: {'cumple' if ok else 'no cumple'}", reg.md_table(it)))
+    (rec.out / CIERRE_JSON).write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
+    reg.resumen_md("cierre", secciones, rec.out)
+    for t, x in secciones[:3]:
+        print(t)
+        print(x)
+    print(json.dumps({k: v for k, v in out.items() if k != "interpretabilidad"}, indent=1))
+    print({k: (v["n_modos"], v["cumple"]) for k, v in out["interpretabilidad"].items()})
+
+
+# --- Test (evaluación única, D11/D12) -------------------------------------------
+
+
+def cargar_operador(rec: Recursos, run_id: str) -> estim.Operador:
+    npz = np.load(rec.artifact(run_id, "operator.npz"))
+    meta = {k: npz[k] for k in npz.files if k in ("duan_S", "modos_conservados")}
+    return estim.Operador(A=npz["A"], U=npz["U"] if "U" in npz.files else None, rank=int(npz["rank"]),
+                          estimador="cierre", pasos=int(npz["pasos"]), meta=meta)
+
+
+def referencias_test(rec: Recursos) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """`lightgbm-v1` holdout (test) y persistencia calculada en el mismo proceso."""
+    from baseline.persistence import predict_frame
+
+    by_id = {r["run_id"]: r for r in rec.runs}
+    lg = []
+    for r in rec.v2["lgbm"]:
+        src = by_id[r["params"]["source_run_id"]]
+        lg.append(rec.preds(src, "test"))
+    lgbm = pd.concat(lg, ignore_index=True)
+    pers = predict_frame(rec.data["sinca"], rec.features)
+    pers = pers[pt.row_mask(pers["timestamp"], rec.part, "test")]
+    return lgbm, pers
+
+
+def veredicto(t: pd.DataFrame) -> dict:
+    """D12: razón vs mejor ≤ 1.05 en ≥ 4/6 (falla solo si todo el intervalo > 1.05); PLC II (ambas series)
+    skill puntual > 0; piso: en las 6, el intervalo del skill vs persistencia no queda entero bajo 0."""
+    s = t[t["serie"] != "media"]
+    cumple_razon = s["razon_mejor_lo"] <= 1.05
+    plc = s[s["serie"].str.startswith("Padre Las Casas II")]
+    piso = s["skill_pers_hi"] >= 0
+    precision = bool(cumple_razon.sum() >= 4 and (plc["skill_pers"] > 0).all() and piso.all())
+    return {"series_razon_ok": int(cumple_razon.sum()), "plc_skill_pos": bool((plc["skill_pers"] > 0).all()),
+            "piso_ok": bool(piso.all()), "precision": precision}
+
+
+def etapa_test(rec: Recursos) -> None:
+    from evaluate.evaluate import evaluate_predictions, zone_icap
+
+    previos = [r for r in reg.runs_de_etapa(rec.state, "test", rec.args.version)]
+    if previos and not rec.args.force_test:
+        raise SystemExit(f"Ya hay {len(previos)} runs de test (versión {rec.args.version}): repetir exige --force-test.")
+    path = rec.out / CIERRE_JSON
+    if not path.exists():
+        raise SystemExit(f"Falta {path}: correr antes --etapa cierre.")
+    cierre = json.loads(path.read_text(encoding="utf-8"))
+    cfg = dict(rec.args.config)
+    reps = [cierre["oficial"]] + [r for r in cfg.get("secundarias", [])]
+    preds: dict[str, pd.DataFrame] = {}
+    for rep in reps:
+        for seed in miembros(rec, rep):
+            est = estado_cierre(rec, rep, seed)
+            key = rep_key(rep, est)
+            op = cargar_operador(rec, cierre["runs"][key])
+            pos = est.positions[(est.split == "test")]
+            pos = pos[pt.row_mask(rec.grid.index[pos], rec.part, "test")]
+            forecast, _ = pronostico(rec, est, op, cfg, pos)
+            stamps = rec.grid.index[pos]
+            pieces = [pd.DataFrame({"timestamp": stamps, "estacion": st, "pollutant": po, "y_pred": forecast[:, c]})
+                      for c, (st, po) in enumerate(evm.SERIES)]
+            tg = rec.features[["timestamp", "estacion", "pollutant", "target"]].rename(columns={"target": "y_true"})
+            preds[key] = pd.concat(pieces, ignore_index=True).merge(tg, on=evm.KEYS)
+    lgbm, pers = referencias_test(rec)
+    rows = evm.construir_eval_rows(preds, lgbm, pers)
+    ev = evm.Evaluador(rows, B=rec.args.bootstrap, seed=0)
+    stamps_rows = rows
+    tablas, resultados = {}, {}
+    for rep in reps:
+        items = []
+        for seed in miembros(rec, rep):
+            key = f"{rep}-s{seed}" if rep in FAMILIAS_AE else rep
+            f = rows[evm.KEYS].merge(preds[key][evm.KEYS + ["y_pred"]], on=evm.KEYS, how="left")["y_pred"].to_numpy(float)
+            items.append(ev.puntaje(f))
+            frame_all = ev.predicciones(f, split="test")
+            for (st, po), g in frame_all.groupby(["estacion", "pollutant"]):
+                name = reg.run_name_test(st, po, rep, rec.part.token, rec.args.version, seed)
+                tags = {**reg.tags_base(rep, "test", PARTICION, seed), "evaluacion": "test", "serie": f"{st}|{po}"}
+                params = {"estacion": st, "pollutant": po, "version": rec.args.version, "seed": seed, "tipo": "operador",
+                          "rol": "oficial" if rep == cierre["oficial"] else "secundario", "cierre_run_id": cierre["runs"][key]}
+                metrics = {f"test_{k}": v for k, v in evaluate_predictions(g).items()}
+                reg.log_variante(rec.state, name, tags, params, metrics,
+                                 {"predictions.parquet": g, "zone_icap.parquet": zone_icap(g),
+                                  "rolling_scores.parquet": pd.DataFrame({"window_index": pd.Series(dtype=int),
+                                                                          "rmse": pd.Series(dtype=float)})})
+        p = evm.Puntaje.promedio(items) if len(items) > 1 else items[0]
+        tablas[rep] = ev.tabla(p)
+        resultados[rep] = veredicto(tablas[rep])
+    interp = cierre["interpretabilidad"]
+    ofi = cierre["oficial"]
+    final = {"oficial": ofi, "precision": resultados[ofi], "interpretabilidad": interp[ofi]["cumple"],
+             "veredicto": "cumple" if resultados[ofi]["precision"] and interp[ofi]["cumple"] else "no cumple",
+             "secundarias": {r: resultados[r] for r in reps if r != ofi},
+             "n_filas_min": int(stamps_rows.groupby(["estacion", "pollutant"]).size().min())}
+    reg.resumen_md("test", [("Veredicto D12 (oficial)", json.dumps(final, ensure_ascii=False, default=str)),
+                            *[(f"Test por serie — {r}", reg.md_table(_cols(t))) for r, t in tablas.items()]],
+                   rec.out, final)
+    for r, t in tablas.items():
+        print(r)
+        print(reg.md_table(_cols(t)))
+    print(final)
 
 
 ETAPA_FN = {"base": etapa_base, "1.0": etapa_10, "1.1": etapa_11, "1.2": etapa_12, "1.3": etapa_13,
-            "1.4": etapa_14, "1.5": etapa_15, "1.6": etapa_16}
+            "1.4": etapa_14, "1.5": etapa_15, "1.6": etapa_16,
+            "cierre": etapa_cierre, "test": etapa_test}
 
 
 # --- CLI ---------------------------------------------------------------------------
@@ -952,7 +1192,7 @@ def run(args) -> int:
     elif args.profile and args.etapa != "base":
         raise SystemExit("--profile solo se usa en la etapa base.")
     decisiones = reg.leer_decisiones(args.decisiones)
-    args.config = reg.exigir_decision(args.etapa, decisiones)
+    args.config = reg.exigir_decision("cierre" if args.etapa == "test" else args.etapa, decisiones)
     if args.etapa not in ETAPA_FN:
         raise SystemExit(f"Etapa {args.etapa} aún no implementada.")
     rec = Recursos(args)

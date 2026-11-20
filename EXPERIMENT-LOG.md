@@ -513,4 +513,23 @@ v2 ≈ USD 0.32 a la tarifa de `design.md` (no verificada en consola). Sin los h
   - **El modo diario (período ≈ 24 h) se elimina en todas**: no afecta al target (promedio de 24 h, que lo cancela). En GRU s0 y s2 quitarlo incluso mejora (−1.37 [−2.16, −0.39]; −0.80 [−1.67, +0.18]). En PCA cae en el primer paso (+0.20 [−0.01, +0.44]).
   - El techo GD (rango 3–6 de 16) ya reduce el operador a 2–3 modos.
 - **Lectura por regla D9**: PCA, rango 6, 1 modo, Duan (la más simple; GRU no la supera de forma significativa). La cadena de "no significativo → la más simple" deja un operador peor en punto que los mejores evaluados (GRU completo + Duan 29.73; razón 1.014 [0.968, 1.066]).
-- **Decisión**: **pendiente del operador** (no se aplicó la regla). El criterio de selección (error a 24 h del promedio) elimina el ciclo diario, que §9 fija como modo de la dinámica, y reduce el operador a persistencia del nivel. Opciones en `tasks.md` (8.3).
+- **Decisión**: se pausó para el operador (no se aplicó la regla); ver la entrada 1.6 v2. El criterio de selección (error a 24 h del promedio) elimina el ciclo diario, que §9 fija como modo de la dinámica, y reduce el operador a persistencia del nivel. Opciones en `tasks.md` (8.3).
+
+## 2026-11-19 - dmd-operador-global 1.6 v2: regla corregida por el operador (pausa 8.3)
+
+- **Contexto**: con la regla original (techo GD, comparación contra el paso previo) la eliminación colapsaba a 1 modo y quitaba el diario (entrada anterior; runs `e16` v1 marcados `descartado=regla-vieja`, solo locales).
+- **Regla nueva (decisión del operador)**: PCA y AE desde rango completo (16; GD solo se reporta); cada candidato se compara contra la configuración **inicial** de 1.6; se detiene en el primer paso significativamente peor y conserva el previo; el par ≈ 24 h (±5 %) está protegido; los armónicos (≈ 12 h, ≈ 8 h) solo si aparecen en ≥ 80 % del bootstrap (no hubo ninguno). Runs `…-e16-aedmd-v2-s{seed}`.
+- **Resultado** (media de 6 series; razón vs mejor ref. con intervalo 95 %):
+
+  | variante | modos inicial → final | RMSE pond. inicial | final | final − inicial |
+  |---|---|---|---|---|
+  | GRU s0 | 9 → 5 | 29.78 | 29.15 | −0.63 [−1.19, −0.06] |
+  | GRU s1 | 8 → 5 | 29.93 | 29.77 | −0.16 [−0.87, +0.37] |
+  | GRU s2 | 9 → 6 | 29.48 | 30.45 | +0.96 [−0.39, +1.87] |
+  | **GRU (media)** | 5–6 | 29.73 | **29.79** | +0.06 [−0.52, +0.43]; razón **1.015 [0.955, 1.068]** |
+  | PCA | 9 → 3 | 32.68 | 36.16 | +3.48 [−4.06, +9.64]; razón 1.233 [0.861, 1.609] |
+
+  - Modos GRU (período h / vida media h): diario 24.0–24.3 / 290–365 (protegido, en las 3 semillas); un modo casi real lento con vida media de 290–440 h (en las 3); modos de baja frecuencia (período 260–3160 h) con vida media de 44–140 h, distintos entre semillas.
+  - Modos PCA: diario 24.3 / 882 (protegido), reales con vida media de 494 y 287 h.
+  - GRU − PCA: −6.37 [−15.71, +4.63].
+- **Decisión del operador (2026-11-19, antes de ver test)**: candidato oficial **GRU** (Duan, autónomo, horario, exacto, modos de 1.6 v2), apartándose del desempate "más simple": GRU fue mejor en todas las etapas y con `sel` de 3 meses nada es significativo. **PCA** va a test como dato secundario, sin efecto en el veredicto. Enmienda en `design.md` (D9/D11) y spec.

@@ -167,33 +167,73 @@ def a_lista(lam) -> list[list[float]]:
     return [[float(x.real), float(x.imag)] for x in lam]
 
 
-def eliminacion_atras(reps, evaluar_fn, tol: float = TOL_NUM) -> tuple[list, pd.DataFrame]:
-    """Quita de a un modo (representante; su conjugado va junto) el de menor empeoramiento del puntaje
-    mientras el intervalo de `nuevo − actual` no quede entero sobre 0 (D9); se detiene en el primero
-    significativo. `evaluar_fn(conservar) -> Puntaje`. Devuelve `(conservados, curva)`.
+def eliminacion_atras(reps, evaluar_fn, protegidos=(), tol: float = TOL_NUM) -> tuple[list, pd.DataFrame]:
+    """Eliminación hacia atrás (enmienda del operador, pausa 8.3): en cada paso se quita el modo no
+    protegido de menor empeoramiento; se acepta mientras el intervalo de `candidato − inicial` (contra la
+    configuración **inicial**) no quede entero sobre 0; en el primer paso significativamente peor se
+    detiene y conserva el previo. `evaluar_fn(conservar) -> Puntaje`. Devuelve `(conservados, curva)`.
     """
     from .evaluacion import diferencia, intervalo
 
+    prot = [complex(p) for p in protegidos]
+
+    def es_protegido(lam) -> bool:
+        return any(abs(lam - p) <= 1e-8 * max(1.0, abs(p)) for p in prot)
+
     actual = list(np.asarray(reps, complex))
-    p_act = evaluar_fn(actual)
-    lo, hi = intervalo(p_act.media_boot)
-    curva = [{"n_modos": len(actual), "wrmse": p_act.media, "lo": lo, "hi": hi, "quitado_re": np.nan,
-              "quitado_im": np.nan, "diff": 0.0, "diff_lo": 0.0, "diff_hi": 0.0, "aceptado": True}]
-    while len(actual) > 1:
+    p0 = evaluar_fn(actual)
+    lo, hi = intervalo(p0.media_boot)
+    curva = [{"n_modos": len(actual), "wrmse": p0.media, "lo": lo, "hi": hi, "quitado_re": np.nan,
+              "quitado_im": np.nan, "diff_vs_inicial": 0.0, "diff_lo": 0.0, "diff_hi": 0.0, "aceptado": True}]
+    while True:
+        libres = [i for i, lam in enumerate(actual) if not es_protegido(lam)]
+        if not libres or len(actual) <= 1:
+            break
         mejor = None
-        for i, lam in enumerate(actual):
+        for i in libres:
             cand = actual[:i] + actual[i + 1:]
             p = evaluar_fn(cand)
-            d = diferencia(p, p_act)
+            d = diferencia(p, p0)
             if mejor is None or d["diff"] < mejor[1]["diff"]:
                 mejor = (i, d, p, cand)
         i, d, p, cand = mejor
         signif = d["lo"] > tol
         lo, hi = intervalo(p.media_boot)
         curva.append({"n_modos": len(cand), "wrmse": p.media, "lo": lo, "hi": hi, "quitado_re": actual[i].real,
-                      "quitado_im": actual[i].imag, "diff": d["diff"], "diff_lo": d["lo"], "diff_hi": d["hi"],
-                      "aceptado": not signif})
+                      "quitado_im": actual[i].imag, "diff_vs_inicial": d["diff"], "diff_lo": d["lo"],
+                      "diff_hi": d["hi"], "aceptado": not signif})
         if signif:
             break
-        actual, p_act = cand, p
+        actual = cand
     return actual, pd.DataFrame(curva)
+
+
+def modo_diario(reps, objetivo_h: float = 24.0, tol: float = 0.05):
+    """Representante complejo de período más cercano a `objetivo_h` (dentro de ±`tol` relativo) o `None`."""
+    reps = np.asarray(reps, complex)
+    per = periodo_h(reps)
+    ok = np.isfinite(per) & (np.abs(per - objetivo_h) <= tol * objetivo_h)
+    if not ok.any():
+        return None
+    idx = np.where(ok)[0]
+    return reps[idx[np.argmin(np.abs(per[idx] - objetivo_h))]]
+
+
+def fijar_modos(op, conservar_sel):
+    """Cierre (D11): empareja (húngaro) los modos seleccionados en `sel` con los del operador reajustado
+    y conserva solo los emparejados (mismo número; sin re-seleccionar). Devuelve `(op, tabla)`."""
+    sel = np.asarray([complex(c[0], c[1]) if isinstance(c, (list, tuple)) else complex(c) for c in conservar_sel])
+    lam = op.eigvals()
+    reps = lam[representantes(lam)]
+    i, j = emparejar(sel, reps)
+    if len(i) != len(sel):
+        raise ValueError(f"El operador reajustado tiene {len(reps)} modos; no se pueden emparejar {len(sel)}")
+    elegidos = reps[j[np.argsort(i)]]
+    tabla = pd.DataFrame({
+        "modo_sel_re": sel.real, "modo_sel_im": sel.imag,
+        "periodo_sel_h": periodo_h(sel), "vida_media_sel_h": vida_media_h(sel),
+        "modo_cierre_re": elegidos.real, "modo_cierre_im": elegidos.imag,
+        "periodo_cierre_h": periodo_h(elegidos), "vida_media_cierre_h": vida_media_h(elegidos),
+        "aparece": aparece(sel, elegidos),
+    })
+    return operador_con_modos(op, list(elegidos)), tabla

@@ -82,8 +82,8 @@
 
 - [x] 8.1 `modos.eliminacion_atras(…)`: techo GD, quita de a un modo (par conjugado junto) el de menor empeoramiento mientras no supere el intervalo bootstrap emparejado y se detiene en el primero significativo (D9); curva error ponderado 24 h vs nº de modos con intervalo. Test: sistema con 2 modos relevantes y 4 de ruido → elimina los 4 de ruido y conserva los 2. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
 - [x] 8.2 `run.py --etapa 1.6` sobre la configuración vigente (`d = 16` fijo). Verificar: run `…-e16-…` con `curva_modos.parquet` y `output/dmd-operador-global/1.6.md`.
-- [ ] 8.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — el operador fija rango, modos y configuración final. Registrar.
-- [ ] 8.4 **[OPERADOR]** Publicar.
+- [x] 8.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — el operador fija rango, modos y configuración final. Registrar.
+- [x] 8.4 **[OPERADOR]** Publicar.
 
 ## 9. Cierre: test, criterio e interpretabilidad (D11, D12)
 
@@ -141,3 +141,6 @@
 - 8.1: "empeoramiento significativo" = intervalo de `nuevo − actual` entero sobre 0 (con tolerancia numérica 1e-9). La eliminación termina en 1 modo si nunca hay empeoramiento significativo.
 - 8.2: el techo GD se aplica también a PCA y AE (rango 6 y 3–4); con Duan vigente, los factores se reestiman para cada candidato. `{exp}` = `e16`; el resumen reporta además la diferencia final − rango completo.
 - **8.3 (PAUSA, sin decisión)**: la regla D9 daría PCA rango 6 con 1 modo + Duan (36.32; razón 1.240 [0.913, 1.564]), pero (a) el criterio elimina el modo diario en las 4 variantes (el target de 24 h lo cancela), en tensión con §9 ("ciclo diario = modo de la dinámica"), y (b) la acumulación de pasos no significativos deja un operador peor en punto que GRU rango completo + Duan (29.73; razón 1.014 [0.968, 1.066]). Decide el operador, p. ej.: aceptar la regla; conservar el modo diario forzado; no aplicar techo GD en PCA/AE (eliminar desde rango 16); o fijar GRU rango completo (o su resultado de 1.6, 30.99) como configuración final. 8.4 (publicar 1.6) queda tras la decisión: los 4 runs `e16` están solo en el estado local.
+- 8.3: **decisión del operador (2026-11-19)**: regla 1.6 corregida (rango completo en PCA/AE; eliminación contra la configuración inicial; par ≈ 24 h protegido, armónicos solo con aparición ≥ 80 % en bootstrap) y candidato oficial GRU, PCA secundario. Enmienda corta en `design.md` (D9/D11) y en la spec (requisito "Rango y modos sin grilla" + 2 escenarios). 1.6 se re-corrió como `version = 2` (D10): GRU 5/5/6 modos, 29.79 [razón 1.015 (0.955, 1.068)]; PCA 3 modos, 36.16. Los 4 runs `e16` v1 llevan `descartado=regla-vieja` y `publish_state.py` excluye runs con tag `descartado` (sus metadatos van igual en el sqlite).
+- 8.3: tolerancia para identificar el par diario y los armónicos: ±5 % del período (con ±10 % se tomaba un modo de 10.8 h como armónico de 12 h).
+- 8.4: 4 runs `e16` v2 publicados (36 artefactos + sqlite); respaldo `mlflow-20261120-0000.sqlite`. `openspec validate dmd-operador-global --strict`: válido (el requisito de modos se partió en dos para no exceder el largo).

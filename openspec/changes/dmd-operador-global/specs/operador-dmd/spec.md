@@ -126,15 +126,27 @@ El sistema SHALL ofrecer DMD exacto, recorte de autovalores a `|λ| ≤ 1 − ε
 
 ### Requirement: Rango y modos sin grilla
 
-El sistema SHALL acotar el rango con Gavish–Donoho y eliminar hacia atrás, de a uno (un par conjugado junto), el modo de menor empeoramiento del error ponderado a 24 h, mientras ese empeoramiento no supere el intervalo bootstrap emparejado; SHALL detenerse en el primer empeoramiento significativo y registrar la curva de precisión vs número de modos. `d` del AE no cambia.
+El sistema SHALL partir del rango completo en PCA y AE (Gavish–Donoho solo se reporta; en Hankel acota el rango) y eliminar hacia atrás, de a uno (un par conjugado junto), el modo de menor empeoramiento del error ponderado a 24 h mientras la diferencia emparejada contra la configuración inicial no sea significativamente peor; SHALL detenerse en el primer paso significativamente peor conservando el previo y registrar la curva de precisión vs número de modos. `d` del AE no cambia.
 
 #### Scenario: Modos de ruido eliminados
 - **WHEN** se seleccionan modos en un sistema sintético con 2 modos relevantes y modos de ruido
 - **THEN** se eliminan los modos de ruido y se conservan los 2 relevantes
 
+#### Scenario: Comparación contra la configuración inicial
+- **WHEN** quitar modos uno a uno empeora poco en cada paso pero el acumulado respecto de la configuración inicial es significativo
+- **THEN** la eliminación se detiene en el paso previo al acumulado significativo
+
 #### Scenario: Curva registrada
 - **WHEN** termina la selección de modos de una representación
 - **THEN** el run contiene el error ponderado a 24 h por número de modos con su intervalo y el orden de eliminación
+
+### Requirement: Modo diario protegido
+
+En la selección de modos el par conjugado de período ≈ 24 h SHALL conservarse siempre (el target de 24 h lo cancela y la métrica no puede juzgarlo); sus armónicos (≈ 12 h, ≈ 8 h) SHALL protegerse solo si aparecen en ≥ 80 % del bootstrap por modo.
+
+#### Scenario: Diario conservado
+- **WHEN** se seleccionan modos de un operador con un par de período ≈ 24 h que no cambia el error a 24 h
+- **THEN** el par diario se conserva y la selección no colapsa a un solo modo
 
 ### Requirement: Compuertas con decisión del operador
 

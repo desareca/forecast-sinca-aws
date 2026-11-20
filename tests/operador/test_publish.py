@@ -88,3 +88,12 @@ def test_cli_sin_profile_ni_yes(estado_mlflow):
         P.main(["plan", "--state-dir", str(estado_mlflow)])
     _run(estado_mlflow, 0)
     assert P.main(["apply", "--state-dir", str(estado_mlflow), "--profile", "x"]) == 1
+
+
+def test_descartados_no_se_publican(estado_mlflow):
+    from mlflow.tracking import MlflowClient
+
+    r0 = _run(estado_mlflow, 0)
+    r1 = _run(estado_mlflow, 1)
+    MlflowClient().set_tag(r0, "descartado", "regla-vieja")
+    assert [r for r, _, _ in P.plan(str(estado_mlflow))] == [r1]

@@ -1,6 +1,6 @@
 """Publica en S3 los runs nuevos del operador global (`dmd-operador-global`, D1). Script simple.
 
-- `plan`: lista los runs locales con `stage=dmd-operador-global` aún no publicados (según
+- `plan`: lista los runs locales con `stage=dmd-operador-global` (sin tag `descartado`) aún no publicados (según
   `<state-dir>/.download.json`) y falla si alguno no tiene artefactos.
 - `apply --yes`: aborta si el `LastModified` remoto de `mlflow.sqlite` difiere del guardado en
   `.download.json`; respalda el sqlite remoto en `_mlflow/backups/mlflow-<AAAAMMDD-HHMM>.sqlite`;
@@ -45,7 +45,8 @@ def runs_stage(state_dir: str) -> list[tuple[str, str]]:
     try:
         rows = con.execute(
             "select r.run_uuid, r.name from runs r join tags t on t.run_uuid = r.run_uuid "
-            "where t.key = 'stage' and t.value = ? and r.lifecycle_stage = 'active' order by r.name", (STAGE,)
+            "where t.key = 'stage' and t.value = ? and r.lifecycle_stage = 'active' "
+            "and r.run_uuid not in (select run_uuid from tags where key = 'descartado') order by r.name", (STAGE,)
         ).fetchall()
     finally:
         con.close()
