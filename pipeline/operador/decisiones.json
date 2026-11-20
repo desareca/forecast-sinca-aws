@@ -1,0 +1,29 @@
+{
+  "1.0": {
+    "ganador": "AE siguen (dinámica)",
+    "config": {
+      "representaciones": [
+        "hankel",
+        "hankelmet",
+        "pca",
+        "conv1d",
+        "gru"
+      ],
+      "ae": true
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decidido por regla D9 (delegado por el operador): razón oráculo/mejor ref. media conv1d 0.244 [0.178, 0.308], GRU 0.218 [0.168, 0.257], PCA 0.232 [0.202, 0.259]; ningún intervalo alcanza 0.95."
+  },
+  "1.1": {
+    "ganador": "pca + gru",
+    "config": {
+      "representaciones": [
+        "pca",
+        "gru"
+      ],
+      "principal": "pca"
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decidido por regla D9 (delegado): PCA = la más simple no superada significativamente (GRU−PCA −3.53 [−6.69, +0.58]); GRU = mejor puntaje (36.29), no significativamente peor que PCA. conv1d sale (GRU−conv1d −2.48 [−4.14, −0.30]). GRU no se descarta (rango 1.17 < semiancho 7.85). 1.1g no gana claro (−1.25 [−2.20, +0.01])."
+  }
+}

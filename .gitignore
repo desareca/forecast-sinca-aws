@@ -53,3 +53,8 @@ search-review/
 .venv-dmd/
 mlflow-maint/
 mlflow-v2/
+
+# dmd-operador-global: estado MLflow y datos validados locales (no versionar)
+mlflow-op/
+validated-op/
+logs/

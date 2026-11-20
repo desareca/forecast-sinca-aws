@@ -384,3 +384,42 @@ v2 ≈ USD 0.32 a la tarifa de `design.md` (no verificada en consola). Sin los h
 4. Criterio de §9 (ponderado ≤ 1,05 × LightGBM, por serie; mejor corrida DMD por serie, punto estimado): cumple en 2 de 6 (Nielol pm10, Padre Las Casas II pm10). Necesita ≥ 4/6: no cumple. Los fallos van de +3 % a +44 %. El intervalo bootstrap no está calculado, así que el veredicto por serie puede cambiar. Dispersión entre semillas (RMSE simple, rango de 3): conv1d 1,1; GRU 1,3. El mejor DMD se elige entre 6 corridas, así que es optimista.
 
 **Decisión**: v1 queda superada; la base de 7.1 es v2. Pendiente para 7.1: revisar si la referencia del criterio debe incluir persistencia en las 6 series (en 5 de 6 es mejor que el mejor DMD; no en Nielol pm10).
+
+## 2026-11-19 - dmd-operador-global 1.0: oráculo de la representación
+
+- **Hipótesis**: si decodificar el estado real en `t+24` (operador perfecto) queda cerca o sobre la mejor referencia, el techo es la representación y los AE salen (D9: techo si el intervalo de la razón alcanza 0.95).
+- **Qué se probó**: oráculo de conv1d y GRU v2 (3 semillas) y PCA(12)+PCA(4) en `sel`, sobre `eval_rows` (n mínimo 1407 por serie). Bootstrap de bloques de 7 días, B = 2000, semilla 0. Mejor referencia por serie = menor RMSE ponderado entre LightGBM v2 y persistencia v2 (persistencia en 4/6; LightGBM en Las Encinas pm10/pm25). Runs `sinca-zona-dmdop-{rep}-e10-aedmd-v1-s{seed}` (`tipo=diagnostico`). Continuidad con el DMD v2: K y `y_pred` idénticos (rel. 0).
+- **Resultado** (media de 6 series; razón vs mejor referencia con intervalo 95 %):
+
+  | representación | RMSE pond. | razón vs mejor ref. |
+  |---|---|---|
+  | conv1d (media 3 semillas) | 7.22 | 0.244 [0.178, 0.308] |
+  | GRU (media 3 semillas) | 6.45 | 0.218 [0.168, 0.257] |
+  | PCA | 6.76 | 0.232 [0.202, 0.259] |
+  | Referencias | LightGBM 34.24, persistencia 30.94 | |
+
+  Peor serie: PLC II pm25 conv1d 0.370 [0.226, 0.450]. Ninguna serie ni familia se acerca a 0.95.
+- **Lectura**: el techo de reconstrucción no limita el pronóstico a 24 h (el promedio de 24 h borra casi todo el error de reconstrucción). El problema es la dinámica.
+- **Decisión** (decidido por regla D9): los AE siguen; Hankel no pasa a línea principal. Sigue la escalera 1.1 con conv1d, GRU, PCA y Hankel.
+
+## 2026-11-19 - dmd-operador-global 1.1: escalera de representaciones
+
+- **Hipótesis**: con el mismo DMD exacto autónomo, la representación que mejor linealiza la dinámica a 24 h gana; Hankel (retardos) es el piso.
+- **Qué se probó**: DMD exacto autónomo en `sel` (`eval_rows`, n mín. 1407). Hankel con rango Gavish–Donoho (GD); PCA y AE con rango completo (GD reportado). Runs `…-e11a…e11g-aedmd-v1-s{seed}`.
+- **Resultado** (media de 6 series; AE = media de 3 semillas; diferencia emparejada vs `hankel` con intervalo 95 %):
+
+  | rep. | rango (GD) | RMSE pond. | razón vs mejor ref. | dif. vs hankel |
+  |---|---|---|---|---|
+  | 1.1a hankel | 38 (38) | 41.09 | 1.394 [1.077, 1.635] | — |
+  | 1.1b hankelmet | 133 (133) | 41.62 | 1.412 [1.104, 1.652] | +0.53 [+0.07, +1.19] |
+  | 1.1c pca | 16 (6) | 39.82 | 1.349 [1.069, 1.553] | −1.27 [−2.18, +0.24] |
+  | 1.1d conv1d | 16 (4) | 38.77 | 1.316 [1.079, 1.478] | −2.32 [−4.46, +0.50] |
+  | 1.1e gru | 16 (3–4) | 36.29 | 1.234 [1.061, 1.346] | −4.80 [−8.38, −0.36] |
+  | 1.1f hankelest | 45 (bloques) | 39.62 | 1.348 [1.122, 1.527] | −1.47 [−3.55, +1.37] |
+  | 1.1g hankel48 (n mín. 1376) | — | — | — | −1.25 [−2.20, +0.01] |
+
+  - Pares entre candidatos: GRU supera significativamente a hankel, hankelmet y conv1d (−2.48 [−4.14, −0.30]); no a PCA (−3.53 [−6.69, +0.58]).
+  - Regla GRU (D9): rango entre semillas 1.17 < semiancho del intervalo 7.85: no se descarta (conv1d: 2.11 < 9.69).
+  - Meteo con retardos (1.1b) empeora poco pero de forma significativa; Hankel por estación (1.1f) y h = 48 (1.1g) no difieren de forma significativa: no hay señal clara de cruce entre estaciones ni de memoria (conv1d L = 72 no se habilita).
+  - Todas las variantes siguen sobre la mejor referencia (intervalos de la razón > 1); mejor serie: Ñielol pm10 (GRU 0.921 [0.810, 1.063]).
+- **Decisión** (decidido por regla D9): pasan **PCA** (la más simple que ninguna otra supera de forma significativa) y **GRU** (mejor puntaje; no significativamente peor que PCA). conv1d sale (GRU lo supera de forma significativa); Hankel sale.
