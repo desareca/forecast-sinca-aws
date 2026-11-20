@@ -1,7 +1,7 @@
 # Predicción Calidad del Aire (SINCA) — Plan de arquitectura (contexto para OpenSpec)
 
 **Fecha:** 2026-09-21
-**Estado:** Fase 4 en progreso — `ae-reconstruccion` y `ae-dmd-prep` cerrados; siguiente `dmd-operador-global` (ver §8 y §9, actualizado 2026-11-18)
+**Estado:** Fase 4 en progreso — `ae-reconstruccion`, `ae-dmd-prep` y `dmd-operador-global` cerrados; siguiente `deep-koopman` (ver §8 y §9, actualizado 2026-11-20)
 
 Este documento es la fuente de verdad de arquitectura del proyecto. Las
 decisiones acá cerradas no se re-discuten salvo que cambien explícitamente, y
@@ -89,11 +89,13 @@ para capturar el día anterior completo; inferencia diaria a 24h en Fase 6.
    - 7.0 `ae-dmd-prep` — mantención y nueva partición (reentrenar conv1d y GRU). **(completado)**
      Base de 7.1: runs `version = 2` (presupuesto fijo). Cifras en `EXPERIMENT-LOG.md`.
    - 7.1 `dmd-operador-global` — oráculo, escalera de representaciones, picos,
-     exógenas, horizonte, estimador y selección de modos (post-hoc, CPU).
-   - 7.2 `dmd-localizado` — medición de variabilidad de la dinámica; operador
+     exógenas, horizonte, estimador y selección de modos (post-hoc, CPU). **(completado)**
+     Resultado en §9 ("Resultado de 7.1").
+   - 7.2 `deep-koopman` — Koopman de extremo a extremo. **Va antes que `dmd-localizado`**
+     (2026-11-20): 7.1 no cumple por identificabilidad entre semillas, y localizar requiere
+     modos estables.
+   - 7.3 `dmd-localizado` — medición de variabilidad de la dinámica; operador
      condicionado al régimen meteo del día solo si la medición lo justifica.
-   - 7.3 `deep-koopman` — Koopman de extremo a extremo; solo si lo lineal no cumple
-     el criterio de éxito.
 
 Deuda técnica registrada: migración del SDK de SageMaker v2 → v3 (change
 `sagemaker-sdk-v3`, a planificar **antes de `productivizacion`**; v2 termina soporte el
@@ -152,10 +154,12 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
   como referencia de precisión). **Semana, feriados y temporada = control conocido**
   (calendario real de t+k en el rollout).
 
-**Criterio de éxito (por serie, ambas condiciones).**
-- Precisión: RMSE ponderado ≤ 1.05 × LightGBM en ≥ 4/6 series, mismas filas; en
-  PLC II además skill > 0 vs persistencia. Razones con intervalo por bootstrap de
-  bloques de días; una serie no cumple solo si todo el intervalo queda sobre 1.05.
+**Criterio de éxito (por serie, ambas condiciones; D12 de `dmd-operador-global`, 2026-11-19).**
+- Precisión: RMSE ponderado ≤ 1.05 × **la mejor de LightGBM y persistencia** de la serie en
+  ≥ 4/6 series, mismas filas; en PLC II además skill > 0 vs persistencia; en las 6 series, no
+  significativamente peor que persistencia (el intervalo del skill no queda entero bajo 0).
+  Razones con intervalo por bootstrap de bloques de días; una serie no cumple solo si todo el
+  intervalo queda sobre 1.05. Un solo veredicto.
 - Interpretabilidad: ≤ 10 modos; modos dominantes presentes en las 3 semillas y en
   ≥ 80 % de las re-estimaciones bootstrap, con intervalos de período y vida media que
   se solapan.
@@ -180,10 +184,9 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
   LightGBM con `num_boost_round` = árboles del booster baseline `lightgbm-v1` de cada serie (1000 en
   las 6 = tope `NUM_BOOST_ROUND`: el baseline no cortó por early stopping, así que la fuga vía junio
   de 2026 no se confirma). Ningún presupuesto se elige con `sel`.
-- **Pendiente para `dmd-operador-global` (decide el operador al planificarlo)**: en `sel`, LightGBM
-  entrenado una vez (34.24 ponderado) queda peor que persistencia (30.94); el criterio
-  "≤ 1.05 × LightGBM" pierde exigencia. Propuesta: exigir además skill > 0 vs persistencia en las
-  6 series (hoy solo PLC II).
+- Referencia del criterio (resuelto en `dmd-operador-global`, D12): en `sel`, LightGBM entrenado
+  una vez (34.24 ponderado) queda peor que persistencia (30.94); por eso la razón se toma contra la
+  mejor de ambas, con piso de persistencia en las 6 series.
 - Al reentrenar con esta partición, las cifras de referencia de `ae-reconstruccion`
   cambian algo: anotarlo en `EXPERIMENT-LOG.md`, no es regresión.
 
@@ -202,6 +205,9 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
   `pydmd` no entra al entrenamiento TF: trabaja sobre latentes como arrays.
 - Cómputo: CPU `ml.m5.large` en todos los changes salvo que `deep-koopman` demuestre
   lo contrario.
+- **Regla del operador (2026-11-20): todo el cómputo de experimentos corre en AWS** (Training
+  Jobs u otro servicio AWS). Local solo tests unitarios y edición. `dmd-operador-global` corrió
+  en CPU local por excepción.
 
 **Changes y compuertas.**
 - `ae-dmd-prep`: reentrenar conv1d y GRU (3 semillas c/u) con la nueva partición;
@@ -231,14 +237,27 @@ cambiar la vida media de los modos); el calendario está comprimido con la meteo
   acotado al rango observado y radio espectral verificado). Las variables de la LPV
   salen de esta medición. La localización temporal (ventana deslizante) es solo
   diagnóstico, no modelo.
-- `deep-koopman`: entra si el mejor lineal no cumple la precisión, o si el oráculo
-  muestra techo de representación y Hankel tampoco alcanza. K entrenable global (no
-  por batch) en bloques 2×2 de rotación con radio ≤ 1, con el condicionamiento heredado;
+- `deep-koopman` (va antes que `dmd-localizado`, ver "Resultado de 7.1"): objetivo = modos
+  identificables entre semillas sin perder la precisión de 7.1. K entrenable global (no
+  por batch) en bloques 2×2 de rotación con radio ≤ 1, sin condicionamiento (queda para
+  `dmd-localizado`);
   calendario fuera del encoder, solo como control B·u; decoder lineal como variante
   principal (descomposición exacta por modo; techo de reconstrucción = PCA); arranque
   en caliente desde el AE. Pérdidas incrementales: F1 rec+lin → F2 +multi-paso 24 h →
   F3 +RMSE ponderado del promedio (variante ICAP_zona = PA-9). Diagnóstico de
   coherencia: DMD sobre el latente vs K aprendido.
+
+**Enmienda de 1.6 (operador, pausa 8.3 de `dmd-operador-global`, 2026-11-19).** PCA y AE parten
+de rango completo (GD solo se reporta); la eliminación de modos compara contra la configuración
+inicial de 1.6 (no contra el paso previo) y se detiene en el primer paso significativamente peor;
+el par diario (≈ 24 h) está protegido (el target de 24 h lo cancela). Candidato oficial GRU
+(apartándose del desempate "más simple"); PCA solo secundario.
+
+**Resultado de 7.1 (2026-11-20).** GRU L = 24 + DMD exacto autónomo horario + Duan, 5–6 modos.
+Test (una vez): razón media vs mejor referencia 1.030 [0.975, 1.176]. Precisión **cumple** por la
+regla de intervalo (6/6 sin intervalo entero sobre 1.05), pero solo 2/6 bajo 1.05 en punto.
+Interpretabilidad **no cumple**: solo el modo diario es identificable entre semillas. Veredicto
+global: **no cumple**. Siguiente: `deep-koopman` (modos estables) antes que `dmd-localizado`.
 
 **Interpretabilidad (entregable en cada change).** Espectro con período y vida media
 e intervalo; formas de modo por estación y contaminante (fase = desfase entre

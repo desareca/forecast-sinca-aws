@@ -3,6 +3,13 @@
 > Documento de planificación teórica de `ae-dmd`, acordado con el operador (2026-11-12).
 > **Lo vinculante está resumido en `project-decisions.md` §9 ("Plan de `ae-dmd`")**; este documento da el razonamiento detrás de cada decisión. Si hay diferencia, prevalece `project-decisions.md`.
 > El borrador original (proposal/design con PA-1…PA-14) está en `docs/referencia/ae-dmd-borrador/` y es solo referencia.
+>
+> **Nota tras `dmd-operador-global` (2026-11-20).** Lo que 7.1 desmintió de este documento:
+> - fbDMD (1.5) no corrige el sesgo: empuja los modos hacia |λ| = 1 y empeora el RMSE ponderado (con forzamiento estocástico, ambos sentidos tienen el mismo sesgo).
+> - Techo de rango Gavish–Donoho en PCA/AE (1.6) descartado: colapsaba a 1 modo; se parte de rango completo.
+> - El modo diario se protege en la eliminación: el target de 24 h lo cancela, así que el error a 24 h no lo selecciona.
+> - Orden de changes invertido: `deep-koopman` antes que `dmd-localizado` (solo el diario es identificable entre semillas; localizar requiere modos estables).
+> - Criterio §3.4: la referencia pasa a ser la mejor de LightGBM y persistencia, con piso de persistencia (D12; ver `project-decisions.md` §9).
 
 ---
 

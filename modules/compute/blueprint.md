@@ -149,3 +149,9 @@ el almacenamiento intermedio (S3) y la orquestación (ver `cicd/blueprint.md`).
   semilla; LightGBM refit de 6 series ~3 min. Serie de 7 jobs ≈ 2,8 h facturables (~USD 0,32).
 - **ECR `sinca-train` conserva un tag `latest` antiguo** (2026-10-19): no usarlo; los
   launchers exigen tag explícito.
+- **Post-hoc en CPU local, por excepción (`dmd-operador-global`)**: álgebra lineal sobre latentes
+  guardados; todas las etapas ~8 min de pared, costo AWS solo S3. Desde 2026-11-20 la regla del
+  operador es **todo el cómputo de experimentos en AWS** (Training Jobs u otro servicio); local solo
+  tests y edición.
+- **boto3 en Windows**: fijar `AWS_CA_BUNDLE` del proceso al bundle que usa el profile
+  (ruta Windows) antes de lanzar jobs o publicar.

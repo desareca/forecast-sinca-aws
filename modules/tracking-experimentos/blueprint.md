@@ -138,3 +138,10 @@ parámetros y artefactos; el registro decide dónde se versiona el modelo.
   `default` de otra cuenta dio 403. Deuda: el dashboard (fuente "S3 (real)") aún no lo pide.
 - **Early stopping con un mes de baja concentración corta demasiado pronto**: con marzo, AE en
   época 3–24 y LightGBM en 41–145 rondas. En `ae-dmd` se usa presupuesto fijo (§9).
+- **Estado local + publicación (`dmd-operador-global`)**: el sqlite de S3 trae
+  `artifact_location = file:///opt/ml/mlflow/mlruns` (rutas del job); al loguear en local, escribir
+  los artefactos en `<state-dir>/mlruns/<run_id>/artifacts/`. Publicar con
+  `scripts/mlflow/publish_state.py` (`plan` → `apply --yes`): aborta si el `LastModified` remoto
+  cambió desde la descarga, respalda el sqlite en `_mlflow/backups/mlflow-<AAAAMMDD-HHMM>.sqlite`,
+  sube solo el sqlite y los runs nuevos y reescribe `.download.json`. Sin runs nuevos no escribe.
+- **Runs descartados**: tag `descartado=<motivo>` en vez de borrar; la publicación los excluye.

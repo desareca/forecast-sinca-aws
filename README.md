@@ -385,21 +385,22 @@ de partida de `ae-dmd`. Ver ["Autoencoders"](#autoencoders-fase-4-parte-1) y
 [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
 
 **Fase 4, parte 2 — `ae-dmd` (en curso).** Plan en 4 changes (`ae-dmd-prep` →
-`dmd-operador-global` → `dmd-localizado` → `deep-koopman`), ver `project-decisions.md` §9.
+`dmd-operador-global` → `deep-koopman` → `dmd-localizado`; orden invertido tras 7.1), ver `project-decisions.md` §9.
 `ae-dmd-prep` **(completado)**: partición `ae-dmd` (train → 2026-02, marzo solo diagnóstico,
 selección `sel` = abril–junio, test intacto), conv1d y GRU `L = 24` × 3 semillas con 60 épocas
 fijas, pase DMD por semilla, referencias persistencia/LightGBM en `sel`, descarga selectiva de
 MLflow e imagen `tf-cpu-v2` con `pydmd`. En `sel`: el DMD tiene el mejor RMSE simple pero el peor
 ponderado (subestima picos); persistencia es la referencia más fuerte. Detalle en
 [`EXPERIMENT-LOG.md`](EXPERIMENT-LOG.md).
-`dmd-operador-global` **(implementado; pendiente de archivo)**: operador lineal global post-hoc en CPU
+`dmd-operador-global` **(completado, archivado 2026-11-20)**: operador lineal global post-hoc en CPU
 local (`pipeline/operador/`, ver su `README.md`) con compuertas 1.0–1.6 sobre `sel`. Configuración
 final: GRU + DMD exacto autónomo horario + Duan, 5–6 modos con el diario protegido. Test (una vez):
 RMSE ponderado 24.20, razón vs mejor de LightGBM/persistencia 1.030 [0.975, 1.176]. Precisión
 cumple; interpretabilidad no (solo el modo diario es estable entre semillas): veredicto global
 **no cumple**. Interpretabilidad en `notebooks/dmd_operador_global.ipynb`.
 Reproducir: `run.py --etapa base --profile <AWS_PROFILE> …`, luego `--etapa 1.0 … 1.6, cierre,
-test --no-download`; publicar con `scripts/mlflow/publish_state.py`.
+test --no-download`; publicar con `scripts/mlflow/publish_state.py`. Corrió en CPU local por
+excepción: desde 2026-11-20 todo el cómputo de experimentos va en AWS. Siguiente: `deep-koopman`.
 
 ### Correr local (sin AWS, sin escribir)
 
