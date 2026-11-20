@@ -13,9 +13,11 @@ el blueprint de tracking.
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 import pathlib
+import shutil
 import sqlite3
 
 from botocore.exceptions import ClientError
@@ -222,3 +224,95 @@ def upload_model_artifact(local_path: str, bucket: str, run: str, filename: str 
     client.upload_file(local_path, bucket, key)
     log.info("Artefacto de modelo subido: s3://%s/%s", bucket, key)
     return key
+
+
+# --- Publicación con resguardos (dmd-operador-global D1; deep-koopman D2) -------------
+
+
+class PublishConflict(RuntimeError):
+    """El `mlflow.sqlite` remoto cambió desde la descarga: no se sube nada."""
+
+
+def iso_ts(value) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def runs_de_stage(state_dir: str, stage: str) -> list[tuple[str, str]]:
+    """Runs activos con tag `stage` y sin tag `descartado` del sqlite local (`[(run_id, nombre)]`)."""
+    path = pathlib.Path(state_dir, DB_FILENAME).resolve()
+    con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "select r.run_uuid, r.name from runs r join tags t on t.run_uuid = r.run_uuid "
+            "where t.key = 'stage' and t.value = ? and r.lifecycle_stage = 'active' "
+            "and r.run_uuid not in (select run_uuid from tags where key = 'descartado') order by r.name", (stage,)
+        ).fetchall()
+    finally:
+        con.close()
+    return [(r[0], r[1]) for r in rows]
+
+
+def run_files(state_dir: str, run_id: str) -> list[pathlib.Path]:
+    base = pathlib.Path(state_dir, ARTIFACTS_DIRNAME, run_id)
+    return sorted(p for p in base.rglob("*") if p.is_file()) if base.is_dir() else []
+
+
+def runs_nuevos(state_dir: str, stage: str, published=()) -> list[tuple[str, str, list[pathlib.Path]]]:
+    """Runs del stage aún no publicados, con sus archivos; error si alguno no tiene artefactos."""
+    out, missing = [], []
+    published = set(published)
+    for run_id, name in runs_de_stage(state_dir, stage):
+        if run_id in published:
+            continue
+        files = run_files(state_dir, run_id)
+        if not files:
+            missing.append(name)
+        out.append((run_id, name, files))
+    if missing:
+        raise ValueError(f"Runs sin artefactos: {', '.join(missing)}")
+    return out
+
+
+def publish_new_runs(state_dir: str, stage: str, client, last_modified: str | None,
+                     bucket: str = MLFLOW_BUCKET_DEFAULT, prefix: str = MLFLOW_PREFIX_DEFAULT,
+                     published=(), now: dt.datetime | None = None, on_conflict_dir: str | None = None) -> dict:
+    """Publica en S3 los runs nuevos de `stage` con chequeo de concurrencia y respaldo.
+
+    - Si el `LastModified` remoto de `mlflow.sqlite` difiere de `last_modified`: no sube nada; si se
+      da `on_conflict_dir`, copia allí el sqlite local y `mlruns/<run_id>/` de los runs nuevos, y lanza
+      `PublishConflict`.
+    - Si coincide: respalda el sqlite remoto en `<prefix>/backups/mlflow-<AAAAMMDD-HHMM>.sqlite`, sube el
+      sqlite y solo los artefactos de los runs nuevos, y devuelve el nuevo `LastModified` (`head_object`).
+
+    Devuelve `{"uploaded": [...], "last_modified": str, "runs": [run_id, ...], "backup": str | None}`.
+    Sin runs nuevos no escribe nada.
+    """
+    nuevos = runs_nuevos(state_dir, stage, published)
+    if not nuevos:
+        return {"uploaded": [], "last_modified": last_modified, "runs": [], "backup": None}
+    db_key = f"{prefix}/{DB_FILENAME}"
+    remote = iso_ts(client.head_object(Bucket=bucket, Key=db_key)["LastModified"])
+    if remote != last_modified:
+        if on_conflict_dir:
+            dest = pathlib.Path(on_conflict_dir)
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pathlib.Path(state_dir, DB_FILENAME), dest / DB_FILENAME)
+            for run_id, _, _ in nuevos:
+                src = pathlib.Path(state_dir, ARTIFACTS_DIRNAME, run_id)
+                shutil.copytree(src, dest / ARTIFACTS_DIRNAME / run_id, dirs_exist_ok=True)
+        raise PublishConflict(f"LastModified remoto ({remote}) difiere del de la descarga ({last_modified}): "
+                              "otro proceso escribió el sqlite. No se sube nada.")
+    stamp = (now or dt.datetime.now()).strftime("%Y%m%d-%H%M")
+    backup = f"{prefix}/backups/mlflow-{stamp}.sqlite"
+    client.copy_object(Bucket=bucket, Key=backup, CopySource={"Bucket": bucket, "Key": db_key})
+    uploaded = [backup]
+    client.upload_file(str(pathlib.Path(state_dir, DB_FILENAME)), bucket, db_key)
+    uploaded.append(db_key)
+    for _, _, files in nuevos:
+        for path in files:
+            key = f"{prefix}/{path.relative_to(pathlib.Path(state_dir)).as_posix()}"
+            client.upload_file(str(path), bucket, key)
+            uploaded.append(key)
+    new_lm = iso_ts(client.head_object(Bucket=bucket, Key=db_key)["LastModified"])
+    log.info("Publicados %d runs (%d objetos); respaldo %s", len(nuevos), len(uploaded), backup)
+    return {"uploaded": uploaded, "last_modified": new_lm, "runs": [r for r, _, _ in nuevos], "backup": backup}
