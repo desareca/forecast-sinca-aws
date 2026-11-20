@@ -12,19 +12,22 @@ experimentos corre en SageMaker Training Jobs orquestados por Step Functions; lo
 | `entrenar.py` | `Datos`, fases y presupuesto fijo, calentamiento, currículo, paso compilado (`tf.function`, un trazado por fase), checkpoints, orden canónico |
 | `inicio.py` | arranque del GRU desde el AE v2, decoder lineal por LS y reescalado por bloque, `K` desde `e15a` |
 | `evaluar.py` | arnés de `operador` (filas fijas de 7.1, bootstrap, Duan, diagnósticos) |
-| `identificabilidad.py` | aportes, dominantes, bootstrap del latente, coherencia, compuerta, eliminación de bloques |
-| `compuerta.py` | reglas → JSON de decisión (`rama`) en S3 |
+| `identificabilidad.py` | aportes, dominantes, bootstrap del latente, coherencia, criterio de identificabilidad (D11), eliminación de bloques |
+| `seleccion.py` | selección preregistrada (D14) → `seleccion.json` en S3 |
 | `run.py` | entry point de los jobs (`--fase …`) |
 
-## Fases y compuertas
+## Campaña (lista fija, sin ramas ni pausas)
 
-`smoke` → F1 (GRU, conv1d, GRU+decoder GRU, variantes de K) → compuerta → (B1 λ_lin → B2 consistencia →
-B3 L1 → B4 `d = 8`) → F2 (currículo H 1/6/24) → F3 (+`L_tgt`, variante `icap`) → cierre (solo `K`, `B`,
-train+es+sel) → ⏸ operador → test (una vez; `--force-test` para repetir).
+`smoke` (manual) · campaña en serie: F1 (GRU, conv1d, GRU+decoder GRU, variantes de K) → B1–B4 (siempre)
+→ F2 (currículo H 1/6/24; GRU y conv1d) → F3 (+`L_tgt`, y variante `icap`; GRU y conv1d) → selección →
+cierre (solo `K`, `B`, train+es+sel) → test (una vez; `--force-test` para repetir). 48 jobs.
 
-La compuerta (`--fase compuerta --de <fase>`) evalúa los runs de la fase en la campaña y escribe
-`model-artifacts/orquestacion/deep-koopman/<campaña>/<fase>.json` (`rama` ∈ `pasa`, `b1`–`b4`, `c`,
-`pausa`, `continuar`; ganadores por semilla). Con `pasa` escribe además `arranque_f2.json` (padre de F2).
+- F2/F3 toman su padre del marcador del job de F1/F2 con el mismo encoder y semilla (`--parent-from`).
+- `--fase seleccion` aplica D14 a los runs de la campaña (candidatas, orden de simplicidad, filtro de
+  identificabilidad, reemplazo solo con mejora significativa; controles y `decgru` se reportan), registra
+  `sinca-zona-koop-seleccion-aedmd-v{n}` y, tras publicar, escribe `<campaña>/seleccion.json`.
+- `--fase cierre` y `--fase test` leen `seleccion.json` (`--seleccion` para una ruta local) y fallan sin
+  ella; escriben `<campaña>/cierre.json` y `test.json` (con `resumen` para el aviso SNS).
 
 ## Jobs, marcadores y reanudación
 
@@ -36,14 +39,15 @@ La compuerta (`--fase compuerta --de <fase>`) evalúa los runs de la fase en la 
 
 ## Modo seco
 
-`--dry`: sin MLflow ni entrenamiento; la compuerta escribe `--rama-forzada`. `--dry-ckpt`: 4 épocas
-sintéticas con checkpoints; `--dry-fallar-en N`: falla tras guardar la época N.
+`--dry`: sin MLflow ni entrenamiento; selección, cierre y test escriben JSON sintéticos (cierre y test
+exigen la selección). `--dry-ckpt`: 4 épocas sintéticas con checkpoints; `--dry-fallar-en N`: falla tras
+guardar la época N. `preparar_ejecucion.py --modo seco` usa la semilla 0 (18 jobs).
 
 ## Comandos
 
 ```powershell
 # entrada de la campaña (sin AWS) e impresión del start-execution
-.\.venv\Scripts\python scripts/koopman/preparar_ejecucion.py --modo real --campana <id> --plan
+.\.venv\Scripts\python scripts/koopman/preparar_ejecucion.py --modo real --campana <id> --plan   # seco: --modo seco --dry-ckpt --fallar-en f1:3:2
 # humo manual (tarea 8.1)
 .\.venv\Scripts\python pipeline/train/launch.py --profile <AWS_PROFILE> --role-arn <training_role_arn> --image-uri <registro>/sinca-train:tf-cpu-v2 --entry-point koopman/run.py --hp fase=smoke --hp experiment=sinca-smoke --hp campana=humo --max-run 3600 --wait
 # publicación manual tras un conflicto

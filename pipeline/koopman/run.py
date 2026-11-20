@@ -2,12 +2,13 @@
 
     python koopman/run.py --fase f1 --encoder gru --seed 0 --variantes principal --campana <id> --clave <clave>
 
-Fases: `smoke`, `f1`, `b1`–`b4`, `f2`, `f3`, `cierre`, `test`, `compuerta` (con `--de <fase>`).
-Al terminar con éxito (tras publicar) escribe el marcador `<campaña>/jobs/<clave>.json` (D2); la
-compuerta escribe su decisión `<campaña>/<fase>.json`, que es también su marcador. `--dry`: sin
-MLflow ni entrenamiento (la compuerta escribe `--rama-forzada`); `--dry-ckpt`: entrenamiento
-sintético de 4 épocas con checkpoints; `--dry-fallar-en N`: falla tras guardar la época N.
-Ver `pipeline/koopman/README.md`.
+Fases: `smoke`, `f1`, `b1`–`b4`, `f2`, `f3`, `seleccion`, `cierre`, `test`. Al terminar con éxito
+(tras publicar) escribe el marcador `<campaña>/jobs/<clave>.json` (D2). F2/F3 toman su padre del
+marcador de F1/F2 (`--parent-from`). `seleccion` aplica D14 y escribe `<campaña>/seleccion.json`;
+`cierre` y `test` lo leen (fallan si no existe) y escriben `<campaña>/cierre.json` y `test.json`.
+`--dry`: sin MLflow ni entrenamiento (selección, cierre y test escriben JSON sintéticos);
+`--dry-ckpt`: entrenamiento sintético de 4 épocas con checkpoints; `--dry-fallar-en N`: falla tras
+guardar la época N. Ver `pipeline/koopman/README.md`.
 """
 from __future__ import annotations
 
@@ -28,11 +29,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from ae import data as aed  # noqa: E402
 from features import partition as pt  # noqa: E402
 from features.build import load_validated  # noqa: E402
-from koopman import compuerta as CP  # noqa: E402
 from koopman import entrenar as T  # noqa: E402
 from koopman import evaluar as EV  # noqa: E402
 from koopman import identificabilidad as ID  # noqa: E402
 from koopman import inicio as IN  # noqa: E402
+from koopman import seleccion as SEL  # noqa: E402
 from koopman.modelo import KoopmanModelo, bloques  # noqa: E402
 from operador import estado as E  # noqa: E402
 from operador import evaluacion as evm  # noqa: E402
@@ -43,7 +44,8 @@ log = logging.getLogger("koopman")
 
 STAGE = "deep-koopman"
 PARTICION = "ae-dmd"
-FASES = ("smoke", "f1", "b1", "b2", "b3", "b4", "f2", "f3", "cierre", "test", "compuerta")
+FASES = ("smoke", "f1", "b1", "b2", "b3", "b4", "f2", "f3", "seleccion", "cierre", "test")
+FASES_CAMPANA = ("f1", "b1", "b2", "b3", "b4", "f2", "f3")  # fases cuyos runs entran a la selección
 VARIANTES = ("principal", "kden", "perlib", "sinbu", "decgru", "ll01", "ll10", "icap")
 LAMBDA_LIN = {"ll01": 0.1, "ll10": 10.0}
 TRAMOS_CIERRE = ("train", "es", "sel")
@@ -63,12 +65,14 @@ def _bool(s) -> bool:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Koopman entrenado (deep-koopman): una fase por job.")
     p.add_argument(*_flag("fase"), choices=FASES, required=True)
-    p.add_argument(*_flag("de"), choices=FASES[:-2], default=None, help="Fase evaluada por la compuerta.")
     p.add_argument(*_flag("encoder"), choices=("gru", "conv1ds"), default="gru")
     p.add_argument(*_flag("variantes"), default="principal", help=f"Separadas por coma: {', '.join(VARIANTES)}.")
     p.add_argument(*_flag("seed"), type=int, default=0)
-    p.add_argument(*_flag("seeds"), default="0,1,2", help="Semillas (compuerta, cierre y test).")
-    p.add_argument(*_flag("parent-from"), default=None, help="JSON de decisión (s3://… o ruta local) con los ganadores.")
+    p.add_argument(*_flag("seeds"), default="0,1,2", help="Semillas (selección; cierre y test usan las de la selección).")
+    p.add_argument(*_flag("parent-from"), default=None,
+                   help="Marcador del job padre (s3://…/jobs/<clave>.json o ruta local) con su `run_ids`.")
+    p.add_argument(*_flag("seleccion"), default=None,
+                   help="seleccion.json (s3://… o ruta local); por defecto el de la campaña en S3.")
     p.add_argument(*_flag("parent-run-id"), default=None)
     p.add_argument(*_flag("mlflow-runs"), default="auto", help="auto (referencias + arranque + padre) | none | IDs.")
     p.add_argument(*_flag("experiment"), default=mlflow_log.EXPERIMENT_NAME)
@@ -78,7 +82,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(*_flag("dry"), type=_bool, nargs="?", const=True, default=False)
     p.add_argument(*_flag("dry-ckpt"), type=_bool, nargs="?", const=True, default=False)
     p.add_argument(*_flag("dry-fallar-en"), type=int, default=None)
-    p.add_argument(*_flag("rama-forzada"), default=None)
     p.add_argument(*_flag("campana"), default="local")
     p.add_argument(*_flag("clave"), default=None)
     p.add_argument(*_flag("hidden"), type=int, default=64)
@@ -99,9 +102,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if bad:
         p.error(f"Variantes desconocidas: {bad}")
     args.seeds = [int(x) for x in str(args.seeds).split(",") if x != ""]
-    if args.fase == "compuerta" and not args.de:
-        p.error("--fase compuerta requiere --de")
-    args.clave = args.clave or (f"compuerta-{args.de}" if args.fase == "compuerta" else
+    args.clave = args.clave or (args.fase if args.fase in ("seleccion", "cierre", "test") else
                                 f"{args.fase}-{args.encoder}{''.join(v for v in args.variantes if v != 'principal')}-s{args.seed}")
     return args
 
@@ -119,7 +120,7 @@ def run_name_test(station: str, pollutant: str, enc: str, version: int, seed: in
 
 
 def marcador(s3, bucket: str, campana: str, clave: str, contenido: dict) -> str:
-    key = CP.clave_marcador(campana, clave)
+    key = SEL.clave_marcador(campana, clave)
     s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(contenido, default=str).encode(), ContentType="application/json")
     return key
 
@@ -135,6 +136,19 @@ def _leer_json(ruta: str, s3=None) -> dict:
         bucket, key = ruta[5:].split("/", 1)
         return json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
     return json.loads(pathlib.Path(ruta).read_text(encoding="utf-8"))
+
+
+def leer_seleccion(args, s3) -> dict:
+    """`seleccion.json` de la campaña (D14); cierre y test fallan si no existe."""
+    ruta = args.seleccion or f"s3://{args.mlflow_bucket}/{SEL.clave_json(args.campana, 'seleccion')}"
+    try:
+        return _leer_json(ruta, s3)
+    except Exception as exc:  # NoSuchKey, archivo ausente, S3 falso
+        raise SystemExit(f"--fase {args.fase} requiere la selección ({ruta}): {exc!r}") from exc
+
+
+def _ahora() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
 # --- Datos sintéticos (modo seco con checkpoints) ---------------------------------------------
@@ -160,15 +174,17 @@ def datos_sinteticos(dias: int = 70, seed: int = 0) -> dict:
 
 
 def ejecutar_seco(args, s3) -> dict:
-    if args.fase == "compuerta":
-        rama = args.rama_forzada or ("continuar" if args.de in ("f2", "f3") else "pasa")
-        decision = {"fase": args.de, "rama": rama, "motivo": "modo seco (rama forzada)", "ganadores": {},
-                    "encoders": ["gru"], "cifras": {}, "seco": True,
-                    "fecha": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
-        key = CP.escribir(decision, s3, args.mlflow_bucket, args.campana, args.de)
-        log.info("Compuerta seca %s -> %s (%s)", args.de, rama, key)
-        return {"decision": decision}
     info = {"clave": args.clave, "seco": True, "fase": args.fase}
+    if args.fase == "seleccion":
+        sel = {"configuracion": "f1-gru", "fase": "f1", "encoder": "gru", "variante": "principal",
+               "runs": {str(s): f"seco-{s}" for s in args.seeds}, "bloques_finales": {}, "interpretabilidad": "no cumple",
+               "identificables": [], "seco": True, "resumen": "modo seco: selección sintética f1-gru", "fecha": _ahora()}
+        info["json"] = SEL.escribir(sel, s3, args.mlflow_bucket, args.campana, "seleccion")
+    elif args.fase in ("cierre", "test"):
+        sel = leer_seleccion(args, s3)
+        cont = {"configuracion": sel["configuracion"], "seeds": sorted(sel["runs"]), "seco": True,
+                "resumen": f"modo seco: {args.fase} sintético de {sel['configuracion']}", "fecha": _ahora()}
+        info["json"] = SEL.escribir(cont, s3, args.mlflow_bucket, args.campana, args.fase)
     if args.dry_ckpt:
         data = datos_sinteticos()
         grid = aed.build_grid(data["sinca"], data["open_meteo"], data["feriados"])
@@ -215,6 +231,8 @@ class Job:
         self.data = data
         self.ctx = E.contexto(self.grid, self.part)
         self._ev = None
+        self.seleccion: dict | None = None
+        self.pendientes: dict[str, dict] = {}  # JSON de resumen que se escriben tras publicar
 
     def descargar_estado(self) -> None:
         a = self.args
@@ -241,7 +259,7 @@ class Job:
     def _ids_padres(self, runs) -> list[str]:
         ids = [self.args.parent_run_id] if self.args.parent_run_id else []
         if self.args.parent_from:
-            ids += [str(v) for v in _leer_json(self.args.parent_from, self.s3).get("ganadores", {}).values()]
+            ids += [str(v) for v in _leer_json(self.args.parent_from, self.s3).get("run_ids", [])]
         ids += [r["run_id"] for r in runs if r["tags"].get("stage") == STAGE and not r["tags"].get("descartado")]
         return ids
 
@@ -518,37 +536,48 @@ def medir_tiempos(job: Job, datos: T.Datos, n: int = 20) -> dict:
 
 
 def _padre(job: Job, seed: int) -> str:
+    """Padre de F2/F3: el run del marcador del job de F1/F2 con el mismo encoder y semilla (`--parent-from`)."""
     a = job.args
     if a.parent_run_id:
         return a.parent_run_id
     if not a.parent_from:
         raise SystemExit(f"--fase {a.fase} requiere --parent-from o --parent-run-id")
-    dec = _leer_json(a.parent_from, job.s3)
-    gan = dec.get("ganadores_por_encoder", {}).get(a.encoder) or dec.get("ganadores", {})
-    if str(seed) not in gan:
-        raise SystemExit(f"La decisión {a.parent_from} no trae ganador para la semilla {seed}")
-    return str(gan[str(seed)])
+    ids = [str(r) for r in _leer_json(a.parent_from, job.s3).get("run_ids", [])]
+    if len(ids) != 1:
+        raise SystemExit(f"El marcador {a.parent_from} debe traer un solo run (trae {len(ids)})")
+    return ids[0]
 
 
 def fase_cierre(job: Job) -> list[str]:
-    """D16: encoder y decoder congelados; `K`, `B` (y Duan si el final es F1/F2) reajustados 20 épocas con la
-    pérdida de la fase final sobre train+es+sel, con los bloques fijados en D13."""
+    """D16: para cada semilla de la selección, encoder y decoder congelados; `K`, `B` (y Duan si la
+    seleccionada es F1/B/F2) reajustados 20 épocas con su pérdida sobre train+es+sel, con los bloques de
+    D13 fijados. Escribe `<campaña>/cierre.json`."""
     a = job.args
-    t0 = time.perf_counter()
-    parent = _padre(job, a.seed)
-    modelo, cfg = job.modelo_de_run(parent)
+    sel = job.seleccion
     datos, pos = job.datos_ajuste(TRAMOS_CIERRE)
-    cfg_p = {k: v for k, v in cfg.get("cfg_perdida", {}).items() if k in ("H", "tgt", "icap", "cons", "l1")}
-    if "curriculo" in cfg.get("cfg_perdida", {}):
-        cfg_p["H"] = 24
-    entreno = T.entrenar(modelo, datos, "cierre", _escala(job.ctx.norm), epocas=a.epocas,
-                         ckpt_dir=pathlib.Path(a.checkpoint_dir) / "cierre", seed=a.seed, cfg_perdida=cfg_p, log=log.info)
-    ev_out = evaluar_completo(job, modelo, f"koop-cierre-s{a.seed}", con_duan=cfg.get("fase") in ("f1", "f2", "b1", "b2",
-                                                                                                    "b3", "b4"))
-    ev_out["bloques_finales"] = cfg.get("bloques_finales")
-    ev_out.pop("curva_bloques", None)
-    return [registrar(job, modelo, "cierre", "principal", a.seed, ev_out, entreno,
-                      {"arranque": "padre", "fase_final": cfg.get("fase")}, parent, time.perf_counter() - t0)]
+    ids, cifras = [], {}
+    for seed, parent in sorted(sel["runs"].items()):
+        t0 = time.perf_counter()
+        modelo, cfg = job.modelo_de_run(parent)
+        cfg_p = {k: v for k, v in cfg.get("cfg_perdida", {}).items() if k in ("H", "tgt", "icap", "cons", "l1")}
+        if "curriculo" in cfg.get("cfg_perdida", {}):
+            cfg_p["H"] = 24
+        entreno = T.entrenar(modelo, datos, "cierre", _escala(job.ctx.norm), epocas=a.epocas,
+                             ckpt_dir=pathlib.Path(a.checkpoint_dir) / f"cierre-s{seed}", seed=int(seed),
+                             cfg_perdida=cfg_p, log=log.info)
+        ev_out = evaluar_completo(job, modelo, f"koop-cierre-s{seed}", con_duan=cfg.get("fase") in ("f1", "f2", "b1", "b2",
+                                                                                                     "b3", "b4"))
+        ev_out["bloques_finales"] = cfg.get("bloques_finales")
+        ev_out.pop("curva_bloques", None)
+        rid = registrar(job, modelo, "cierre", "principal", int(seed), ev_out, entreno,
+                        {"arranque": "padre", "fase_final": cfg.get("fase"), "seleccion": sel["configuracion"]},
+                        parent, time.perf_counter() - t0)
+        ids.append(rid)
+        cifras[seed] = {"run_id": rid, "wrmse_sel": float(ev_out["base"]["puntaje"].media)}
+    job.pendientes["cierre"] = {"configuracion": sel["configuracion"], "runs": cifras, "fecha": _ahora(),
+                                "resumen": f"Cierre de {sel['configuracion']}: " + ", ".join(
+                                    f"s{s} wRMSE sel {c['wrmse_sel']:.2f}" for s, c in cifras.items())}
+    return ids
 
 
 def fase_test(job: Job) -> list[str]:
@@ -567,10 +596,14 @@ def fase_test(job: Job) -> list[str]:
     feats = build_features(job.data["sinca"], job.data["open_meteo"], job.data["feriados"])
     tg = feats[["timestamp", "estacion", "pollutant", "target"]].rename(columns={"target": "y_true"})
     preds, cierres = {}, {}
-    for seed in a.seeds:
-        run = job.run_por_nombre(run_name(a.encoder, "cierre", "principal", a.version, seed))
-        if run is None:
-            raise SystemExit(f"Falta el run de cierre de la semilla {seed}")
+    enc = job.seleccion["encoder"]
+    for seed in sorted(int(s) for s in job.seleccion["runs"]):
+        cand = [r for r in job.runs if r["tags"].get("stage") == STAGE and r["tags"].get("fase") == "cierre"
+                and r["tags"].get("campana") == a.campana and r["tags"].get("seed") == str(seed)
+                and not r["tags"].get("descartado")]
+        if not cand:
+            raise SystemExit(f"Falta el run de cierre de la semilla {seed} en la campaña {a.campana}")
+        run = max(cand, key=lambda r: str(r.get("start_time") or ""))
         modelo, cfg = job.modelo_de_run(run["run_id"])
         pos, _ = E.posiciones(job.ctx, 24, ("test",))
         pos = pos[pt.row_mask(job.grid.index[pos], job.part, "test")]
@@ -599,11 +632,11 @@ def fase_test(job: Job) -> list[str]:
         y = rows[evm.KEYS].merge(f[evm.KEYS + ["y_pred"]], on=evm.KEYS, how="left")["y_pred"].to_numpy(float)
         items.append(ev.puntaje(y))
         for (s, p), g in ev.predicciones(y, split="test").groupby(["estacion", "pollutant"]):
-            tags = {"modelo": f"koop-{a.encoder}", "stage": STAGE, "particion": PARTICION, "fase": "test",
+            tags = {"modelo": f"koop-{enc}", "stage": STAGE, "particion": PARTICION, "fase": "test",
                     "seed": str(seed), "evaluacion": "test", "serie": f"{s}|{p}", "campana": a.campana}
             params = {"estacion": s, "pollutant": p, "version": a.version, "seed": seed, "tipo": "koopman",
-                      "cierre_run_id": cierres[seed]}
-            ids.append(G.log_variante(job.state, run_name_test(s, p, a.encoder, a.version, seed), tags, params,
+                      "cierre_run_id": cierres[seed], "seleccion": job.seleccion["configuracion"]}
+            ids.append(G.log_variante(job.state, run_name_test(s, p, enc, a.version, seed), tags, params,
                                       {f"test_{k}": v for k, v in evaluate_predictions(g).items()},
                                       {"predictions.parquet": g, "zone_icap.parquet": zone_icap(g),
                                        "rolling_scores.parquet": pd.DataFrame({"window_index": pd.Series(dtype=int),
@@ -628,20 +661,29 @@ def fase_test(job: Job) -> list[str]:
     tabla.to_parquet(pathlib.Path(a.model_dir) / "test_tabla.parquet", index=False)
     pathlib.Path(a.model_dir, "test_resumen.json").write_text(json.dumps(resumen, default=str), encoding="utf-8")
     log.info("Test: %s", resumen)
+    d71 = resumen["diff_71"]
+    job.pendientes["test"] = {"configuracion": job.seleccion["configuracion"],
+                              "interpretabilidad": job.seleccion.get("interpretabilidad"), **resumen, "fecha": _ahora(),
+                              "resumen": (f"Test de {job.seleccion['configuracion']}: wRMSE {p.media:.2f}; D12 precisión "
+                                          f"{resumen['veredicto_precision']}; interpretabilidad "
+                                          f"{job.seleccion.get('interpretabilidad')}"
+                                          + (f"; vs 7.1 {d71['diff']:+.2f} [{d71['lo']:+.2f}, {d71['hi']:+.2f}]"
+                                             if d71 else ""))}
     return ids
 
 
-def fase_compuerta(job: Job) -> dict:
-    """Aplica las reglas de `compuerta.decidir` a los runs de la fase `--de` de la campaña."""
+def candidatas_de_campana(job: Job) -> dict:
+    """Configuraciones de la campaña (F1, B, F2, F3 y controles) con su puntaje en `sel` (media de semillas),
+    identificabilidad (D11), runs y bloques finales (D13) por semilla."""
     a = job.args
-    runs = [r for r in job.runs if r["tags"].get("stage") == STAGE and r["tags"].get("fase") == a.de
+    runs = [r for r in job.runs if r["tags"].get("stage") == STAGE and r["tags"].get("fase") in FASES_CAMPANA
             and r["tags"].get("campana") == a.campana and not r["tags"].get("descartado")]
     ev = job.ev
     grupos: dict[str, dict] = {}
     for r in runs:
-        enc, var = r["params"].get("encoder", "gru"), r["tags"].get("variante", "principal")
-        nombre = enc if var == "principal" else f"{enc}-{var}"
-        grupos.setdefault(nombre, {"runs": {}, "encoder": enc, "variante": var})["runs"][int(r["tags"]["seed"])] = r
+        fase, enc, var = r["tags"]["fase"], r["params"].get("encoder", "gru"), r["tags"].get("variante", "principal")
+        g = grupos.setdefault(SEL.nombre_config(fase, enc, var), {"fase": fase, "encoder": enc, "variante": var, "runs": {}})
+        g["runs"][int(r["tags"]["seed"])] = r
     cand = {}
     for nombre, g in grupos.items():
         items, sem = [], {}
@@ -653,15 +695,32 @@ def fase_compuerta(job: Job) -> dict:
             boot = pd.read_parquet(job.artefacto(r["run_id"], "bootstrap_modos.parquet"))
             lam = tm["lam_re"].to_numpy() + 1j * tm["lam_im"].to_numpy()
             sem[seed] = {"dominantes": lam[tm["dominante"].to_numpy(bool)], "modos": lam, "boot": boot}
-        ok, tabla = ID.compuerta(sem) if len(sem) > 1 else (False, pd.DataFrame())
-        lin_rec = float(np.nanmean([r["metrics"].get("lin_rec", np.nan) for r in g["runs"].values()]))
-        cand[nombre] = {"puntaje": evm.Puntaje.promedio(items) if len(items) > 1 else items[0], "identificable": ok,
-                        "ganadores": {str(s): r["run_id"] for s, r in g["runs"].items()}, "lin_rec": lin_rec,
-                        "encoder": g["encoder"], "variante": g["variante"]}
-    decision = CP.decidir(a.de, cand, EV.puntaje_71(job.state, job.runs, ev))
-    key = CP.escribir(decision, job.s3, a.mlflow_bucket, a.campana, a.de)
-    log.info("Compuerta %s -> %s (%s): %s", a.de, decision["rama"], key, decision["motivo"])
-    return decision
+        ok, _ = ID.compuerta(sem) if len(sem) > 1 else (False, None)
+        cand[nombre] = {"fase": g["fase"], "encoder": g["encoder"], "variante": g["variante"],
+                        "puntaje": evm.Puntaje.promedio(items) if len(items) > 1 else items[0], "identificable": bool(ok),
+                        "runs": {s: r["run_id"] for s, r in g["runs"].items()},
+                        "bloques": {s: json.loads(r["params"].get("bloques_finales") or "null") for s, r in g["runs"].items()}}
+    return cand
+
+
+def fase_seleccion(job: Job) -> list[str]:
+    """D14: selección preregistrada sobre la campaña; un run `sinca-zona-koop-seleccion-aedmd-v{n}` y
+    `<campaña>/seleccion.json` (este, tras publicar)."""
+    a = job.args
+    sel = SEL.seleccionar(candidatas_de_campana(job), EV.puntaje_71(job.state, job.runs, job.ev))
+    sel["campana"] = a.campana
+    texto = json.dumps(sel, ensure_ascii=False, default=str)
+    rid = G.log_variante(job.state, f"sinca-zona-koop-seleccion-aedmd-v{a.version}",
+                         {"modelo": "koop-seleccion", "stage": STAGE, "particion": PARTICION, "fase": "seleccion",
+                          "campana": a.campana},
+                         {"configuracion": sel["configuracion"], "interpretabilidad": sel["interpretabilidad"],
+                          "version": a.version, "clave": a.clave},
+                         {"n_candidatas": len(sel["orden"]), "n_identificables": len(sel["identificables"])},
+                         {"candidatas.parquet": pd.json_normalize(sel["tabla"])}, None, {"seleccion.json": texto},
+                         experiment=a.experiment)
+    job.pendientes["seleccion"] = {**sel, "run_id": rid}
+    log.info("Selección: %s", sel["resumen"])
+    return [rid]
 
 
 # --- Principal --------------------------------------------------------------------------------
@@ -671,28 +730,24 @@ def ejecutar(args, s3=None, descargar: bool = True) -> dict:
     s3 = s3 if s3 is not None else (_s3(args) if not args.no_upload or args.dry else None)
     if args.dry:
         return ejecutar_seco(args, s3)
-    if args.fase in ("f2", "f3") and args.parent_from and args.encoder != "gru":
-        dec = _leer_json(args.parent_from, s3)
-        if args.encoder not in dec.get("encoders", ["gru"]):
-            info = {"clave": args.clave, "omitido": True, "motivo": f"{args.encoder} no sigue tras {dec.get('fase')}"}
-            log.info("Job omitido: %s", info["motivo"])
-            if not args.no_upload:
-                marcador(s3, args.mlflow_bucket, args.campana, args.clave, info)
-            return info
+    sel = leer_seleccion(args, s3) if args.fase in ("cierre", "test") else None  # falla antes de descargar
     job = Job(args, s3, descargar)
-    if args.fase == "compuerta":
-        return {"decision": fase_compuerta(job)}
-    if args.fase == "cierre":
+    job.seleccion = sel
+    if args.fase == "seleccion":
+        ids = fase_seleccion(job)
+    elif args.fase == "cierre":
         ids = fase_cierre(job)
     elif args.fase == "test":
         ids = fase_test(job)
     else:
         ids = fase_entrenamiento(job)
-    out = {"run_ids": ids}
+    out = {"run_ids": ids, "json": job.pendientes}
     if args.no_upload:
         return out
     res = mlflow_log.publish_new_runs(job.state, STAGE, s3, job.last_modified, args.mlflow_bucket, args.mlflow_prefix,
                                       published=job.previos, on_conflict_dir=str(pathlib.Path(args.model_dir) / "conflicto"))
+    for nombre, contenido in job.pendientes.items():  # seleccion/cierre/test.json, solo tras publicar
+        SEL.escribir(contenido, s3, args.mlflow_bucket, args.campana, nombre)
     verificados = {r: [p.name for p in mlflow_log.run_files(job.state, r)] for r in ids}
     marcador(s3, args.mlflow_bucket, args.campana, args.clave,
              {"clave": args.clave, "run_ids": ids, "artefactos": verificados, "publicado": res["runs"],
