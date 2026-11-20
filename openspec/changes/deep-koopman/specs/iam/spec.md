@@ -22,8 +22,16 @@ El rol de la Lambda de decisión SHALL tener solo lectura (`GetObject`, y `ListB
 
 ### Requirement: Permisos del rol de infra para la orquestación
 
-`sinca-github-infra-role` SHALL incluir acciones explícitas de Step Functions, Lambda, SNS y EventBridge para el `plan` y el `apply` de los recursos de orquestación, sin `*FullAccess` ni `Action: "*"`.
+`sinca-github-infra-role` SHALL incluir acciones explícitas de Step Functions, Lambda, SNS y EventBridge para el `plan` y el `apply` de los recursos de orquestación, sin `*FullAccess` ni `Action: "*"`, y su `iam:PassRole` SHALL permitir además `states.amazonaws.com` y `lambda.amazonaws.com` como servicio destino.
 
 #### Scenario: Plan en CI
 - **WHEN** infra-cd corre `terraform plan` en un PR con los recursos de orquestación ya creados
 - **THEN** el refresh no falla por permisos
+
+#### Scenario: Sin deriva tras el apply local
+- **WHEN** infra-cd corre `terraform plan` en el PR solo de infra después del apply local
+- **THEN** el plan muestra 0 cambios, incluido el hash del código de la Lambda
+
+#### Scenario: Email no expuesto
+- **WHEN** se inspeccionan los logs del plan de CI
+- **THEN** el email del operador no aparece en texto claro

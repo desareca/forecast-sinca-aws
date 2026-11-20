@@ -249,8 +249,10 @@ por job): ≈ USD 0. Los checkpoints abaratan los reintentos (no se repiten épo
   cambio de diseño), fallo tras B4 (opciones C1/C2: la ejecución termina con "requiere tareas
   nuevas") y siempre antes de test. Sin link de aprobación por Lambda URL: una URL pública con el
   token como única autenticación no es segura y con `AWS_IAM` no es simple.
-- Avisos: tópico SNS `sinca-deep-koopman-avisos` con suscripción email (`operator_email` en
-  `terraform.tfvars`, gitignored; placeholder en `.example`). Mensajes: resultado de cada compuerta
+- Avisos: tópico SNS `sinca-deep-koopman-avisos` con suscripción email (variable `operator_email`,
+  `sensitive = true`: local en `infra/terraform.tfvars`, gitignored; en CI,
+  `-var="operator_email=${{ secrets.OPERATOR_EMAIL }}"` en `infra-cd.yml`, enmascarado en los logs
+  públicos de Actions; placeholder en `.example`). Mensajes: resultado de cada compuerta
   (rama, puntaje vs 7.1, compuerta de identificabilidad), cada pausa (con el comando), cierre y
   test (veredicto D12). Fallos: regla EventBridge sobre `Step Functions Execution Status Change`
   (`FAILED`, `TIMED_OUT`, `ABORTED`) de esta máquina → SNS.
@@ -269,7 +271,8 @@ por job): ≈ USD 0. Los checkpoints abaratan los reintentos (no se repiten épo
 ### D19. Infra e IAM (Terraform)
 
 - `infra/orquestacion-koopman.tf` (+ `infra/lambda/decision_rama/handler.py`, empaquetada con
-  `archive_file`; provider `hashicorp/archive` nuevo): state machine (ASL en
+  `archive_file` con `output_file_mode = "0666"` para un zip reproducible entre Windows/WSL y el
+  Linux de CI, sin diffs perpetuos de `source_code_hash`; provider `hashicorp/archive` nuevo): state machine (ASL en
   `infra/stepfunctions/deep-koopman.asl.json` con `templatefile`), Lambda, SNS + suscripción y
   política del tópico (publica EventBridge), regla EventBridge, roles.
 - Rol de Step Functions: `sagemaker:CreateTrainingJob`, `DescribeTrainingJob`, `StopTrainingJob`
@@ -285,10 +288,14 @@ por job): ≈ USD 0. Los checkpoints abaratan los reintentos (no se repiten épo
   marcadores y checkpoints) y `ListBucket` sobre el bucket, que pide la sincronización de
   checkpoints.
 - `sinca-github-infra-role`: acciones explícitas de `states`, `lambda`, `sns`, `events` y las de
-  IAM ya presentes, para que el `plan` de CI refresque los recursos nuevos.
-- Flujo: `terraform plan` en el PR (infra-cd); `terraform apply` lo corre el operador en local con
-  su profile, en dos pasos (1: política del rol de infra; 2: orquestación), y confirma la
-  suscripción del email. El apply de infra-cd al mergear queda sin cambios.
+  IAM ya presentes, para que el `plan` de CI refresque los recursos nuevos; la condición
+  `iam:PassedToService` de su `iam:PassRole` suma `states.amazonaws.com` y `lambda.amazonaws.com`
+  (hoy solo `ecs-tasks` y `sagemaker`).
+- Flujo: `terraform plan` en el PR de la rama (infra-cd, con el secret `OPERATOR_EMAIL`); un solo
+  `terraform plan` + `apply` local del operador (profile admin) revisando el plan; confirmar la
+  suscripción del email. Tras la ejecución seca exitosa, **PR solo de infra** (`infra/**`,
+  `infra-cd.yml`, Lambda y ASL) a `main`: su plan de CI debe mostrar 0 cambios y el apply de `main`
+  queda no-op. El resto del change se mergea al cierre.
 
 ### D20. Ejecución seca
 
@@ -316,11 +323,16 @@ la ejecución falla sin reintento y avisa por EventBridge; una nueva ejecución 
 - [IAM nuevo (roles de Step Functions y Lambda, ampliación del rol OIDC de infra)] → riesgo alto
   (`WORKFLOW.md`): mínimo privilegio por ARN/prefijo, apply del operador con el plan a la vista,
   relectura completa del change al cierre.
+- [Destrucción por CI: con los recursos aplicados desde la rama, si otro PR con `infra/**` se
+  mergea a `main` antes que el PR de infra, el apply automático de `main` los destruiría] → no
+  mergear otros PR de `infra/**` entre el apply local y el PR solo de infra; ese PR va apenas pasa
+  la ejecución seca.
+- [Email del operador en logs públicos] → variable `sensitive` y secret de Actions.
 - [Token de tarea en un email] → solo llega al operador; no hay URL pública de aprobación.
 
 ## Migration Plan
 
-Código y tests locales → infra (plan en CI, apply del operador) → humo manual → ejecución seca
-(D20) → ejecución real: F1 → compuerta (→ B1–B4) → F2 → F3 → cierre → ⏸ test → aviso final. Rollback:
+Código y tests locales → infra (plan en CI, apply local del operador) → humo manual → ejecución
+seca (D20) → PR solo de infra a `main` (0 cambios) → ejecución real: F1 → compuerta (→ B1–B4) → F2 → F3 → cierre → ⏸ test → aviso final. Rollback:
 runs con `stage=deep-koopman` se marcan `descartado` o se borran con `scripts/mlflow/maintenance.py`;
 respaldos en `_mlflow/backups/`.
