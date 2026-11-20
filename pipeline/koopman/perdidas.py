@@ -17,7 +17,8 @@ from icap.icap import ICAP_ANCHORS
 from .modelo import HORIZONTE, N_MP, bloques
 
 TAU_ICAP = 5.0
-LAMBDAS = {"rec": 1.0, "lin": 1.0, "pred": 1.0, "tgt": 1.0, "orth": 0.1, "cons": 1.0, "l1": 0.1}
+LAMBDAS = {"rec": 1.0, "lin": 1.0, "pred": 1.0, "tgt": 1.0, "norma": 1.0, "cons": 1.0, "l1": 0.1}
+SIN_NORMALIZAR = ("norma",)  # adimensional y parte en 0 (D8)
 
 
 def _pollutants() -> list[str]:
@@ -101,14 +102,16 @@ def l_tgt_icap(pred, iz, izw, tau: float = TAU_ICAP):
     return tf.sqrt(tf.reduce_sum(izw * tf.square(soft - iz)) / tf.maximum(tf.reduce_sum(izw), 1e-6))
 
 
-def l_orth(modelo):
+def l_norma(modelo):
+    """`Σ_b (‖W_b‖_F² / n_b − 1)²` sobre las columnas del decoder lineal de cada bloque de K (D6):
+    fija la escala de `z` por bloque (evita el colapso `z → 0`); 0 con decoder GRU."""
     import tensorflow as tf
 
     if modelo.config["decoder"] != "lineal":
         return tf.constant(0.0)
     k = modelo.dec.get_layer("dec_lin").kernel  # d × 144 (Keras) = Wᵀ
-    g = tf.matmul(k, k, transpose_b=True)
-    return tf.reduce_sum(tf.square(g - tf.eye(modelo.d)))
+    sq = tf.reduce_sum(tf.square(k), axis=1)  # ‖columna de W‖² por coordenada de z
+    return tf.add_n([tf.square(tf.reduce_sum(tf.gather(sq, b)) / float(len(b)) - 1.0) for b in bloques(modelo.d)])
 
 
 def l_cons(modelo, lote, z0, training=True):
@@ -129,24 +132,35 @@ def l_l1(modelo, z0):
 
 
 def terminos(modelo, lote, cfg: dict, escala_mp, training=True) -> dict:
-    """Términos crudos activos según `cfg` (`fase`, `H`, `icap`, `cons`, `l1`)."""
+    """Términos crudos activos según `cfg` (`fase`, `H`, `icap`, `cons`, `l1`).
+
+    `H` puede ser un tensor (paso compilado, sin retrazar por currículo): entonces `H_max` (int) fija
+    el desenrollado y los pasos `k ≥ H` se anulan con una máscara; el valor es el mismo que con `H` int."""
     import tensorflow as tf
 
     out = {}
     out["rec"], z0 = l_rec(modelo, lote, training)
     out["lin"] = l_lin(modelo, lote, z0, training)
-    out["orth"] = l_orth(modelo)
+    if modelo.config["decoder"] == "lineal":
+        out["norma"] = l_norma(modelo)
     if cfg.get("cons"):
         out["cons"] = l_cons(modelo, lote, z0, training)
     if cfg.get("l1"):
         out["l1"] = l_l1(modelo, z0)
-    H = int(cfg.get("H", 0))
-    if H > 0 or cfg.get("tgt"):
-        zs = modelo.rollout(z0, lote["U"], HORIZONTE if cfg.get("tgt") else H)
-        if H > 0:
+    H = cfg.get("H", 0)
+    dinamico = tf.is_tensor(H)
+    H_max = int(cfg.get("H_max", HORIZONTE)) if dinamico else int(H)
+    if H_max > 0 or cfg.get("tgt"):
+        zs = modelo.rollout(z0, lote["U"], HORIZONTE if cfg.get("tgt") else H_max)
+        if H_max > 0:
             terms = [masked_mse(lote["mp"][:, k + 1], modelo.decode(zs[k], training=training), lote["real"][:, k + 1])
-                     for k in range(H)]
-            out["pred"] = tf.add_n(terms) / float(H)
+                     for k in range(H_max)]
+            if dinamico:
+                Hf = tf.cast(H, tf.float32)
+                terms = [tf.cast(k < Hf, tf.float32) * t for k, t in enumerate(terms)]
+                out["pred"] = tf.add_n(terms) / tf.maximum(Hf, 1.0)
+            else:
+                out["pred"] = tf.add_n(terms) / float(H_max)
         if cfg.get("tgt"):
             mean, std = escala_mp
             pred = promedio_ugm3(modelo, zs[HORIZONTE - 1], mean, std, training)
@@ -156,13 +170,13 @@ def terminos(modelo, lote, cfg: dict, escala_mp, training=True) -> dict:
 
 
 def total(terms: dict, escalas: dict, lambdas: dict):
-    """`Σ λ_k · L_k / escala_k` (la ortogonalidad no se normaliza: su escala inicial puede ser ~0)."""
+    """`Σ λ_k · L_k / escala_k` (`L_norma` no se normaliza: adimensional y parte en 0)."""
     import tensorflow as tf
 
     acc = []
     for k, v in terms.items():
         lam = float(lambdas.get(k, LAMBDAS.get(k, 1.0)))
-        den = 1.0 if k == "orth" else max(float(escalas.get(k, 1.0)), 1e-12)
+        den = 1.0 if k in SIN_NORMALIZAR else max(float(escalas.get(k, 1.0)), 1e-12)
         acc.append(lam * v / den)
     return tf.add_n(acc)
 

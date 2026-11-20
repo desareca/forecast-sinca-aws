@@ -58,3 +58,44 @@ def test_asignacion_de_autovalores_a_bloques():
     assert hl == pytest.approx(300, rel=1e-3)
     k = m.op.matriz_np()
     assert 2 * math.pi / math.atan2(k[1, 0], k[0, 0]) == pytest.approx(24.0, abs=1e-3)  # diario fijo
+
+
+@pytest.mark.parametrize("variante", ["", "kden"])
+def test_reescalado_por_bloque_neutro(grilla_kp, variante):
+    import tensorflow as tf
+
+    from koopman import perdidas as L
+
+    grid, _ = grilla_kp
+    ctx, pos, _ = contexto_y_posiciones(grid, 60)
+    # hidden ≥ d: con hidden < d el latente es de rango deficiente y el LS de mínima norma queda mal
+    # condicionado en float32 (no ocurre en los jobs: hidden = 64, d = 10)
+    m = M.KoopmanModelo(variante=variante, hidden=16, seed=0)
+    rng = np.random.default_rng(0)
+    m.op.B.assign(rng.normal(scale=0.1, size=m.op.B.shape).astype("float32"))
+    I.decoder_lineal_ls(m, ctx.ng, pos)
+    x = tf.constant(M.entradas(ctx.ng, pos))
+    U = tf.constant(rng.normal(size=(len(pos), 24, M.N_U)).astype("float32"))
+
+    def salidas():
+        z = m.encode(x)
+        return np.asarray(m.decode(z)), np.asarray(m.decode(m.rollout(z, U, 24)[-1]))
+
+    r0, p0 = salidas()
+    k0 = m.op.matriz_np().copy()
+    s = I.reescalar_bloques(m)
+    r1, p1 = salidas()
+    assert not np.allclose(s, 1.0)
+    np.testing.assert_allclose(r1, r0, rtol=1e-5, atol=1e-5 * np.abs(r0).max())
+    np.testing.assert_allclose(p1, p0, rtol=1e-5, atol=1e-5 * np.abs(p0).max())
+    assert float(L.l_norma(m)) == pytest.approx(0.0, abs=1e-6)
+    if not variante:
+        np.testing.assert_array_equal(m.op.matriz_np(), k0)
+
+
+def test_reescalado_sin_efecto_con_decoder_gru():
+    m = modelo_chico(decoder="gru")
+    w0 = [w.copy() for w in m.enc.get_weights() + m.dec.get_weights()]
+    assert np.all(I.reescalar_bloques(m) == 1.0)
+    for a, b in zip(w0, m.enc.get_weights() + m.dec.get_weights()):
+        np.testing.assert_array_equal(a, b)

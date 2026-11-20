@@ -212,9 +212,10 @@ def entrenar(modelo: KoopmanModelo, datos: Datos, fase: str, escala_mp, *, en_ca
     retomado = inicio if inicio > 0 else None
     ids_enc = {id(v) for v in modelo.vars_enc}
     ids_dec = {id(v) for v in modelo.vars_dec}
+    paso_fn = PasoCompilado(modelo, opt, cfg, escala_mp, escalas, lambdas)
+    z_ini = normas_z(modelo, datos, "ini" if inicio == 0 else "ret")
     for ep in range(inicio, n_ep):
         H = h_de_epoca(cfg, ep)
-        cfg_ep = {**cfg, "H": H}
         congelado = ep < congeladas
         if cfg.get("solo_op"):
             activas = {id(v) for v in todas} - ids_enc - ids_dec
@@ -222,24 +223,25 @@ def entrenar(modelo: KoopmanModelo, datos: Datos, fase: str, escala_mp, *, en_ca
             activas = {id(v) for v in todas} - ids_enc
         else:
             activas = {id(v) for v in todas}
+        act = tf.constant([1.0 if id(v) in activas else 0.0 for v in todas], dtype=tf.float32)
         perm = rng.permutation(len(datos))
         orden = hashlib.sha1(perm.tobytes()).hexdigest()[:12]
         suma: dict[str, float] = {}
         for s in range(pasos_ep):
             paso = ep * pasos_ep + s
             opt.learning_rate = lr_de_paso(paso, pasos_ep)
-            lote = {k: tf.constant(v) for k, v in datos.lote(perm[s * BATCH:(s + 1) * BATCH]).items()}
-            with tf.GradientTape() as tape:
-                terms = L.terminos(modelo, lote, cfg_ep, escala_mp, training=True)
-                loss = L.total(terms, escalas, lambdas)
-            grads = tape.gradient(loss, todas)
-            grads = [g if (g is not None and id(v) in activas) else tf.zeros_like(v) for g, v in zip(grads, todas)]
-            opt.apply_gradients(zip(grads, todas))
+            terms, loss = paso_fn(datos.lote(perm[s * BATCH:(s + 1) * BATCH]), H, act)
             for k, v in {**terms, "total": loss}.items():
                 suma[k] = suma.get(k, 0.0) + float(v)
         fila = {"epoca": ep + 1, "H": H, "congelado": congelado, "lr": float(lr_de_paso((ep + 1) * pasos_ep - 1, pasos_ep)),
                 "orden": orden, **{f"loss_{k}": v / pasos_ep for k, v in suma.items()},
-                **{f"norm_{k}": (v / pasos_ep) / escalas.get(k, 1.0) for k, v in suma.items() if k in escalas}}
+                **{f"norm_{k}": (v / pasos_ep) / (1.0 if k in L.SIN_NORMALIZAR else escalas.get(k, 1.0))
+                   for k, v in suma.items() if k in escalas},
+                **({"trazados": paso_fn.trazados} if paso_fn.trazados else {})}
+        if ep == inicio:
+            fila.update(z_ini)
+        if ep == n_ep - 1:
+            fila.update(normas_z(modelo, datos, "fin"))
         historia.append(fila)
         log(json.dumps(fila))
         terminado = ep == n_ep - 1
@@ -247,13 +249,83 @@ def entrenar(modelo: KoopmanModelo, datos: Datos, fase: str, escala_mp, *, en_ca
                                    "rng": _rng_estado(rng), "terminado": terminado})
         if fallar_tras_epoca is not None and ep + 1 == fallar_tras_epoca:
             raise RuntimeError(f"Fallo forzado tras guardar la época {ep + 1} (--dry-fallar-en)")
-    return {"historia": historia, "escalas": escalas, "retomado_en": retomado}
+    return {"historia": historia, "escalas": escalas, "retomado_en": retomado, "trazados": paso_fn.trazados}
+
+
+# --- Paso compilado (3.5) ---------------------------------------------------------------
+
+
+def h_max(cfg: dict) -> int:
+    """Horizonte máximo de la fase (fija el desenrollado del paso compilado)."""
+    if "curriculo" in cfg:
+        return max(h for _, h in cfg["curriculo"])
+    return int(cfg.get("H_max", cfg.get("H", 0)))
+
+
+def perdida_y_gradientes(modelo: KoopmanModelo, lote: dict, cfg: dict, H, escala_mp, escalas: dict, lambdas: dict,
+                         training: bool = True):
+    """Términos, pérdida total y gradientes (0 donde no hay) sobre `modelo.entrenables`."""
+    import tensorflow as tf
+
+    todas = modelo.entrenables
+    with tf.GradientTape() as tape:
+        terms = L.terminos(modelo, lote, {**cfg, "H": H}, escala_mp, training=training)
+        loss = L.total(terms, escalas, lambdas)
+    grads = tape.gradient(loss, todas)
+    return terms, loss, [g if g is not None else tf.zeros_like(v) for g, v in zip(grads, todas)]
+
+
+class PasoCompilado:
+    """Paso de optimización en `tf.function` con un solo trazado por fase: `H` (currículo) y la máscara de
+    variables activas (congelado, `cierre`) entran como tensores; el lr es la variable del optimizador;
+    el lote tiene dimensión de batch libre. `trazados` cuenta los trazados."""
+
+    def __init__(self, modelo: KoopmanModelo, opt, cfg: dict, escala_mp, escalas: dict, lambdas: dict,
+                 training: bool = True):
+        self.modelo, self.opt, self.escala_mp, self.training = modelo, opt, escala_mp, training
+        self.cfg = {k: v for k, v in cfg.items() if k not in ("H", "curriculo", "epocas", "congeladas")}
+        self.cfg["H_max"] = h_max(cfg)
+        self.escalas, self.lambdas = dict(escalas), dict(lambdas)
+        self.trazados = 0
+        self._fn = None
+
+    def _cuerpo(self, lote, H, act):
+        self.trazados += 1
+        todas = self.modelo.entrenables
+        terms, loss, grads = perdida_y_gradientes(self.modelo, lote, self.cfg, H, self.escala_mp, self.escalas,
+                                                  self.lambdas, self.training)
+        self.opt.apply_gradients([(g * act[i], v) for i, (g, v) in enumerate(zip(grads, todas))])
+        return terms, loss
+
+    def __call__(self, lote_np: dict, H: int, act):
+        import tensorflow as tf
+
+        lote = {k: tf.constant(v) for k, v in lote_np.items()}
+        if self._fn is None:
+            sig = ({k: tf.TensorSpec((None,) + tuple(v.shape[1:]), v.dtype) for k, v in lote.items()},
+                   tf.TensorSpec([], tf.int32), tf.TensorSpec([len(self.modelo.entrenables)], tf.float32))
+            self._fn = tf.function(self._cuerpo, input_signature=sig)
+        return self._fn(lote, tf.constant(int(H), tf.int32), act)
+
+
+def normas_z(modelo: KoopmanModelo, datos: Datos, momento: str, n: int = N_ESCALA) -> dict:
+    """Norma media de `z` por bloque (`z_<momento>_b<j>`) en la muestra fija de ventanas de las escalas."""
+    import tensorflow as tf
+
+    rng = np.random.default_rng(SEMILLA_ESCALA)
+    idx = np.sort(rng.choice(len(datos), size=min(n, len(datos)), replace=False))
+    p = datos.pos[idx]
+    w0 = (p - HORIZONTE + 1)[:, None] + np.arange(HORIZONTE)[None, :]
+    z = np.concatenate([np.asarray(modelo.encode(tf.constant(datos.enc_all[w0[i:i + 512]]), training=False))
+                        for i in range(0, len(w0), 512)])
+    return {f"z_{momento}_b{j}": float(np.linalg.norm(z[:, b], axis=1).mean()) for j, b in enumerate(bloques(modelo.d))}
 
 
 def medir_paso(modelo: KoopmanModelo, datos: Datos, cfg: dict, escala_mp, *, n: int = 10, previos: int = 2,
                seed: int = 0) -> dict:
-    """Mide segundos por paso de optimización (humo, 8.1) con la pérdida `cfg` (`H`, `tgt`, `solo_op`…),
-    sin checkpoint ni escalas (1.0). Devuelve `s_paso`, `pasos_epoca` y `s_epoca` estimados."""
+    """Mide segundos por paso de optimización (humo, 8.1/8.2) con el paso compilado de la pérdida `cfg`
+    (`H`, `H_max`, `tgt`…), sin checkpoint ni escalas (1.0); los `previos` pasos (con el trazado) no se
+    cronometran. Devuelve `s_paso`, `pasos_epoca`, `s_epoca` estimados y `s_trazado`."""
     import time
 
     import keras
@@ -263,20 +335,22 @@ def medir_paso(modelo: KoopmanModelo, datos: Datos, cfg: dict, escala_mp, *, n: 
     opt = keras.optimizers.Adam(learning_rate=LR, clipnorm=CLIPNORM)
     todas = modelo.entrenables
     opt.build(todas)
+    paso_fn = PasoCompilado(modelo, opt, cfg, escala_mp, {}, L.LAMBDAS)
+    act = tf.ones([len(todas)], tf.float32)
     rng = np.random.default_rng(seed)
-    t0 = None
+    t0 = time.perf_counter()
+    t_traz = None
     for s in range(previos + n):
         if s == previos:
+            t_traz = time.perf_counter() - t0
             t0 = time.perf_counter()
-        lote = {k: tf.constant(v) for k, v in datos.lote(rng.choice(len(datos), size=min(BATCH, len(datos)), replace=False)).items()}
-        with tf.GradientTape() as tape:
-            loss = L.total(L.terminos(modelo, lote, cfg, escala_mp, training=True), {}, L.LAMBDAS)
-        grads = tape.gradient(loss, todas)
-        opt.apply_gradients([(g if g is not None else tf.zeros_like(v), v) for g, v in zip(grads, todas)])
+        _, loss = paso_fn(datos.lote(rng.choice(len(datos), size=min(BATCH, len(datos)), replace=False)),
+                          int(cfg.get("H", 0)), act)
         float(loss)
     s_paso = (time.perf_counter() - t0) / n
     pasos = int(math.ceil(len(datos) / BATCH))
-    return {"s_paso": s_paso, "pasos_epoca": pasos, "s_epoca": s_paso * pasos}
+    return {"s_paso": s_paso, "pasos_epoca": pasos, "s_epoca": s_paso * pasos, "s_trazado": t_traz,
+            "trazados": paso_fn.trazados}
 
 
 # --- Orden canónico (D9) ---------------------------------------------------------------

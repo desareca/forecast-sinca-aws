@@ -300,6 +300,7 @@ class Job:
         if modelo.config["decoder"] == "lineal":
             datos, pos = self.datos_ajuste()
             IN.decoder_lineal_ls(modelo, self.ctx.ng, pos[: 20000])
+            info["reescalado"] = [round(float(x), 6) for x in IN.reescalar_bloques(modelo)]
         return modelo, info
 
     def modelo_de_run(self, run_id: str) -> tuple[KoopmanModelo, dict]:
@@ -373,6 +374,12 @@ def metricas(ev_out: dict, historia: list[dict]) -> dict:
         if rec and lin is not None:
             m["lin_rec"] = float(lin) / max(float(rec), 1e-12)
         m.update({k: v for k, v in last.items() if k.startswith("loss_") or k.startswith("norm_")})
+        primera = historia[0]
+        m.update({f"ep1_{k}": v for k, v in primera.items() if k.startswith("loss_") or k.startswith("norm_")})
+        for fila in (primera, last):
+            m.update({k: v for k, v in fila.items() if k.startswith("z_")})
+        if "trazados" in last:
+            m["trazados"] = last["trazados"]
     return m
 
 
@@ -483,21 +490,24 @@ MEDICIONES = (
     ("f1_gru_decgru", "gru", "gru", {"H": 0}),
     ("f1_gru_icap", "gru", "lineal", {"H": 0, "icap": True}),
     ("f1_conv1ds", "conv1ds", "lineal", {"H": 0}),
-    ("f2_gru_h1", "gru", "lineal", {"H": 1}),
-    ("f2_gru_h6", "gru", "lineal", {"H": 6}),
-    ("f2_gru_h24", "gru", "lineal", {"H": 24}),
-    ("f2_conv1ds_h24", "conv1ds", "lineal", {"H": 24}),
+    ("f2_gru_h1", "gru", "lineal", {"H": 1, "H_max": 24}),  # F2 desenrolla siempre a 24 (un trazado)
+    ("f2_gru_h24", "gru", "lineal", {"H": 24, "H_max": 24}),
+    ("f2_conv1ds_h24", "conv1ds", "lineal", {"H": 24, "H_max": 24}),
     ("f3_gru", "gru", "lineal", {"H": 24, "tgt": True}),
+    ("f3_conv1ds", "conv1ds", "lineal", {"H": 24, "tgt": True}),
 )
 
 
-def medir_tiempos(job: Job, datos: T.Datos, n: int = 10) -> dict:
-    """Segundos por paso y por época (estimados con los pasos reales de una época) de cada configuración."""
+def medir_tiempos(job: Job, datos: T.Datos, n: int = 20) -> dict:
+    """Segundos por paso y por época (estimados con los pasos reales de una época) de cada configuración,
+    con el paso compilado y sin contar los pasos del trazado."""
     out = {}
     for nombre, enc, dec, cfg in MEDICIONES:
         m = KoopmanModelo(encoder=enc, decoder=dec, d=10, hidden=job.args.hidden, seed=0)
         r = T.medir_paso(m, datos, cfg, _escala(job.ctx.norm), n=n)
-        log.info("Tiempo %s: %.3f s/paso, %d pasos, %.1f s/época", nombre, r["s_paso"], r["pasos_epoca"], r["s_epoca"])
+        log.info("Tiempo %s: %.3f s/paso, %d pasos, %.1f s/época (trazado %.1f s)", nombre, r["s_paso"],
+                 r["pasos_epoca"], r["s_epoca"], r["s_trazado"] or 0.0)
+        out[f"t_{nombre}_s_trazado"] = r["s_trazado"] or 0.0
         out[f"t_{nombre}_s_paso"] = r["s_paso"]
         out[f"t_{nombre}_s_epoca"] = r["s_epoca"]
     out["t_pasos_epoca"] = float(r["pasos_epoca"])

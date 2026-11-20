@@ -8,9 +8,9 @@ experimentos corre en SageMaker Training Jobs orquestados por Step Functions; lo
 | Módulo | Qué hace |
 |---|---|
 | `modelo.py` | redes, `OperadorBloques` (variantes `kden`, `perlib`, `sinbu`), entradas, `pronostico` |
-| `perdidas.py` | `L_rec`, `L_lin`, `L_pred(H)`, `L_tgt` (y `icap` con máximo suave), `L_orth`, `L_cons`, `L1` |
-| `entrenar.py` | `Datos`, fases y presupuesto fijo, calentamiento, currículo, checkpoints, orden canónico |
-| `inicio.py` | arranque del GRU desde el AE v2, decoder lineal por LS, `K` desde `e15a` |
+| `perdidas.py` | `L_rec`, `L_lin`, `L_pred(H)`, `L_tgt` (y `icap` con máximo suave), `L_norma` (escala por bloque del decoder lineal), `L_cons`, `L1` |
+| `entrenar.py` | `Datos`, fases y presupuesto fijo, calentamiento, currículo, paso compilado (`tf.function`, un trazado por fase), checkpoints, orden canónico |
+| `inicio.py` | arranque del GRU desde el AE v2, decoder lineal por LS y reescalado por bloque, `K` desde `e15a` |
 | `evaluar.py` | arnés de `operador` (filas fijas de 7.1, bootstrap, Duan, diagnósticos) |
 | `identificabilidad.py` | aportes, dominantes, bootstrap del latente, coherencia, compuerta, eliminación de bloques |
 | `compuerta.py` | reglas → JSON de decisión (`rama`) en S3 |

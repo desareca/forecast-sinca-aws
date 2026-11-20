@@ -62,6 +62,33 @@ def decoder_lineal_ls(modelo: KoopmanModelo, ng, positions, lote: int = 4096) ->
     modelo.dec.get_layer("dec_lin").set_weights([coef[:-1].astype("float32"), coef[-1].astype("float32")])
 
 
+def reescalar_bloques(modelo: KoopmanModelo) -> np.ndarray:
+    """Reescalado por bloque tras el ajuste del decoder (D6, 4.2): `s_b = ‖W_b‖_F/√n_b`; columnas del
+    decoder `/ s_b`, salida del encoder (kernel y sesgo de `enc_z`) y filas de `B` `· s_b`. `K` no cambia
+    (escalar dentro del bloque); en `kden` se aplica `K ← S K S⁻¹`. Predicciones idénticas y `L_norma = 0`.
+    Sin efecto con decoder GRU. Devuelve `s` por coordenada de `z`."""
+    from .modelo import bloques
+
+    s = np.ones(modelo.d)
+    if modelo.config["decoder"] != "lineal":
+        return s
+    dec = modelo.dec.get_layer("dec_lin")
+    W, bd = dec.get_weights()  # W: d × 144 (filas = coordenadas de z)
+    for b in bloques(modelo.d):
+        s[b] = np.sqrt(np.sum(W[b].astype(float) ** 2) / len(b))
+    s = np.where(s > 1e-12, s, 1.0)
+    dec.set_weights([(W / s[:, None]).astype("float32"), bd])
+    ez = modelo.enc.get_layer("enc_z")
+    k, be = ez.get_weights()  # k: hidden × d
+    ez.set_weights([(k * s[None, :]).astype("float32"), (be * s).astype("float32")])
+    op = modelo.op
+    if op.B is not None:
+        op.B.assign((np.asarray(op.B) * s[:, None]).astype("float32"))
+    if op.kden is not None:
+        op.kden.assign((s[:, None] * np.asarray(op.kden) / s[None, :]).astype("float32"))
+    return s
+
+
 def asignar_autovalores(lam, d: int = 10) -> dict:
     """Regla de D7: diario ← el más cercano a 24 h; libres ← los complejos no diarios de mayor `|λ|`;
     reales ← los reales (o `|arg λ| < 0.005`) de mayor `|λ|`; todo recortado al techo. Faltantes:

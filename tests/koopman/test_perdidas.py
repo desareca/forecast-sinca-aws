@@ -92,3 +92,21 @@ def test_icap_suave_tiende_al_icap_zona():
     iz, izw = L.icap_zona_real(pred)
     np.testing.assert_allclose(iz, zona, atol=1e-3)
     assert np.all(izw >= 1)
+
+
+def test_l_norma_cero_en_escala_unitaria_y_crece_fuera():
+    from koopman.modelo import bloques
+
+    m = modelo_chico()
+    dec = m.dec.get_layer("dec_lin")
+    W, b = dec.get_weights()
+    W = np.random.default_rng(0).normal(size=W.shape).astype("float32")
+    for blk in bloques(m.d):
+        W[blk] *= np.sqrt(len(blk)) / np.linalg.norm(W[blk])
+    dec.set_weights([W, b])
+    assert float(L.l_norma(m)) == pytest.approx(0.0, abs=1e-6)
+    dec.set_weights([W * 1e-3, b])
+    assert float(L.l_norma(m)) > 0.99 * len(bloques(m.d))  # W -> 0: cada bloque aporta ~1
+    dec.set_weights([W * 10.0, b])
+    assert float(L.l_norma(m)) > 1e3  # W -> inf
+    assert float(L.l_norma(modelo_chico(decoder="gru"))) == 0.0

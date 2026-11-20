@@ -77,3 +77,52 @@ def test_medir_paso(grilla_kp):
     r = T.medir_paso(modelo_chico(), datos, {"H": 24, "tgt": True}, esc, n=2, previos=1)
     assert r["s_paso"] > 0 and r["pasos_epoca"] == int(np.ceil(len(datos) / T.BATCH))
     assert r["s_epoca"] == pytest.approx(r["s_paso"] * r["pasos_epoca"])
+
+
+def test_paso_compilado_equivale_a_eager(grilla_kp):
+    from koopman import perdidas as L
+
+    datos, esc = _datos(grilla_kp[0])
+    m = modelo_chico()
+    escala = tuple(tf.constant(np.asarray(a, dtype="float32")) for a in esc)
+    lote = {k: tf.constant(v) for k, v in datos.lote(np.arange(64)).items()}
+    t_e, l_e, g_e = T.perdida_y_gradientes(m, lote, {"tgt": True}, 6, escala, {}, L.LAMBDAS, training=False)
+    cfg = {"tgt": True, "H_max": 24}
+    f = tf.function(lambda lt, H: T.perdida_y_gradientes(m, lt, cfg, H, escala, {}, L.LAMBDAS, training=False))
+    t_c, l_c, g_c = f(lote, tf.constant(6))
+    assert set(t_e) == set(t_c)
+    np.testing.assert_allclose(float(l_c), float(l_e), rtol=1e-5)
+    for k in t_e:
+        np.testing.assert_allclose(float(t_c[k]), float(t_e[k]), rtol=1e-5, atol=1e-7)
+    for a, b in zip(g_c, g_e):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-4, atol=1e-6)
+
+
+def test_un_trazado_con_curriculo_y_congelado(grilla_kp):
+    datos, esc = _datos(grilla_kp[0])
+    out = T.entrenar(modelo_chico(), datos, "f2", esc, epocas=3,
+                     cfg_perdida={"curriculo": ((1, 1), (1, 6), (1, 24))}, log=lambda *_: None)
+    assert [f["H"] for f in out["historia"]] == [1, 6, 24] and out["trazados"] == 1
+    out = T.entrenar(modelo_chico(), datos, "smoke", esc, en_caliente=True, log=lambda *_: None)
+    assert [f["congelado"] for f in out["historia"]] == [True, False] and out["trazados"] == 1
+    assert "z_ini_b0" in out["historia"][0] and "z_fin_b0" in out["historia"][-1]
+
+
+def test_lr_del_optimizador_llega_al_paso_compilado(grilla_kp):
+    import keras
+
+    from koopman import perdidas as L
+
+    datos, esc = _datos(grilla_kp[0])
+    m = modelo_chico()
+    opt = keras.optimizers.Adam(learning_rate=T.LR, clipnorm=T.CLIPNORM)
+    opt.build(m.entrenables)
+    p = T.PasoCompilado(m, opt, {"H": 0}, esc, {}, L.LAMBDAS)
+    act = tf.ones([len(m.entrenables)])
+    w0 = [np.asarray(v).copy() for v in m.entrenables]
+    opt.learning_rate = 0.0
+    p(datos.lote(np.arange(32)), 0, act)
+    assert all(np.array_equal(a, np.asarray(v)) for a, v in zip(w0, m.entrenables))
+    opt.learning_rate = 1e-3
+    p(datos.lote(np.arange(32)), 0, act)
+    assert any(not np.array_equal(a, np.asarray(v)) for a, v in zip(w0, m.entrenables)) and p.trazados == 1
