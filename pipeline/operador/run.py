@@ -842,8 +842,84 @@ def etapa_15(rec: Recursos) -> None:
         print(x)
 
 
+def puntaje_op(rec: Recursos, est: est_mod.Estado, op: estim.Operador, cfg: dict, pos: np.ndarray, nombre: str):
+    forecast, dec = pronostico(rec, est, op, cfg, pos)
+    yhat = rec.ev.alinear(nombre, rec.grid.index[pos], forecast)
+    return rec.ev.puntaje(yhat), forecast, dec
+
+
+def etapa_16(rec: Recursos) -> None:
+    """Rango y modos sin grilla (D9): techo GD y eliminación hacia atrás de modos (`d = 16` fijo)."""
+    cfg0 = dict(rec.args.config)
+    pos = rec.eval_positions()
+    secciones, resumen = [], []
+    fam: dict[str, list] = {}
+    fam_full: dict[str, list] = {}
+    ranks, modos_sel = {}, {}
+    for rep in cfg0["representaciones"]:
+        for seed in miembros(rec, rep):
+            est = rec.estado(rep, seed)
+            key = rep_key(rep, est)
+            r_gd = rank_gd(est)
+            cfg_nd = {**cfg0, "duan": False}
+            op_full = ajustar(rec, est, rep, cfg0)
+            p_full, _, _ = puntaje_op(rec, est, op_full, cfg0, pos, f"{key}-completo")
+            cfg_gd = {**cfg_nd, "rank": {**cfg0.get("rank", {}), key: r_gd}}
+            op_gd = ajustar(rec, est, rep, cfg_gd)
+            lam = op_gd.eigvals()
+            reps_l = list(lam[modos.representantes(lam)])
+
+            def evaluar_fn(conservar, est=est, op_gd=op_gd, key=key):
+                op_m = modos.operador_con_modos(op_gd, conservar)
+                if cfg0.get("duan"):
+                    op_m.meta["duan_S"] = factores_duan(rec, est, op_m, cfg0)
+                return puntaje_op(rec, est, op_m, cfg0, pos, f"{key}-modos")[0]
+
+            kept, curva = modos.eliminacion_atras(reps_l, evaluar_fn)
+            op_fin = modos.operador_con_modos(op_gd, kept)
+            if cfg0.get("duan"):
+                op_fin.meta["duan_S"] = factores_duan(rec, est, op_fin, cfg0)
+            forecast, dec = pronostico(rec, est, op_fin, cfg0, pos)
+            res = evaluar(rec, f"{key}-e16", rec.grid.index[pos], forecast, dec, pos, op_fin)
+            d_gd = evm.diferencia(res["puntaje"], p_full)
+            ae_id = rec.ae(rep, seed)["run"]["run_id"] if rep in FAMILIAS_AE else None
+            registrar(rec, res, rep, "e16", "1.6", seed, estimador=op_fin.estimador, rollout=cfg0.get("rollout", "autonomo"),
+                      extra_params={"rank_gd": r_gd, "n_modos": len(kept), "duan": bool(cfg0.get("duan"))},
+                      extra_frames={"curva_modos.parquet": curva}, ae_run_id=ae_id)
+            fam.setdefault(rep, []).append(res["puntaje"])
+            fam_full.setdefault(rep, []).append(p_full)
+            ranks[key] = r_gd
+            modos_sel[key] = modos.a_lista(kept)
+            esp = modos.espectro(np.asarray(kept))
+            resumen.append({"variante": key, "rank_gd": r_gd, "modos_techo": len(reps_l), "modos_final": len(kept),
+                            "wrmse_completo": p_full.media, "wrmse_final": res["puntaje"].media,
+                            "dif_final_menos_completo": d_gd["diff"], "lo": d_gd["lo"], "hi": d_gd["hi"]})
+            secciones += [(f"{key} — curva de eliminación", reg.md_table(curva)),
+                          (f"{key} — modos conservados", reg.md_table(esp))]
+    punt = {rep: _resumen_familia(rec, items) for rep, items in fam.items()}
+    punt_full = {rep: _resumen_familia(rec, items) for rep, items in fam_full.items()}
+    sel = seleccionar(punt, [r for r in SIMPLICIDAD if r in punt], maximo=1)
+    fam_tab = pd.DataFrame([{"variante": k, **{c: v for c, v in _fila(rec.ev.tabla(p), k).items() if c != "variante"},
+                             "dif_vs_completo": evm.diferencia(p, punt_full[k])["diff"],
+                             "dif_lo": evm.diferencia(p, punt_full[k])["lo"], "dif_hi": evm.diferencia(p, punt_full[k])["hi"]}
+                            for k, p in punt.items()])
+    pares_tab = pd.DataFrame([{"a": a, "b": b, **evm.diferencia(punt[a], punt[b])} for a in punt for b in punt if a < b])
+    reg.resumen_md("1.6", [
+        ("Propuesta (D9)", f"Ganador: {sel['ganador']}."),
+        ("Por representación (final; AE = media de semillas)", reg.md_table(fam_tab)),
+        ("Diferencias entre representaciones finales", reg.md_table(pares_tab)),
+        ("Por variante", reg.md_table(pd.DataFrame(resumen))),
+        *secciones,
+        *[(f"Por serie — {k}", reg.md_table(_cols(rec.ev.tabla(p)))) for k, p in punt.items()],
+    ], rec.out, {"ganador": sel["ganador"], "rank": ranks, "modos": modos_sel, "resumen": resumen})
+    print(reg.md_table(fam_tab))
+    print(reg.md_table(pares_tab))
+    print(reg.md_table(pd.DataFrame(resumen)))
+    print({"ganador": sel["ganador"], "rank": ranks, "modos": modos_sel})
+
+
 ETAPA_FN = {"base": etapa_base, "1.0": etapa_10, "1.1": etapa_11, "1.2": etapa_12, "1.3": etapa_13,
-            "1.4": etapa_14, "1.5": etapa_15}
+            "1.4": etapa_14, "1.5": etapa_15, "1.6": etapa_16}
 
 
 # --- CLI ---------------------------------------------------------------------------

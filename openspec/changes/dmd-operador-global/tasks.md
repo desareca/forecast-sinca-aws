@@ -73,15 +73,15 @@
 
 ## 7. Estimador y estabilidad (1.5)
 
-- [ ] 7.1 `estimadores.recorte(K, eps=1e-3)` y `estimadores.fbdmd(segments, w=None, rank)` en numpy (D5: raíz más cercana a `eig(K_f)`, real, siempre con recorte); `modos.bootstrap_modos(…, dias=7, B=200)` con emparejamiento húngaro de D8. Tests: recorte → real y radio ≤ 1−ε; `fbdmd` en rango `r` = fórmula en coordenadas completas; con ruido de medición y de proceso sintético, fbDMD queda más cerca de los autovalores verdaderos que el exacto; bootstrap sobre un sistema sin ruido → 100 % de aparición; modo real comparado solo por vida media. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
-- [ ] 7.2 `run.py --etapa 1.5`: exacto vs recorte vs fbDMD+recorte (con los pesos de 4.3 si aplican) + bootstrap por modo del elegido; espectro con intervalos y estabilidad entre semillas (AE). Verificar: runs `…-e15-…` con `bootstrap_modos.parquet` y `output/dmd-operador-global/1.5.md`.
-- [ ] 7.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión. Registrar.
-- [ ] 7.4 **[OPERADOR]** Publicar.
+- [x] 7.1 `estimadores.recorte(K, eps=1e-3)` y `estimadores.fbdmd(segments, w=None, rank)` en numpy (D5: raíz más cercana a `eig(K_f)`, real, siempre con recorte); `modos.bootstrap_modos(…, dias=7, B=200)` con emparejamiento húngaro de D8. Tests: recorte → real y radio ≤ 1−ε; `fbdmd` en rango `r` = fórmula en coordenadas completas; con ruido de medición y de proceso sintético, fbDMD queda más cerca de los autovalores verdaderos que el exacto; bootstrap sobre un sistema sin ruido → 100 % de aparición; modo real comparado solo por vida media. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
+- [x] 7.2 `run.py --etapa 1.5`: exacto vs recorte vs fbDMD+recorte (con los pesos de 4.3 si aplican) + bootstrap por modo del elegido; espectro con intervalos y estabilidad entre semillas (AE). Verificar: runs `…-e15-…` con `bootstrap_modos.parquet` y `output/dmd-operador-global/1.5.md`.
+- [x] 7.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — decisión. Registrar.
+- [x] 7.4 **[OPERADOR]** Publicar.
 
 ## 8. Rango y modos (1.6)
 
-- [ ] 8.1 `modos.eliminacion_atras(…)`: techo GD, quita de a un modo (par conjugado junto) el de menor empeoramiento mientras no supere el intervalo bootstrap emparejado y se detiene en el primero significativo (D9); curva error ponderado 24 h vs nº de modos con intervalo. Test: sistema con 2 modos relevantes y 4 de ruido → elimina los 4 de ruido y conserva los 2. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
-- [ ] 8.2 `run.py --etapa 1.6` sobre la configuración vigente (`d = 16` fijo). Verificar: run `…-e16-…` con `curva_modos.parquet` y `output/dmd-operador-global/1.6.md`.
+- [x] 8.1 `modos.eliminacion_atras(…)`: techo GD, quita de a un modo (par conjugado junto) el de menor empeoramiento mientras no supere el intervalo bootstrap emparejado y se detiene en el primero significativo (D9); curva error ponderado 24 h vs nº de modos con intervalo. Test: sistema con 2 modos relevantes y 4 de ruido → elimina los 4 de ruido y conserva los 2. Verificar: `.\.venv\Scripts\python -m pytest tests/operador -q`.
+- [x] 8.2 `run.py --etapa 1.6` sobre la configuración vigente (`d = 16` fijo). Verificar: run `…-e16-…` con `curva_modos.parquet` y `output/dmd-operador-global/1.6.md`.
 - [ ] 8.3 `EXPERIMENT-LOG.md` + ⏸ **PAUSA** — el operador fija rango, modos y configuración final. Registrar.
 - [ ] 8.4 **[OPERADOR]** Publicar.
 
@@ -135,3 +135,9 @@
 - 5.4: 8 runs `e13*` publicados, 62 objetos; respaldo `mlflow-20261119-2319.sqlite`.
 - 6.1: test `A₂₄ = K²⁴` en `tests/operador/test_rollout.py`. Con Duan vigente, los factores se reestiman con el rollout de `A₂₄`.
 - 6.4: 8 runs `e14*` publicados, 58 objetos; respaldo `mlflow-20261119-2324.sqlite`.
+- 7.1: el test "fbDMD más cerca de la verdad con ruido de medición y de proceso" usa trayectorias transitorias (condición inicial por segmento, ruido de proceso chico): con forzamiento estacionario fbDMD tiende a `|λ| = 1` (adelante y atrás comparten sesgo), y el test no se cumple. El bootstrap sin ruido usa también segmentos transitorios (con una sola trayectoria que decae, los modos rápidos se pierden en bloques tardíos).
+- 7.2: el bootstrap re-estima con pesos = conteos de los días remuestreados (LS ponderado ≡ pares repetidos).
+- 7.4: 12 runs `e15*` publicados (con `bootstrap_modos.parquet`), 90 objetos; respaldo `mlflow-20261119-2328.sqlite`.
+- 8.1: "empeoramiento significativo" = intervalo de `nuevo − actual` entero sobre 0 (con tolerancia numérica 1e-9). La eliminación termina en 1 modo si nunca hay empeoramiento significativo.
+- 8.2: el techo GD se aplica también a PCA y AE (rango 6 y 3–4); con Duan vigente, los factores se reestiman para cada candidato. `{exp}` = `e16`; el resumen reporta además la diferencia final − rango completo.
+- **8.3 (PAUSA, sin decisión)**: la regla D9 daría PCA rango 6 con 1 modo + Duan (36.32; razón 1.240 [0.913, 1.564]), pero (a) el criterio elimina el modo diario en las 4 variantes (el target de 24 h lo cancela), en tensión con §9 ("ciclo diario = modo de la dinámica"), y (b) la acumulación de pasos no significativos deja un operador peor en punto que GRU rango completo + Duan (29.73; razón 1.014 [0.968, 1.066]). Decide el operador, p. ej.: aceptar la regla; conservar el modo diario forzado; no aplicar techo GD en PCA/AE (eliminar desde rango 16); o fijar GRU rango completo (o su resultado de 1.6, 30.99) como configuración final. 8.4 (publicar 1.6) queda tras la decisión: los 4 runs `e16` están solo en el estado local.

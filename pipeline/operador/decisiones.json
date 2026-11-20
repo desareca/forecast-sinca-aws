@@ -70,5 +70,22 @@
     },
     "fecha": "2026-11-19",
     "nota": "Decidido por regla D9 (delegado): A₂₄ es solo referencia; A₂₄ − horario PCA +0.41 [−1.42, +1.61], GRU +1.04 [−1.82, +3.21]. Multi-paso diferido a deep-koopman."
+  },
+  "1.5": {
+    "ganador": "exacto",
+    "config": {
+      "representaciones": [
+        "pca",
+        "gru"
+      ],
+      "principal": "pca",
+      "pesos": false,
+      "duan": true,
+      "rollout": "autonomo",
+      "horizonte": "horario",
+      "estimador": "exacto"
+    },
+    "fecha": "2026-11-19",
+    "nota": "Decidido por regla D9 (delegado): recorte = exacto (dif. ~0); fbDMD peor (PCA +3.98 [−0.67, +9.49]; GRU +4.28 [+2.75, +6.55]); queda el más simple (exacto)."
   }
 }

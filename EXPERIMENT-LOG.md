@@ -478,3 +478,39 @@ v2 ≈ USD 0.32 a la tarifa de `design.md` (no verificada en consola). Sin los h
 
   `A₂₄` no mejora la precisión (peor en punto, sin significancia): el error compuesto del rollout horario no es la limitante. K horario multi-paso (1 + 24 h) queda diferido a `deep-koopman`.
 - **Decisión** (decidido por regla D9; `A₂₄` no es candidato): queda **K horario**.
+
+## 2026-11-19 - dmd-operador-global 1.5: estimador y estabilidad
+
+- **Hipótesis**: el recorte `|λ| ≤ 1−ε` evita explosiones del rollout y fbDMD corrige el sesgo de autovalores hacia adentro (H2).
+- **Qué se probó**: PCA y GRU (3 semillas), autónomo + Duan: exacto (`e15a`), recorte ε = 1e-3 (`e15b`), fbDMD + recorte (`e15c`). Bootstrap por modo del elegido: bloques de 7 días de train, B = 200, emparejamiento húngaro en `(log|λ|, arg λ)`, aparición si período y vida media difieren ≤ 25 % (`bootstrap_modos.parquet` en los runs `e15a`).
+- **Resultado** (media de 6 series):
+
+  | rep. | exacto | recorte | fbDMD+recorte | fbDMD − exacto |
+  |---|---|---|---|---|
+  | PCA | 32.68 | 32.68 | 36.66 | +3.98 [−0.67, +9.49] |
+  | GRU | 29.73 | 29.73 | 34.02 | +4.28 [+2.75, +6.55] |
+
+  - El recorte casi no actúa (radio espectral ≈ 0.999 < 1−ε en casi todos los operadores).
+  - fbDMD empuja los modos hacia el círculo unidad (vidas medias más largas): reduce el sesgo en picos pero empeora el RMSE ponderado. Esperable: con forzamiento estocástico estacionario las regresiones hacia adelante y hacia atrás tienen el mismo sesgo y su cociente tiende a `|λ| = 1`; fbDMD supone ruido solo de medición.
+  - Bootstrap por modo (exacto): el modo diario (período 24.0–24.3 h) aparece en ≥ 94.5 % de las re-estimaciones y en las 3 semillas GRU (vida media 290–440 h). Los modos de 10–33 h aparecen en 100 % del bootstrap de cada semilla, pero entre semillas GRU solo coinciden algunos; los casi reales de vida media > 100 h son inestables (aparición 30–70 %).
+- **Decisión** (decidido por regla D9, "exacto < fbDMD"): queda el **DMD exacto** (sin recorte) en PCA y GRU.
+
+## 2026-11-19 - dmd-operador-global 1.6: rango y modos (pendiente de decisión del operador)
+
+- **Hipótesis**: con techo de rango Gavish–Donoho y eliminación hacia atrás por el error ponderado a 24 h quedan pocos modos interpretables sin perder precisión.
+- **Qué se probó**: configuración vigente (exacto autónomo + Duan) en PCA y GRU (3 semillas), `d = 16` fijo. Techo GD sobre `Z₀` de train; se quita de a un modo (par conjugado junto) el de menor empeoramiento mientras el intervalo de `nuevo − actual` no quede entero sobre 0; Duan reestimado en cada paso. Runs `…-e16-aedmd-v1-s{seed}` con `curva_modos.parquet`.
+- **Resultado**:
+
+  | variante | rango GD | modos techo → final | RMSE pond. rango completo | RMSE pond. final | final − completo |
+  |---|---|---|---|---|---|
+  | PCA | 6 | 3 → 1 | 32.68 | 36.32 | +3.64 [−2.21, +8.40] |
+  | GRU s0 | 4 | 2 → 1 | 29.78 | 31.54 | +1.76 [−1.17, +4.59] |
+  | GRU s1 | 3 | 2 → 1 | 29.93 | 31.31 | +1.38 [−0.81, +2.97] |
+  | GRU s2 | 4 | 2 → 1 | 29.48 | 30.11 | +0.63 [−1.64, +2.58] |
+
+  - Finales (media de 6 series): PCA 36.32, razón vs mejor ref. 1.240 [0.913, 1.564]; GRU 30.99, 1.057 [0.989, 1.136]. GRU − PCA −5.33 [−14.72, +4.95] (no significativa).
+  - La eliminación no se detiene por empeoramiento significativo en ninguna variante: queda **un solo modo**, casi real y lento (vida media 230–550 h; período > 1000 h o real): el "nivel" que decae.
+  - **El modo diario (período ≈ 24 h) se elimina en todas**: no afecta al target (promedio de 24 h, que lo cancela). En GRU s0 y s2 quitarlo incluso mejora (−1.37 [−2.16, −0.39]; −0.80 [−1.67, +0.18]). En PCA cae en el primer paso (+0.20 [−0.01, +0.44]).
+  - El techo GD (rango 3–6 de 16) ya reduce el operador a 2–3 modos.
+- **Lectura por regla D9**: PCA, rango 6, 1 modo, Duan (la más simple; GRU no la supera de forma significativa). La cadena de "no significativo → la más simple" deja un operador peor en punto que los mejores evaluados (GRU completo + Duan 29.73; razón 1.014 [0.968, 1.066]).
+- **Decisión**: **pendiente del operador** (no se aplicó la regla). El criterio de selección (error a 24 h del promedio) elimina el ciclo diario, que §9 fija como modo de la dinámica, y reduce el operador a persistencia del nivel. Opciones en `tasks.md` (8.3).
