@@ -34,6 +34,7 @@ htmlcov/
 .ipynb_checkpoints/
 *.ipynb
 !notebooks/analisis_baseline.ipynb
+!notebooks/dmd_operador_global.ipynb
 
 # MLflow / artefactos locales de entrenamiento
 output/

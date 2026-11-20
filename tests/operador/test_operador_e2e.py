@@ -60,9 +60,15 @@ def estado_v2(tmp_path_factory):
     common = {"particion": "ae-dmd", "stage": "ae-dmd-prep"}
     _log(state, "sinca-zona-persistence-aedmd-v2", {**common, "modelo": "persistence-aedmd"}, {"version": 2, "tipo": "referencia"},
          {"predictions.parquet": pers})
+    pers_test = predict_frame(data["sinca"], features)
+    pers_test = pers_test[pt.row_mask(pers_test["timestamp"], part, "test")].assign(split="test")
     for (station, pollutant), g in pers.groupby(["estacion", "pollutant"]):
+        gt = pers_test[(pers_test["estacion"] == station) & (pers_test["pollutant"] == pollutant)]
+        src = _log(state, f"sinca-{station}-lightgbm-v1", {"modelo": "lightgbm"}, {"version": 1, "estacion": station,
+                   "pollutant": pollutant}, {"predictions.parquet": gt.assign(y_pred=gt["y_pred"] * 1.05)})
         _log(state, f"lgbm-{station}-{pollutant}", {**common, "modelo": "lightgbm-aedmd"},
-             {"version": 2, "estacion": station, "pollutant": pollutant}, {"predictions.parquet": g.assign(y_pred=g["y_pred"] * 1.1)})
+             {"version": 2, "estacion": station, "pollutant": pollutant, "source_run_id": src},
+             {"predictions.parquet": g.assign(y_pred=g["y_pred"] * 1.1)})
 
     pos, split = E.posiciones(ctx, 24)
     win = aed.build_windows(ctx.ng, 24, pos)
@@ -136,3 +142,37 @@ def test_help(capsys):
     with pytest.raises(SystemExit):
         R.parse_args(["--help"])
     assert "--etapa" in capsys.readouterr().out
+
+
+def test_modos_cierre_y_test_con_guardia(estado_v2):
+    from analysis import load as analysis_load
+    from operador import registro as G
+    from operador import run as R
+
+    tmp, state, validated = estado_v2
+    out = tmp / "out"
+    if not (out / R.EVAL_ROWS).exists():
+        (tmp / "decisiones.json").write_text("{}")
+        R.run(R.parse_args(_argv(tmp, state, validated, "base")))
+    base = {"representaciones": ["gru", "pca"], "pesos": False, "duan": True, "rollout": "autonomo",
+            "horizonte": "horario", "estimador": "exacto"}
+    G.registrar_decision("1.5", "exacto", base, "test", "2026-11-19", tmp / "decisiones.json")
+    extra = ("--seeds", "0", "--bootstrap-modos", "10")
+    assert R.run(R.parse_args(_argv(tmp, state, validated, "1.6", "--version", "2", *extra))) == 0
+    modos16 = json.loads((out / "1.6.json").read_text())["modos"]
+    assert set(modos16) == {"gru-s0", "pca"}
+    G.registrar_decision("1.6", "gru", {**base, "oficial": "gru", "secundarias": ["pca"], "modos": modos16, "rank": {}},
+                         "test", "2026-11-19", tmp / "decisiones.json")
+    assert R.run(R.parse_args(_argv(tmp, state, validated, "cierre", *extra))) == 0
+    cierre = json.loads((out / R.CIERRE_JSON).read_text())
+    for key, run_id in cierre["runs"].items():
+        run = analysis_load.run_by_id(str(state), run_id)
+        assert not any(k.startswith("test_") for k in run["metrics"])
+        assert int(run["metrics"]["n_modos"]) == len(modos16[key])
+    assert R.run(R.parse_args(_argv(tmp, state, validated, "test", *extra))) == 0
+    runs = [r for r in G.runs_de_etapa(str(state), "test") if r["tags"].get("evaluacion") == "test"]
+    assert len(runs) == 12
+    assert all(analysis_load.is_series_run(r) for r in runs)
+    assert json.loads((out / "test.json").read_text())["veredicto"] in ("cumple", "no cumple")
+    with pytest.raises(SystemExit, match="force-test"):
+        R.run(R.parse_args(_argv(tmp, state, validated, "test", *extra)))
