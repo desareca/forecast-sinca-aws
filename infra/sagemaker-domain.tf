@@ -35,6 +35,11 @@ resource "aws_sagemaker_user_profile" "admin" {
 
   user_settings {
     execution_role = aws_iam_role.dev.arn
+
+    # Asociada fuera de Terraform (drift detectado en deep-koopman 7.6); se codifica para no perderla.
+    jupyter_lab_app_settings {
+      lifecycle_config_arns = [aws_sagemaker_studio_lifecycle_config.on_start.arn]
+    }
   }
 }
 
