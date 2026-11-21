@@ -170,6 +170,8 @@ data "aws_iam_policy_document" "github_infra_policy" {
       values = [
         "ecs-tasks.amazonaws.com",
         "sagemaker.amazonaws.com",
+        "states.amazonaws.com",
+        "lambda.amazonaws.com",
       ]
     }
   }
@@ -323,6 +325,88 @@ data "aws_iam_policy_document" "github_infra_policy" {
     effect    = "Allow"
     actions   = ["scheduler:ListSchedules"]
     resources = ["*"]
+  }
+
+  # Orquestación de deep-koopman (D19): acciones explícitas acotadas a sus recursos.
+  statement {
+    sid    = "StepFunctionsKoopman"
+    effect = "Allow"
+    actions = [
+      "states:CreateStateMachine",
+      "states:DeleteStateMachine",
+      "states:DescribeStateMachine",
+      "states:UpdateStateMachine",
+      "states:ListStateMachineVersions",
+      "states:TagResource",
+      "states:UntagResource",
+      "states:ListTagsForResource",
+    ]
+    resources = [
+      "arn:aws:states:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:stateMachine:sinca-deep-koopman",
+    ]
+  }
+
+  statement {
+    sid    = "LambdaKoopman"
+    effect = "Allow"
+    actions = [
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:ListVersionsByFunction",
+      "lambda:GetPolicy",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:ListTags",
+    ]
+    resources = [
+      "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:sinca-deep-koopman-*",
+    ]
+  }
+
+  statement {
+    sid    = "SnsKoopman"
+    effect = "Allow"
+    actions = [
+      "sns:CreateTopic",
+      "sns:DeleteTopic",
+      "sns:GetTopicAttributes",
+      "sns:SetTopicAttributes",
+      "sns:ListTagsForResource",
+      "sns:TagResource",
+      "sns:UntagResource",
+      "sns:Subscribe",
+      "sns:Unsubscribe",
+      "sns:GetSubscriptionAttributes",
+      "sns:SetSubscriptionAttributes",
+      "sns:ListSubscriptionsByTopic",
+    ]
+    resources = [
+      "arn:aws:sns:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:sinca-deep-koopman-*",
+    ]
+  }
+
+  statement {
+    sid    = "EventsKoopman"
+    effect = "Allow"
+    actions = [
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:DescribeRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:ListTargetsByRule",
+      "events:TagResource",
+      "events:UntagResource",
+      "events:ListTagsForResource",
+    ]
+    resources = [
+      "arn:aws:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/sinca-deep-koopman-*",
+    ]
   }
 
   statement {

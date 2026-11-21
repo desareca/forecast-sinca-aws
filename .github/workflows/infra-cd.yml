@@ -48,7 +48,8 @@ jobs:
           terraform -chdir=infra plan -input=false \
             -var="aws_profile=" \
             -var="user_profile_name=${{ vars.USER_PROFILE_NAME }}" \
-            -var="mlflow_allowed_cidr=${{ vars.MLFLOW_ALLOWED_CIDR }}"
+            -var="mlflow_allowed_cidr=${{ vars.MLFLOW_ALLOWED_CIDR }}" \
+            -var="operator_email=${{ secrets.OPERATOR_EMAIL }}"
 
       - name: terraform apply
         if: github.ref == 'refs/heads/main'
@@ -56,4 +57,5 @@ jobs:
           terraform -chdir=infra apply -input=false -auto-approve \
             -var="aws_profile=" \
             -var="user_profile_name=${{ vars.USER_PROFILE_NAME }}" \
-            -var="mlflow_allowed_cidr=${{ vars.MLFLOW_ALLOWED_CIDR }}"
+            -var="mlflow_allowed_cidr=${{ vars.MLFLOW_ALLOWED_CIDR }}" \
+            -var="operator_email=${{ secrets.OPERATOR_EMAIL }}"

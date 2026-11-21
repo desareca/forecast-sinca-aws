@@ -1,0 +1,953 @@
+{
+  "Comment": "deep-koopman: campaña fija de Training Jobs en serie (F1, B, F2, F3, selección, cierre, test) con salto por marcador y avisos; sin ramas ni pausas (D18).",
+  "StartAt": "AvisoInicio",
+  "States": {
+    "AvisoInicio": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: inicio",
+        "Message.$": "States.Format('Campaña {} iniciada (modo {}): F1, B, F2, F3, selección, cierre y test en serie.', $.campana, $.modo)"
+      },
+      "ResultPath": null,
+      "Next": "F1"
+    },
+    "F1": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.f1",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "F1Marcador",
+        "States": {
+          "F1Marcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "F1Hecho"
+          },
+          "F1Hecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "F1Saltar"
+              }
+            ],
+            "Default": "F1Job"
+          },
+          "F1Saltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "F1Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "F1Lanzado"
+          },
+          "F1Lanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_f1",
+      "Next": "AvisoF1"
+    },
+    "AvisoF1": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: fin de F1",
+        "Message.$": "States.Format('Fase F1 terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_f1))"
+      },
+      "ResultPath": null,
+      "Next": "B"
+    },
+    "B": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.b",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "BMarcador",
+        "States": {
+          "BMarcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "BHecho"
+          },
+          "BHecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "BSaltar"
+              }
+            ],
+            "Default": "BJob"
+          },
+          "BSaltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "BJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "BLanzado"
+          },
+          "BLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_b",
+      "Next": "AvisoB"
+    },
+    "AvisoB": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: fin de B",
+        "Message.$": "States.Format('Fase B terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_b))"
+      },
+      "ResultPath": null,
+      "Next": "F2"
+    },
+    "F2": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.f2",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "F2Marcador",
+        "States": {
+          "F2Marcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "F2Hecho"
+          },
+          "F2Hecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "F2Saltar"
+              }
+            ],
+            "Default": "F2Job"
+          },
+          "F2Saltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "F2Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "F2Lanzado"
+          },
+          "F2Lanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_f2",
+      "Next": "AvisoF2"
+    },
+    "AvisoF2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: fin de F2",
+        "Message.$": "States.Format('Fase F2 terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_f2))"
+      },
+      "ResultPath": null,
+      "Next": "F3"
+    },
+    "F3": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.f3",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "F3Marcador",
+        "States": {
+          "F3Marcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "F3Hecho"
+          },
+          "F3Hecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "F3Saltar"
+              }
+            ],
+            "Default": "F3Job"
+          },
+          "F3Saltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "F3Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "F3Lanzado"
+          },
+          "F3Lanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_f3",
+      "Next": "AvisoF3"
+    },
+    "AvisoF3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: fin de F3",
+        "Message.$": "States.Format('Fase F3 terminada (campaña {}). Jobs: {}', $.campana, States.JsonToString($.res_f3))"
+      },
+      "ResultPath": null,
+      "Next": "Seleccion"
+    },
+    "Seleccion": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.seleccion",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "SeleccionMarcador",
+        "States": {
+          "SeleccionMarcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "SeleccionHecho"
+          },
+          "SeleccionHecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "SeleccionSaltar"
+              }
+            ],
+            "Default": "SeleccionJob"
+          },
+          "SeleccionSaltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "SeleccionJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "SeleccionLanzado"
+          },
+          "SeleccionLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_seleccion",
+      "Next": "ResumenSeleccion"
+    },
+    "ResumenSeleccion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${lambda_arn}",
+        "Payload": {
+          "modo": "resumen",
+          "bucket.$": "$.comun.bucket",
+          "key.$": "$.resumenes.seleccion"
+        }
+      },
+      "ResultSelector": {
+        "texto.$": "$.Payload.texto"
+      },
+      "ResultPath": "$.txt_seleccion",
+      "Next": "AvisoSeleccion"
+    },
+    "AvisoSeleccion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: selección",
+        "Message.$": "States.Format('Selección (campaña {}): {}', $.campana, $.txt_seleccion.texto)"
+      },
+      "ResultPath": null,
+      "Next": "Cierre"
+    },
+    "Cierre": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.cierre",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "CierreMarcador",
+        "States": {
+          "CierreMarcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "CierreHecho"
+          },
+          "CierreHecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "CierreSaltar"
+              }
+            ],
+            "Default": "CierreJob"
+          },
+          "CierreSaltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "CierreJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "CierreLanzado"
+          },
+          "CierreLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_cierre",
+      "Next": "ResumenCierre"
+    },
+    "ResumenCierre": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${lambda_arn}",
+        "Payload": {
+          "modo": "resumen",
+          "bucket.$": "$.comun.bucket",
+          "key.$": "$.resumenes.cierre"
+        }
+      },
+      "ResultSelector": {
+        "texto.$": "$.Payload.texto"
+      },
+      "ResultPath": "$.txt_cierre",
+      "Next": "AvisoCierre"
+    },
+    "AvisoCierre": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: cierre",
+        "Message.$": "States.Format('Cierre (campaña {}): {}', $.campana, $.txt_cierre.texto)"
+      },
+      "ResultPath": null,
+      "Next": "Test"
+    },
+    "Test": {
+      "Type": "Map",
+      "ItemsPath": "$.fases.test",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "item.$": "$$.Map.Item.Value",
+        "comun.$": "$.comun",
+        "campana.$": "$.campana"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "TestMarcador",
+        "States": {
+          "TestMarcador": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${lambda_arn}",
+              "Payload": {
+                "modo": "estado_job",
+                "bucket.$": "$.comun.bucket",
+                "key.$": "$.item.marcador"
+              }
+            },
+            "ResultSelector": {
+              "existe.$": "$.Payload.existe"
+            },
+            "ResultPath": "$.marcador",
+            "Next": "TestHecho"
+          },
+          "TestHecho": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.marcador.existe",
+                "BooleanEquals": true,
+                "Next": "TestSaltar"
+              }
+            ],
+            "Default": "TestJob"
+          },
+          "TestSaltar": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "saltado"
+            },
+            "End": true
+          },
+          "TestJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+            "Parameters": {
+              "TrainingJobName.$": "$.item.nombre",
+              "AlgorithmSpecification": {
+                "TrainingImage.$": "$.comun.imagen",
+                "TrainingInputMode": "File"
+              },
+              "RoleArn.$": "$.comun.rol",
+              "HyperParameters.$": "$.item.hp",
+              "ResourceConfig": {
+                "InstanceCount": 1,
+                "InstanceType.$": "$.comun.instancia",
+                "VolumeSizeInGB": 30
+              },
+              "StoppingCondition": {
+                "MaxRuntimeInSeconds.$": "$.item.max_run"
+              },
+              "OutputDataConfig": {
+                "S3OutputPath.$": "$.comun.salida"
+              },
+              "CheckpointConfig": {
+                "S3Uri.$": "$.item.ckpt_uri",
+                "LocalPath": "/opt/ml/checkpoints"
+              },
+              "Tags": [
+                {
+                  "Key": "proyecto",
+                  "Value": "sinca"
+                },
+                {
+                  "Key": "campana",
+                  "Value.$": "$.campana"
+                }
+              ]
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "SageMaker.AmazonSageMakerException",
+                  "SageMaker.ResourceLimitExceededException"
+                ],
+                "IntervalSeconds": 300,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "TestLanzado"
+          },
+          "TestLanzado": {
+            "Type": "Pass",
+            "Parameters": {
+              "clave.$": "$.item.clave",
+              "estado": "lanzado"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.res_test",
+      "Next": "ResumenTest"
+    },
+    "ResumenTest": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${lambda_arn}",
+        "Payload": {
+          "modo": "resumen",
+          "bucket.$": "$.comun.bucket",
+          "key.$": "$.resumenes.test"
+        }
+      },
+      "ResultSelector": {
+        "texto.$": "$.Payload.texto"
+      },
+      "ResultPath": "$.txt_test",
+      "Next": "AvisoFinal"
+    },
+    "AvisoFinal": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "deep-koopman: test terminado",
+        "Message.$": "States.Format('Campaña {} terminada. {}', $.campana, $.txt_test.texto)"
+      },
+      "ResultPath": null,
+      "Next": "Fin"
+    },
+    "Fin": {
+      "Type": "Succeed"
+    }
+  }
+}
